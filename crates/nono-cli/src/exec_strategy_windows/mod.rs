@@ -401,21 +401,27 @@ impl PreparedWindowsLaunch {
                 .map_or(layer_registry::LayerApplication::NotApplied, |guard| {
                     guard.coverage().application()
                 }),
-            // Phase 117-14 (NR3-02) / WR-07 (Phase 117-23): what each
-            // ancestor guard's own walk ACTUALLY granted, read via its
-            // `application()` coverage accessor — the same "effect, not
-            // construction" shape as `mandatory_integrity_label` and
-            // `dacl_package_sid_grant` above. Both walks are fail-closed with
-            // no skip arm distinct from "nothing owned to grant": they grant
-            // on every OWNED ancestor and STOP at the first non-owned one
-            // (reaching the cwd from there up relies on the lowbox's
-            // bypass-traverse). WR-07 corrected the coverage rule: an empty
-            // grant set from a walk that DID run (had at least one ancestor
-            // to consider) is a real coverage gap (`PartiallyApplied`,
-            // downgrading the claim); only a walk with no ancestors to
-            // consider at all is `NotApplicable`. "The guard never ran"
-            // stays a distinct case (`None`, which stays fail-secure
-            // `NotApplied` via `map_or`'s default arm).
+            // Phase 117-14 (NR3-02) / WR-07 (Phase 117-23) / D-37 (Phase
+            // 117-28, `117-CONTEXT.md`, WR-12): what each ancestor guard's
+            // own walk ACTUALLY granted, read via its `application()`
+            // coverage accessor — the same "effect, not construction" shape
+            // as `mandatory_integrity_label` and `dacl_package_sid_grant`
+            // above. Both walks are fail-closed with no skip arm distinct
+            // from "nothing owned to grant": they grant on every OWNED
+            // ancestor and STOP at the first non-owned one (reaching the cwd
+            // from there up relies on the lowbox's bypass-traverse). ONE
+            // reconciled rule, per D-37 (see `dacl_guard.rs`'s struct docs
+            // and `application()` for the full three-arm match):
+            // - No ancestors to consider at all: `NotApplicable`.
+            // - Walked, granted nothing, and the walk STOPPED at the first
+            //   non-owned ancestor considered: `NotApplicable` — the D-04
+            //   contract-exempt outcome (under-granting, never
+            //   under-confining), not a downgrade.
+            // - Walked, granted nothing, WITHOUT that specific stop: a real
+            //   coverage gap (`NotApplied`).
+            // - Walked and granted at least one ancestor: `Applied`.
+            // "The guard never ran" stays a distinct case (`None`, which
+            // stays fail-secure `NotApplied` via `map_or`'s default arm).
             dacl_ancestor_traverse: self._applied_ancestor_traverse.as_ref().map_or(
                 layer_registry::LayerApplication::NotApplied,
                 dacl_guard::AppliedAncestorTraverseGuard::application,

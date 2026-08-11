@@ -339,7 +339,10 @@ impl Drop for AppliedDaclGrantsGuard {
 /// # Best-effort + fail-closed
 ///
 /// - Non-owned ancestor (`Ok(false)`): STOP the walk (cannot edit; higher
-///   ancestors are also non-owned). Best-effort — not an error.
+///   ancestors are also non-owned). Best-effort — not an error. Per **D-37**
+///   (`117-CONTEXT.md`), stopping the walk this way at the FIRST ancestor
+///   considered is the D-04 contract-exempt outcome, not a downgrade — see
+///   `stopped_at_non_owned` below and `application()`'s three-arm match.
 /// - Ownership-check error (`Err`): fail-closed — revert what was applied and
 ///   propagate (ownership-check errors are NEVER swallowed).
 /// - Grant error on an owned ancestor: fail-closed — revert + propagate.
@@ -356,9 +359,16 @@ pub(crate) struct AppliedAncestorTraverseGuard {
     /// taken), i.e. true iff `current_dir.ancestors().skip(1)` yielded at
     /// least one ancestor to consider. Distinguishes "the walk had nothing to
     /// walk at all" (`current_dir` is itself a filesystem root — genuinely
-    /// `NotApplicable`) from "the walk ran and granted zero owned ancestors"
-    /// (a real coverage gap — `PartiallyApplied`).
+    /// `NotApplicable`) from "the walk ran" (which `stopped_at_non_owned`
+    /// below then further classifies per D-37).
     walked: bool,
+    /// D-37 (`117-CONTEXT.md`, WR-12): set true when the walk's `Ok(false)`
+    /// arm fired — i.e. the walk STOPPED because the first ancestor
+    /// considered was non-owned. Distinguishes the D-04 contract-exempt
+    /// outcome (`NotApplicable` — under-granting, never under-confining) from
+    /// a walk that ran, granted nothing, and did NOT end that way (a genuine
+    /// coverage gap — `NotApplied`). Defaults `false`.
+    stopped_at_non_owned: bool,
 }
 
 impl AppliedAncestorTraverseGuard {
@@ -384,6 +394,7 @@ impl AppliedAncestorTraverseGuard {
             applied: Vec::new(),
             package_sid: package_sid.to_string(),
             walked: false,
+            stopped_at_non_owned: false,
         };
 
         // Walk ancestors from the immediate parent upward. `Path::ancestors`
@@ -415,6 +426,7 @@ impl AppliedAncestorTraverseGuard {
                          walk (cannot grant traverse without WRITE_DAC — relies on lowbox \
                          bypass-traverse from here up)"
                     );
+                    guard.stopped_at_non_owned = true;
                     break;
                 }
                 Err(err) => {
@@ -432,26 +444,35 @@ impl AppliedAncestorTraverseGuard {
         Ok(guard)
     }
 
-    /// Phase 117-14 (NR3-02) / WR-07 (Phase 117-23): this guard's ACTUAL
-    /// effect, for the startup self-attestation gate — mirrors
-    /// [`DaclGrantCoverage::application`]'s shape, now genuinely three-valued.
+    /// Phase 117-14 (NR3-02) / WR-07 (Phase 117-23) / **D-37** (Phase
+    /// 117-28, WR-12): this guard's ACTUAL effect, for the startup
+    /// self-attestation gate — mirrors [`DaclGrantCoverage::application`]'s
+    /// shape, now genuinely THREE-valued (not two-way collapsed):
     ///
-    /// A walk that ran (had at least one ancestor to consider) but granted
-    /// nothing owned is a REAL coverage gap: it must visibly downgrade the
-    /// session's attestation claim (`PartiallyApplied`), not silently vanish
-    /// as `NotApplicable`. Only a walk with literally no ancestors to
-    /// consider at all — `current_dir` is itself a filesystem root — is
-    /// `NotApplicable` (there was no contract to cover in the first place).
-    /// A walk that granted at least one ancestor remains `Applied`,
-    /// unchanged. "The guard never ran" stays a distinct case, handled by
-    /// `mod.rs`'s `None`-guard `NotApplied` path, not by this method.
+    /// - No ancestors to consider at all (`current_dir` is itself a
+    ///   filesystem root): `NotApplicable` — there was no contract to cover.
+    /// - Walked, granted nothing, and the walk STOPPED because the first
+    ///   ancestor considered was non-owned: `NotApplicable` — per D-37, this
+    ///   is the D-04 contract-exempt outcome (under-granting, never
+    ///   under-confining), not a downgrade. This is the state WR-12 found
+    ///   colliding with the arm below.
+    /// - Walked, granted nothing, and did NOT end via a non-owned-ancestor
+    ///   stop: `NotApplied` — a genuine coverage gap. Not reachable through
+    ///   today's `snapshot_and_apply` (a non-error zero-grant outcome can
+    ///   only arise from the non-owned-stop arm above), but the arm exists so
+    ///   a future walk-loop change that produces a real zero-coverage gap is
+    ///   classified correctly rather than silently defaulting to
+    ///   `NotApplicable`.
+    /// - Walked and granted at least one ancestor: `Applied`, unchanged.
+    ///
+    /// "The guard never ran" stays a distinct case, handled by `mod.rs`'s
+    /// `None`-guard `NotApplied` path, not by this method.
     pub(crate) fn application(&self) -> layer_registry::LayerApplication {
-        if !self.walked {
-            layer_registry::LayerApplication::NotApplicable
-        } else if self.applied.is_empty() {
-            layer_registry::LayerApplication::PartiallyApplied
-        } else {
-            layer_registry::LayerApplication::Applied
+        match (self.walked, self.applied.is_empty(), self.stopped_at_non_owned) {
+            (false, _, _) => layer_registry::LayerApplication::NotApplicable,
+            (true, true, true) => layer_registry::LayerApplication::NotApplicable,
+            (true, true, false) => layer_registry::LayerApplication::NotApplied,
+            (true, false, _) => layer_registry::LayerApplication::Applied,
         }
     }
 
@@ -519,7 +540,10 @@ impl Drop for AppliedAncestorTraverseGuard {
 /// # Best-effort + fail-closed
 ///
 /// - Non-owned ancestor (`Ok(false)`): STOP the walk (the D-04 split — proves
-///   the runtime guard structurally cannot touch `C:\Users`/`C:\`). Not an error.
+///   the runtime guard structurally cannot touch `C:\Users`/`C:\`). Not an
+///   error. Per **D-37** (`117-CONTEXT.md`), this STOP is the D-04
+///   contract-exempt outcome, not a downgrade — see `stopped_at_non_owned`
+///   below and `application()`'s three-arm match.
 /// - Ownership-check error (`Err`): fail-closed — revert what was applied and
 ///   propagate (ownership errors are NEVER swallowed).
 /// - Grant error on an owned ancestor: fail-closed — revert + propagate.
@@ -539,6 +563,15 @@ pub(crate) struct AppliedAncestorReadAttributesGuard {
     /// consider across the whole multi-target walk. See
     /// `AppliedAncestorTraverseGuard::walked` for the same distinction.
     walked: bool,
+    /// D-37 (`117-CONTEXT.md`, WR-12): set true when ANY walk target's
+    /// `Ok(false)` arm fired — i.e. that chain STOPPED because its first
+    /// ancestor considered was non-owned. If any OTHER target instead
+    /// granted an ancestor, `applied` is non-empty and the
+    /// `(true, false, _) => Applied` arm in `application()` governs
+    /// regardless of this flag's value — so setting it true on any
+    /// occurrence, without per-target bookkeeping, is correct. Defaults
+    /// `false`.
+    stopped_at_non_owned: bool,
 }
 
 impl AppliedAncestorReadAttributesGuard {
@@ -595,6 +628,7 @@ impl AppliedAncestorReadAttributesGuard {
             applied: Vec::new(),
             package_sid: package_sid.to_string(),
             walked: false,
+            stopped_at_non_owned: false,
         };
 
         for walk_target in walk_targets {
@@ -634,6 +668,7 @@ impl AppliedAncestorReadAttributesGuard {
                             "ancestor-RA guard: ancestor not owned by current user; stopping this \
                              chain (CPLT-02 admin grant covers system ancestors from here up)"
                         );
+                        guard.stopped_at_non_owned = true;
                         break;
                     }
                     Err(err) => {
@@ -652,28 +687,33 @@ impl AppliedAncestorReadAttributesGuard {
         Ok(guard)
     }
 
-    /// Phase 117-14 (NR3-02) / WR-07 (Phase 117-23): this guard's ACTUAL
-    /// effect, for the startup self-attestation gate — mirrors
-    /// [`DaclGrantCoverage::application`] and
-    /// [`AppliedAncestorTraverseGuard::application`], now genuinely
-    /// three-valued.
+    /// Phase 117-14 (NR3-02) / WR-07 (Phase 117-23) / **D-37** (Phase
+    /// 117-28, WR-12): this guard's ACTUAL effect, for the startup
+    /// self-attestation gate — mirrors [`DaclGrantCoverage::application`]
+    /// and [`AppliedAncestorTraverseGuard::application`], now genuinely
+    /// THREE-valued (not two-way collapsed):
     ///
-    /// A walk that ran (had at least one ancestor to consider across ANY
-    /// walk target) but granted nothing owned is a REAL coverage gap: it
-    /// must visibly downgrade the session's attestation claim
-    /// (`PartiallyApplied`), not silently vanish as `NotApplicable`. Only a
-    /// walk whose every target has literally no ancestors to consider at
-    /// all is `NotApplicable`. A walk that granted at least one ancestor
-    /// remains `Applied`, unchanged. "The guard never ran" stays a distinct
-    /// case, handled by `mod.rs`'s `None`-guard `NotApplied` path, not by
-    /// this method.
+    /// - No target has any ancestor to consider at all: `NotApplicable` —
+    ///   there was no contract to cover.
+    /// - Walked, granted nothing, and every target's chain STOPPED because
+    ///   its first ancestor considered was non-owned: `NotApplicable` — per
+    ///   D-37, this is the D-04 contract-exempt outcome, not a downgrade.
+    /// - Walked, granted nothing, and did NOT end that way: `NotApplied` — a
+    ///   genuine coverage gap. Not reachable through today's
+    ///   `snapshot_and_apply_targets` for the same reason as
+    ///   `AppliedAncestorTraverseGuard`'s equivalent arm; kept live so a
+    ///   future walk-loop change is classified correctly rather than
+    ///   silently defaulting to `NotApplicable`.
+    /// - Walked and granted at least one ancestor: `Applied`, unchanged.
+    ///
+    /// "The guard never ran" stays a distinct case, handled by `mod.rs`'s
+    /// `None`-guard `NotApplied` path, not by this method.
     pub(crate) fn application(&self) -> layer_registry::LayerApplication {
-        if !self.walked {
-            layer_registry::LayerApplication::NotApplicable
-        } else if self.applied.is_empty() {
-            layer_registry::LayerApplication::PartiallyApplied
-        } else {
-            layer_registry::LayerApplication::Applied
+        match (self.walked, self.applied.is_empty(), self.stopped_at_non_owned) {
+            (false, _, _) => layer_registry::LayerApplication::NotApplicable,
+            (true, true, true) => layer_registry::LayerApplication::NotApplicable,
+            (true, true, false) => layer_registry::LayerApplication::NotApplied,
+            (true, false, _) => layer_registry::LayerApplication::Applied,
         }
     }
 
@@ -1046,16 +1086,19 @@ mod tests {
         );
     }
 
-    /// Phase 117-14 (NR3-02) / WR-07 (Phase 117-23) negative/non-vacuous: a
-    /// walk whose IMMEDIATE parent is already non-owned
-    /// (SYSTEM/TrustedInstaller — `System32`) stops before granting
-    /// anything, so `applied` stays empty — but the walk DID run (it
-    /// considered at least one ancestor), so `.application()` must report
-    /// `PartiallyApplied` (a real coverage gap that downgrades the claim),
-    /// NOT `NotApplicable` (which would silently drop this `expected: true`
-    /// row from the attestation decision — the WR-07 finding).
+    /// Phase 117-14 (NR3-02) / WR-07 (Phase 117-23) / **D-37** (Phase
+    /// 117-28, WR-12) negative/non-vacuous: a walk whose IMMEDIATE parent is
+    /// already non-owned (SYSTEM/TrustedInstaller — `System32`) stops before
+    /// granting anything, so `applied` stays empty — but the walk DID run
+    /// (it considered at least one ancestor) and STOPPED via the
+    /// non-owned-ancestor arm, so per D-37 `.application()` must report
+    /// `NotApplicable` — the D-04 contract-exempt outcome, not a downgrade.
+    /// (This is the behavior D-37 corrects: WR-07/117-23 had this same
+    /// scenario report `PartiallyApplied`, which WR-12 found collided with
+    /// the daemon mirror's opposite rule for the identical physical
+    /// condition.)
     #[test]
-    fn ancestor_traverse_application_reports_partially_applied_when_nothing_owned_to_grant() {
+    fn ancestor_traverse_application_reports_not_applicable_when_stopped_at_non_owned() {
         let system_root = std::env::var_os("SystemRoot")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
@@ -1078,13 +1121,41 @@ mod tests {
             guard.walked,
             "the walk considered at least one ancestor (System32's parent chain)"
         );
+        assert!(
+            guard.stopped_at_non_owned,
+            "the walk must have stopped via the non-owned-ancestor arm"
+        );
         assert_eq!(
             guard.application(),
-            layer_registry::LayerApplication::PartiallyApplied,
-            "a walk that ran but granted nothing owned must report PartiallyApplied, not NotApplicable \
-             (WR-07 — this must downgrade the claim, not silently vanish from the decision)"
+            layer_registry::LayerApplication::NotApplicable,
+            "D-37: a walk that ran, granted nothing, and stopped at the first non-owned ancestor is \
+             the D-04 contract-exempt outcome — NotApplicable, not a downgrade"
         );
         drop(guard);
+    }
+
+    /// D-37 (Phase 117-28, WR-12): the third arm of `application()`'s match
+    /// — walked, granted nothing, but did NOT stop via the non-owned-ancestor
+    /// arm — is not reachable through `snapshot_and_apply` today (a
+    /// non-error zero-grant outcome can only arise from that stop), so this
+    /// test constructs the state directly via the struct literal to prove
+    /// the arm is live code, not dead: it must report `NotApplied`, a
+    /// genuine coverage gap, distinct from the `NotApplicable`
+    /// contract-exempt outcome proven above.
+    #[test]
+    fn ancestor_traverse_application_reports_not_applied_for_the_unreachable_third_state() {
+        let guard = AppliedAncestorTraverseGuard {
+            applied: Vec::new(),
+            package_sid: TEST_PACKAGE_SID.to_string(),
+            walked: true,
+            stopped_at_non_owned: false,
+        };
+        assert_eq!(
+            guard.application(),
+            layer_registry::LayerApplication::NotApplied,
+            "walked + empty applied + NOT stopped-at-non-owned must report NotApplied, a real \
+             coverage gap distinct from D-37's NotApplicable contract-exempt outcome"
+        );
     }
 
     /// WR-07 (Phase 117-23): a walk with genuinely NO ancestors to consider
@@ -1230,15 +1301,16 @@ mod tests {
         );
     }
 
-    /// Phase 117-14 (NR3-02) / WR-07 (Phase 117-23) negative/non-vacuous:
-    /// mirrors
-    /// `ancestor_traverse_application_reports_partially_applied_when_nothing_owned_to_grant`
+    /// Phase 117-14 (NR3-02) / WR-07 (Phase 117-23) / **D-37** (Phase
+    /// 117-28, WR-12) negative/non-vacuous: mirrors
+    /// `ancestor_traverse_application_reports_not_applicable_when_stopped_at_non_owned`
     /// for the read-attributes guard. A walk whose IMMEDIATE parent is
     /// already non-owned stops before granting anything, so `applied` stays
-    /// empty — but the walk DID run, so `.application()` must report
-    /// `PartiallyApplied`, not `NotApplicable`.
+    /// empty — but the walk DID run and STOPPED via the non-owned-ancestor
+    /// arm, so per D-37 `.application()` must report `NotApplicable`, the
+    /// D-04 contract-exempt outcome, not `PartiallyApplied`/downgrade.
     #[test]
-    fn ancestor_read_attrs_application_reports_partially_applied_when_nothing_owned_to_grant() {
+    fn ancestor_read_attrs_application_reports_not_applicable_when_stopped_at_non_owned() {
         let system_root = std::env::var_os("SystemRoot")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
@@ -1259,13 +1331,39 @@ mod tests {
             guard.walked,
             "the walk considered at least one ancestor (System32's parent chain)"
         );
+        assert!(
+            guard.stopped_at_non_owned,
+            "the walk must have stopped via the non-owned-ancestor arm"
+        );
         assert_eq!(
             guard.application(),
-            layer_registry::LayerApplication::PartiallyApplied,
-            "a walk that ran but granted nothing owned must report PartiallyApplied, not NotApplicable \
-             (WR-07 — this must downgrade the claim, not silently vanish from the decision)"
+            layer_registry::LayerApplication::NotApplicable,
+            "D-37: a walk that ran, granted nothing, and stopped at the first non-owned ancestor is \
+             the D-04 contract-exempt outcome — NotApplicable, not a downgrade"
         );
         drop(guard);
+    }
+
+    /// D-37 (Phase 117-28, WR-12): mirrors
+    /// `ancestor_traverse_application_reports_not_applied_for_the_unreachable_third_state`
+    /// for the read-attributes guard — proves the third arm of
+    /// `application()`'s match is live code, not dead, via direct struct
+    /// construction (this state is not reachable through
+    /// `snapshot_and_apply_targets` today).
+    #[test]
+    fn ancestor_read_attrs_application_reports_not_applied_for_the_unreachable_third_state() {
+        let guard = AppliedAncestorReadAttributesGuard {
+            applied: Vec::new(),
+            package_sid: TEST_RA_PACKAGE_SID.to_string(),
+            walked: true,
+            stopped_at_non_owned: false,
+        };
+        assert_eq!(
+            guard.application(),
+            layer_registry::LayerApplication::NotApplied,
+            "walked + empty applied + NOT stopped-at-non-owned must report NotApplied, a real \
+             coverage gap distinct from D-37's NotApplicable contract-exempt outcome"
+        );
     }
 
     /// WR-07 (Phase 117-23): mirrors
