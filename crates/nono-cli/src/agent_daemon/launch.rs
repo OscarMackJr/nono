@@ -1274,6 +1274,8 @@ mod windows_impl {
     /// `DaclGrantCoverage`/`LabelCoverage` on the CLI side), not restored as
     /// a hardcoded/unreachable literal.
     #[derive(Debug)]
+    // DAEMON-DECISION-ENUM (Phase 117 gap-closure anchor — do not duplicate this literal
+    // outside this declaration/test pairing)
     enum DaemonAttestationDecision {
         /// Every row this function checks classified `Confirmed` (or was not
         /// applicable). The session's confinement claim is fully attested.
@@ -2022,6 +2024,45 @@ mod windows_impl {
                  sanity bound"
             );
         }
+
+        /// WR-11 (second half): a behavioral test that drives
+        /// `daemon_attest_and_decide` and matches its result with an
+        /// EXHAUSTIVE `match` — no wildcard `_` arm — so a future third
+        /// `DaemonAttestationDecision` variant fails THIS test file's own
+        /// compilation, not merely the two production call sites
+        /// (`launch_agent`'s match and the discovery-based tests in the
+        /// outer `tests` module below, which only fail at `cargo test`
+        /// time). Reuses `null_handle_aborts_on_app_container_profile`'s
+        /// deterministic null-process-handle fixture — `OpenProcessToken`
+        /// always fails against an invalid process handle, so this is a
+        /// stable `Abort` result without needing a real AppContainer spawn.
+        #[test]
+        fn daemon_attest_and_decide_result_matches_exhaustively() {
+            let job: HANDLE = unsafe {
+                // SAFETY: CreateJobObjectW with null name + null security
+                // attributes is documented to succeed unless out-of-memory.
+                CreateJobObjectW(std::ptr::null(), std::ptr::null())
+            };
+            assert!(!job.is_null(), "CreateJobObjectW failed");
+            let result = daemon_attest_and_decide(
+                std::ptr::null_mut(),
+                job,
+                "S-1-15-2-1",
+                true,
+                false,
+                false,
+            );
+            // SAFETY: `job` is a valid HANDLE this test owns.
+            unsafe { CloseHandle(job) };
+
+            // Exhaustive — no `_` arm. If `DaemonAttestationDecision` gains
+            // a third variant, this match fails to compile until an arm
+            // covering it is added here.
+            match result {
+                DaemonAttestationDecision::Proceed => {}
+                DaemonAttestationDecision::Abort { .. } => {}
+            }
+        }
     }
 }
 
@@ -2163,6 +2204,20 @@ mod tests {
     /// regains a third variant the module doc doesn't account for — whether
     /// that's a reintroduced `ProceedDowngraded` or something else entirely.
     ///
+    /// # Gap-closure (WR-11): hardened against self-reference
+    ///
+    /// The enum-declaration literal this test searches for necessarily also
+    /// appears inside this test's OWN source text (the string this test
+    /// passes to the parser below) — the same first-match fragility NR3-07
+    /// already flagged for a sibling test. Rather than search for the enum
+    /// declaration literal directly, this test anchors on a dedicated marker
+    /// comment placed immediately above the real declaration and asserts
+    /// that marker's occurrence count is EXACTLY 2 (the declaration-site
+    /// comment + this test's own reference below) before trusting which
+    /// segment of the file holds the real enum — so a future edit that
+    /// duplicates or removes the marker fails loudly here, not silently
+    /// mis-targets a different segment.
+    ///
     /// Non-vacuity: verified manually per the plan's acceptance criteria by
     /// temporarily re-adding `ProceedDowngraded { downgraded: Vec<&'static
     /// str> },` to the enum (without updating this test's expected list) and
@@ -2171,7 +2226,27 @@ mod tests {
     #[test]
     fn daemon_attestation_decision_is_deliberately_two_state() {
         let src = include_str!("launch.rs");
-        let variants = parse_enum_variant_names(src, "enum DaemonAttestationDecision {");
+
+        // Held once and reused for both the occurrence-count check and the
+        // split below, so this literal appears in this file's own source
+        // exactly twice total: here, and as the marker comment immediately
+        // above `enum DaemonAttestationDecision`.
+        let anchor = "DAEMON-DECISION-ENUM";
+        let occurrences = src.matches(anchor).count();
+        assert_eq!(
+            occurrences, 2,
+            "expected exactly 2 occurrences of the gap-closure anchor marking the real enum \
+             declaration (the declaration-site comment + this test's own reference); found \
+             {occurrences} — the anchor was duplicated or removed, and this test can no longer \
+             trust which occurrence is the real declaration"
+        );
+
+        let after_anchor = src
+            .split(anchor)
+            .nth(1)
+            .expect("the gap-closure anchor must precede the real enum declaration");
+
+        let variants = parse_enum_variant_names(after_anchor, "enum DaemonAttestationDecision {");
 
         assert_eq!(
             variants,
