@@ -1234,25 +1234,45 @@ mod windows_impl {
     /// text and `NonoDiagnosticCode` classification stay consistent across
     /// both binaries even though the decision logic itself is duplicated.
     ///
-    /// # Phase 117 review NR3-05 (deliberately two-state, not three)
+    /// # Phase 117 review NR3-05 (deliberately two-state, not three) / gap-closure WR-06
     ///
     /// Unlike the CLI-side `exec_strategy_windows::attestation::
     /// AttestationDecision`, this daemon-side mirror has NO `ProceedDowngraded`
-    /// variant. Every layer `daemon_attest_and_decide` models
-    /// (`AppContainerProfile`, `JobObjectContainment`, `WfpEgressFilters`,
-    /// `DaclPackageSidGrant`) is fail-closed end-to-end in the daemon's own
-    /// guards today — `DaemonDaclGuard`'s three-pass apply has no
-    /// partial-success return, and `wfp_filter_add`'s `Err` path terminates
-    /// before this gate is ever reached — so there is no partial-coverage
-    /// state for a downgrade arm to represent. A prior revision declared
+    /// variant — but NOT because `DaemonDaclGuard::apply`'s three-pass apply
+    /// is fully fail-closed with nothing in between `Ok` and `Err`. It
+    /// isn't: pass 1 skips (warns, records nothing) a read-only rule whose
+    /// path is not owned by the current user, and pass 3 `break`s at the
+    /// first non-owned workspace ancestor — both real skip/break arms
+    /// `granted_write_access()` cannot express. The reason `ProceedDowngraded`
+    /// stays removed is what those two arms actually skip: TRAVERSE grants on
+    /// read-only rules and ancestor directories, never a WRITE grant. Unlike
+    /// the CLI's `AppliedDaclGrantsGuard`'s `SkipWritableNotOwned` (which
+    /// gates a WRITE grant the child was specifically promised, and so
+    /// classifies `PartiallyApplied`), a skipped daemon-side traverse grant
+    /// only narrows an ancillary discoverability path the daemon relies on
+    /// the lowbox bypass-traverse privilege to reach anyway (see each pass's
+    /// own comment above). Pass 2 — the one pass that grants WRITE — IS
+    /// fail-closed end-to-end: any failure there aborts the whole `apply`
+    /// via `revert_all` + `Err`, never a skip. Every layer
+    /// `daemon_attest_and_decide` models (`AppContainerProfile`,
+    /// `JobObjectContainment`, `WfpEgressFilters`, `DaclPackageSidGrant`)
+    /// therefore has a fail direction that is always under-granting (the
+    /// child ends up with less filesystem access than the policy intended),
+    /// never under-confining (the child's sandbox boundary is never wider
+    /// than intended) — so a downgrade state here would carry no
+    /// security-relevant signal an operator needs surfaced, unlike the CLI's
+    /// three-state contract. `wfp_filter_add`'s `Err` path also terminates
+    /// before this gate is ever reached, keeping the network layer out of
+    /// scope for a downgrade state too. A prior revision declared
     /// `ProceedDowngraded` anyway and matched it in `launch_agent` with a
     /// full audit-event-emission + Event Log warning arm, but
     /// `daemon_attest_and_decide` had no return site that ever constructed
     /// it — dead code that looked like a supported state. If a future
-    /// daemon-side guard gains a genuine partial-coverage state,
-    /// `ProceedDowngraded` should be reintroduced alongside a real coverage
-    /// accessor on that guard (mirroring `DaclGrantCoverage`/`LabelCoverage`
-    /// on the CLI side), not restored as a hardcoded/unreachable literal.
+    /// daemon-side guard gains a genuine under-confining partial-coverage
+    /// state, `ProceedDowngraded` should be reintroduced alongside a real
+    /// coverage accessor on that guard (mirroring
+    /// `DaclGrantCoverage`/`LabelCoverage` on the CLI side), not restored as
+    /// a hardcoded/unreachable literal.
     #[derive(Debug)]
     enum DaemonAttestationDecision {
         /// Every row this function checks classified `Confirmed` (or was not
@@ -2070,6 +2090,68 @@ mod tests {
         );
     }
 
+    /// Parses an enum's top-level variant names out of its own source text.
+    ///
+    /// Locates the enum body immediately following `enum_marker` up to the
+    /// first line whose trimmed content is exactly `"}"` — a struct-like
+    /// variant's own closing line (e.g. `Abort`'s `},`) carries a trailing
+    /// comma and so never matches, only the enum's real closing brace does.
+    /// Within that body, variant lines are whichever indent level is
+    /// SHALLOWEST among the non-blank, non-comment, non-attribute,
+    /// non-`}` lines present — this works for both a module-nested enum
+    /// (variant lines at 8 spaces, like `DaemonAttestationDecision`) and a
+    /// top-level enum (variant lines at 4 spaces, like the CLI's
+    /// `AttestationDecision`) without the caller needing to know which.
+    /// Struct-variant FIELD lines sit one level deeper than the variant name
+    /// itself and are excluded by the same shallowest-indent filter.
+    ///
+    /// Factored out of the two tests below (WR-06/WR-11 gap-closure) so both
+    /// share one parsing implementation instead of two independently
+    /// hand-rolled ones drifting apart.
+    fn parse_enum_variant_names(src: &str, enum_marker: &str) -> Vec<String> {
+        let after = src
+            .split(enum_marker)
+            .nth(1)
+            .unwrap_or_else(|| panic!("enum marker not found in source: {enum_marker}"));
+
+        let body_lines: Vec<&str> = after
+            .lines()
+            .take_while(|line| line.trim() != "}")
+            .collect();
+
+        let candidate_indent = |line: &&str| -> Option<usize> {
+            let trimmed = line.trim_start();
+            if trimmed.is_empty()
+                || trimmed.starts_with("///")
+                || trimmed.starts_with('#')
+                || trimmed.starts_with('}')
+            {
+                None
+            } else {
+                Some(line.len() - trimmed.len())
+            }
+        };
+
+        let variant_indent = body_lines
+            .iter()
+            .filter_map(candidate_indent)
+            .min()
+            .unwrap_or_else(|| panic!("no variant lines found after marker: {enum_marker}"));
+
+        body_lines
+            .iter()
+            .filter(|line| candidate_indent(line) == Some(variant_indent))
+            .map(|line| {
+                line.trim_start()
+                    .split([',', '{', '('])
+                    .next()
+                    .unwrap_or(line)
+                    .trim()
+                    .to_string()
+            })
+            .collect()
+    }
+
     /// Phase 117 Plan 17 (NR3-05): `DaemonAttestationDecision` is deliberately
     /// two-state (`Proceed` / `Abort`) — see the enum's own doc comment for
     /// why a `ProceedDowngraded` variant was removed rather than wired up.
@@ -2089,47 +2171,11 @@ mod tests {
     #[test]
     fn daemon_attestation_decision_is_deliberately_two_state() {
         let src = include_str!("launch.rs");
-        let enum_block = src
-            .split("enum DaemonAttestationDecision {")
-            .nth(1)
-            .expect("the DaemonAttestationDecision enum must exist in this file")
-            .split("\n    }\n")
-            .next()
-            .expect("the enum's closing brace must exist");
-
-        // Variant declaration lines sit at exactly one indent level below the
-        // enum body (8 spaces here) — struct-variant FIELD lines (like
-        // `Abort`'s `layer`/`status`) sit one level deeper (12 spaces) and
-        // must be excluded, or a struct-like variant's fields would be
-        // miscounted as extra variants. Skip doc comments/attributes at the
-        // variant level too, then take the identifier up to the first `,`,
-        // `{`, or `(` — matches unit variants (`Proceed`) and struct-like
-        // variants (`Abort { .. }`) alike.
-        const VARIANT_INDENT: usize = 8;
-        let variants: Vec<&str> = enum_block
-            .lines()
-            .filter(|line| {
-                let indent = line.len() - line.trim_start().len();
-                let trimmed = line.trim_start();
-                indent == VARIANT_INDENT
-                    && !trimmed.is_empty()
-                    && !trimmed.starts_with("///")
-                    && !trimmed.starts_with('#')
-                    && !trimmed.starts_with('}')
-            })
-            .map(|line| {
-                line.trim_start()
-                    .split([',', '{', '('])
-                    .next()
-                    .unwrap_or(line)
-                    .trim()
-            })
-            .filter(|name| !name.is_empty())
-            .collect();
+        let variants = parse_enum_variant_names(src, "enum DaemonAttestationDecision {");
 
         assert_eq!(
             variants,
-            vec!["Proceed", "Abort"],
+            vec!["Proceed".to_string(), "Abort".to_string()],
             "DaemonAttestationDecision must stay a genuine two-state enum (Proceed / Abort). \
              If this assertion fails because a new variant was added, \
              daemon_attest_and_decide's own return sites AND launch_agent's match on the \
@@ -2138,6 +2184,65 @@ mod tests {
              produces it, not a hardcoded value (the exact class NR3-05 found and Plan 17 \
              closed): got {variants:?}"
         );
+    }
+
+    /// WR-06 gap-closure: the daemon and CLI attestation-decision surfaces
+    /// (`DaemonAttestationDecision`'s own doc comment above explains why
+    /// they are two independently-implemented mirrors of the same
+    /// fail-direction contract, not a shared call) can silently drift apart
+    /// — a variant added to one without the other, or without a recorded
+    /// reason for the split, is a documentation/audit gap this test exists
+    /// to catch at compile time rather than at review time.
+    ///
+    /// Discovery-based, like the sibling test above: parses both enums'
+    /// variant names straight out of their own source text via
+    /// `include_str!`. Reading `exec_strategy_windows/attestation.rs` here
+    /// is a compile-time TEXT embed only (`#[cfg(test)]`), not a module or
+    /// link dependency — `nono-agentd` never `#[path]`-includes
+    /// `exec_strategy_windows/` in a real build (see
+    /// `daemon_attest_and_decide`'s own doc comment, "Why this is a separate
+    /// implementation, not a shared call").
+    ///
+    /// Non-vacuity: every daemon variant must have a same-named CLI
+    /// counterpart, AND every CLI variant must be either mirrored on the
+    /// daemon side or explicitly named in `documented_divergence` — an
+    /// undocumented 4th variant on either side fails this test by name, not
+    /// with a bare `false`.
+    #[test]
+    fn every_daemon_variant_is_in_the_cli_variant_set_or_a_documented_divergence() {
+        let daemon_src = include_str!("launch.rs");
+        let daemon_variants =
+            parse_enum_variant_names(daemon_src, "enum DaemonAttestationDecision {");
+
+        let cli_src = include_str!("../exec_strategy_windows/attestation.rs");
+        let cli_variants = parse_enum_variant_names(cli_src, "enum AttestationDecision {");
+
+        // WR-06: the one intentional divergence — see `DaemonAttestationDecision`'s
+        // own doc comment ("Phase 117 review NR3-05") for why `ProceedDowngraded`
+        // stays CLI-only.
+        let documented_divergence: &[&str] = &["ProceedDowngraded"];
+
+        for daemon_variant in &daemon_variants {
+            assert!(
+                cli_variants.contains(daemon_variant),
+                "DaemonAttestationDecision::{daemon_variant} has no counterpart in the CLI's \
+                 AttestationDecision ({cli_variants:?}) — the daemon mirror must stay a subset \
+                 of the CLI's decision shape"
+            );
+        }
+
+        for cli_variant in &cli_variants {
+            let is_mirrored = daemon_variants.contains(cli_variant);
+            let is_documented = documented_divergence.contains(&cli_variant.as_str());
+            assert!(
+                is_mirrored || is_documented,
+                "AttestationDecision::{cli_variant} exists on the CLI side but is neither \
+                 mirrored in DaemonAttestationDecision ({daemon_variants:?}) nor listed in \
+                 documented_divergence ({documented_divergence:?}) — an undocumented \
+                 divergence between the daemon and CLI decision shapes must be resolved \
+                 (either mirror it or add it to documented_divergence with a stated reason)"
+            );
+        }
     }
 
     // ── Task 2 (75-07-T2): DaemonDaclGuard unit tests ────────────────────────
