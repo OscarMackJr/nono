@@ -178,3 +178,10 @@ None - no external service configuration required. (Running this specific new te
 ---
 *Phase: 117-fail-direction-contract-startup-self-attestation*
 *Completed: 2026-08-11*
+
+## Self-Check: PASSED
+
+- FOUND: `crates/nono-cli/src/exec_strategy_windows/labels_guard.rs` (modified, contains `non_owned_path_with_a_foreign_label_is_exempt_not_a_coverage_gap`)
+- FOUND: `.planning/phases/117-fail-direction-contract-startup-self-attestation/117-30-SUMMARY.md`
+- FOUND commit `34157104` (test: pin non-owned+foreign-labeled combined condition)
+- FOUND commit `bb59c4f3` (docs: record WR-20 gap-closure test and host-privilege limitation)
