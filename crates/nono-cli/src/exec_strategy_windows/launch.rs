@@ -4099,6 +4099,89 @@ mod attestation_gate_tests {
         );
     }
 
+    /// WR-07 (Phase 117-23) gate-level regression, mirroring
+    /// `partially_applied_launch_is_downgraded_not_silently_passed` above but
+    /// for `DaclAncestorTraverse`: before Task 1's fix,
+    /// `AppliedAncestorTraverseGuard::application()` could only ever return
+    /// `NotApplicable` or `Applied` for a walk that ran but granted zero
+    /// owned ancestors — so this exact scenario (a real, non-vacuous
+    /// coverage gap on an `expected: true` row) would have classified
+    /// `NotApplicable` and dropped OUT of the decision entirely,
+    /// indistinguishable from a fully-confirmed row. Task 1's `walked`
+    /// tracking is what makes this scenario reach `PartiallyApplied`
+    /// (instead of `NotApplicable`) upstream of this gate; this test proves
+    /// that once it does, the REAL registry routes it through
+    /// `ProceedDowngraded` naming `DaclAncestorTraverse` specifically — the
+    /// row participates in (does not vanish from) the decision.
+    #[test]
+    fn dacl_ancestor_traverse_row_reports_partially_applied_from_a_real_gate() {
+        let child = spawn_suspended_cmd();
+        let job: HANDLE = unsafe {
+            // SAFETY: see above.
+            CreateJobObjectW(std::ptr::null(), std::ptr::null())
+        };
+        assert!(!job.is_null(), "CreateJobObjectW failed");
+        let assigned = unsafe {
+            // SAFETY: both handles are owned by this test.
+            AssignProcessToJobObject(job, child.process)
+        };
+        assert_ne!(assigned, 0, "AssignProcessToJobObject failed");
+
+        let mut applied = fully_applied_layers();
+        applied.dacl_ancestor_traverse = layer_registry::LayerApplication::PartiallyApplied;
+
+        let decision = attestation::attest_and_decide(attestation::AttestationInput {
+            child_process: child.process,
+            containment_job: job,
+            entry_path: layer_registry::EntryPath::DirectCli,
+            token_arm: Some(WindowsTokenArm::Null),
+            wfp_preconfirmed: false,
+            applied,
+            expected_session_sid: None,
+            required_layers_override: &[],
+            machine_required_layers: &[],
+        });
+
+        // The gate itself must proceed (never abort) — a `PartiallyApplied`
+        // ancestor-traverse walk is genuinely in effect on some of its
+        // targets, so refusing the launch would be wrong.
+        let gate = apply_startup_attestation_gate(
+            child.process,
+            job,
+            layer_registry::EntryPath::DirectCli,
+            Some(WindowsTokenArm::Null),
+            false,
+            applied,
+            None,
+            Some("117-23-dacl-ancestor-traverse-partial-test-session"),
+        );
+
+        unsafe {
+            // SAFETY: `job` is a valid HANDLE this test owns.
+            CloseHandle(job);
+        }
+
+        match decision {
+            Ok(attestation::AttestationDecision::ProceedDowngraded { downgraded }) => {
+                assert_eq!(
+                    downgraded,
+                    vec![layer_registry::LayerId::DaclAncestorTraverse],
+                    "PartiallyApplied must name DaclAncestorTraverse in the downgrade set — the \
+                     row must be visible, not silently absorbed into Proceed"
+                );
+            }
+            other => panic!(
+                "a PartiallyApplied DaclAncestorTraverse row must reach ProceedDowngraded through \
+                 the REAL registry (WR-07) — before Task 1's fix this scenario classified \
+                 NotApplicable and vanished from the decision entirely; got {other:?}"
+            ),
+        }
+        assert!(
+            gate.is_ok(),
+            "a PartiallyApplied ancestor-traverse walk must not refuse the launch, got {gate:?}"
+        );
+    }
+
     /// Phase 117 review NR-04, the `netsh` half: `FirewallRulesEgress`'s
     /// report is the recorded rule count, so a guard that installed fewer
     /// than both block rules classifies `Unconfirmed` instead of being
