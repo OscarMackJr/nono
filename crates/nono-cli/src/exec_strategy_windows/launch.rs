@@ -1639,6 +1639,15 @@ pub(super) fn spawn_windows_child(
     let env_pairs = build_child_env(config);
     let mut environment_block = build_windows_environment_block(&env_pairs);
 
+    // Phase 117-27 WR-16: record this launch's own granted filesystem paths
+    // once, before `apply_startup_attestation_gate` is ever reachable, so
+    // `cli_bootstrap::log_target_is_private()` can check a `--log-file`
+    // target against the paths this very launch grants the confined child.
+    let granted_fs_caps = config.caps.fs_capabilities();
+    crate::cli_bootstrap::set_granted_read_paths(
+        granted_fs_caps.iter().map(|c| c.resolved.clone()).collect(),
+    );
+
     // Bind each potential holder to a named local so its Drop does NOT run
     // until after CreateProcess{AsUser}W uses the raw HANDLE. Previously,
     // `?.h_token` / `?.raw()` returned a raw HANDLE from a temporary which
