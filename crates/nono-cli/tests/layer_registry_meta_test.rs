@@ -256,8 +256,21 @@ const MANUAL_SECURITY_ASSUMPTIONS: &[(&str, &str)] = &[(
 /// made `also_automated_entries_are_non_vacuous` vacuous — the exact class
 /// of bug T-117-18-01 exists to prevent. Requires the character
 /// immediately after the name to be neither an identifier character nor
-/// `!` (so `fn foo` matches `fn foo(` and `fn foo<T>` but not `fn foo2` or
-/// `fn foobar`).
+/// `!` (so `fn foo` matches `fn foo(` and `fn foo<T>` but not `fn foo2`,
+/// `fn foobar`, or a macro-shaped `fn foo!` false positive — Phase 117
+/// Plan 24 / WR-10 closes this documented-but-previously-unimplemented `!`
+/// exclusion).
+///
+/// Also requires (WR-10) that the match sit at a real definition line: the
+/// trimmed text from the start of that line up to the match must be empty
+/// or consist entirely of qualifier-keyword words (`pub`, `pub(crate)`,
+/// `pub(super)`, `async`, `unsafe`, `const`, or any word starting with
+/// `pub(`) — identical in shape to `layer_registry_selfcheck.rs`'s
+/// `content_defines_symbol` — so a `fn {name}` spelled out inside a doc
+/// comment or a string/macro literal (e.g. a `#[doc = "... fn foo(...) \
+/// ..."]` attribute) cannot satisfy this check. A rejected match does not
+/// return `false` immediately — scanning continues so a later genuine
+/// definition in the same file is still found.
 fn contains_fn_exact(src: &str, fn_name: &str) -> bool {
     let needle = format!("fn {fn_name}");
     let mut search_start = 0;
@@ -266,9 +279,20 @@ fn contains_fn_exact(src: &str, fn_name: &str) -> bool {
         let after = match_start + needle.len();
         let boundary_ok = match src[after..].chars().next() {
             None => true,
-            Some(c) => !(c.is_ascii_alphanumeric() || c == '_'),
+            Some(c) => !(c.is_ascii_alphanumeric() || c == '_' || c == '!'),
         };
-        if boundary_ok {
+        let line_start = src[..match_start]
+            .rfind('\n')
+            .map_or(0, |newline_pos| newline_pos + 1);
+        let prefix = src[line_start..match_start].trim();
+        let prefix_ok = prefix.is_empty()
+            || prefix.split_whitespace().all(|word| {
+                matches!(
+                    word,
+                    "pub" | "pub(crate)" | "pub(super)" | "async" | "unsafe" | "const"
+                ) || word.starts_with("pub(")
+            });
+        if boundary_ok && prefix_ok {
             return true;
         }
         search_start = match_start + 1;
@@ -517,5 +541,41 @@ fn pascal_to_snake_case_matches_expected_shapes() {
     assert_eq!(
         pascal_to_snake_case("WfpEgressFilters"),
         "wfp_egress_filters"
+    );
+}
+
+/// WR-10: a `fn {name}` spelled out only inside a doc comment must not
+/// satisfy `contains_fn_exact` — it requires a real definition-line prefix.
+#[test]
+fn contains_fn_exact_rejects_doc_comment_mention() {
+    let src = "/// see `fn probe_target(...)`\n";
+    assert!(
+        !contains_fn_exact(src, "probe_target"),
+        "a doc-comment mention of `fn probe_target` must not satisfy contains_fn_exact"
+    );
+}
+
+/// WR-10: the documented `!` boundary exclusion — `fn probe_target!` is a
+/// macro-shaped false positive, not a real function definition.
+#[test]
+fn contains_fn_exact_rejects_bang_suffix() {
+    let src = "fn probe_target! ";
+    assert!(
+        !contains_fn_exact(src, "probe_target"),
+        "`fn probe_target!` must not satisfy contains_fn_exact — the trailing `!` boundary \
+         exclusion is documented but was previously unimplemented (WR-10)"
+    );
+}
+
+/// WR-10: a rejected match (here, a doc-comment mention) must not short-
+/// circuit the scan — a later genuine definition in the same file must
+/// still be found.
+#[test]
+fn contains_fn_exact_accepts_real_definition_after_rejecting_a_false_positive() {
+    let src = "/// see `fn probe_target(...)`\npub(crate) fn probe_target() {}\n";
+    assert!(
+        contains_fn_exact(src, "probe_target"),
+        "a real `pub(crate) fn probe_target(` definition later in the file must still be found \
+         after an earlier doc-comment mention is rejected"
     );
 }
