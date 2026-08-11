@@ -26,7 +26,7 @@ use windows_sys::Win32::Security::Authorization::{
 use windows_sys::Win32::Security::{
     CreateWellKnownSid, DuplicateTokenEx, GetAce, GetSecurityDescriptorSacl, GetSidSubAuthority,
     GetSidSubAuthorityCount, SecurityAnonymous, SetTokenInformation, TokenIntegrityLevel,
-    TokenPrimary, WinLowLabelSid, ACE_HEADER, ACL, LABEL_SECURITY_INFORMATION,
+    TokenPrimary, WinLowLabelSid, ACE_HEADER, ACL, INHERIT_ONLY_ACE, LABEL_SECURITY_INFORMATION,
     PSECURITY_DESCRIPTOR, SECURITY_IMPERSONATION_LEVEL, SECURITY_MAX_SID_SIZE,
     SYSTEM_MANDATORY_LABEL_ACE, TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE,
     TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
@@ -1979,94 +1979,22 @@ pub fn revoke_sid_on_path(path: &Path, sid: &str) -> Result<()> {
     edit_dacl_for_sid(path, sid, 0, REVOKE_ACCESS, NO_INHERITANCE)
 }
 
+/// Reads back the mandatory-label RID on `path`, or `None` if there is no
+/// SACL, no mandatory-label ACE, or the FFI fails.
+///
+/// Phase 117-29 WR-18: this used to be a standalone SACL walk duplicating
+/// [`low_integrity_label_ace`]'s FFI logic, and unlike that function it never
+/// picked up CR-01's `INHERIT_ONLY_ACE` rejection — its sole consumer,
+/// [`is_low_integrity_compatible_dir`] (exported publicly as
+/// `Sandbox::windows_supports_direct_writable_dir`), could report a
+/// directory carrying only a structurally-inert inherit-only mandatory-label
+/// ACE as label-compatible. Now delegates to `low_integrity_label_ace` (the
+/// sole SACL reader for both call sites) and filters out `INHERIT_ONLY_ACE`
+/// the same way CR-01's fix to that function does.
 fn low_integrity_label_rid(path: &Path) -> Option<u32> {
-    let wide_path: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let mut sacl: *mut ACL = std::ptr::null_mut();
-    let mut security_descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
-
-    let status = unsafe {
-        // SAFETY: `wide_path` is a valid nul-terminated UTF-16 buffer, and
-        // the output pointers refer to live local storage for the duration of
-        // the call.
-        GetNamedSecurityInfoW(
-            wide_path.as_ptr(),
-            SE_FILE_OBJECT,
-            LABEL_SECURITY_INFORMATION,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &mut sacl,
-            &mut security_descriptor,
-        )
-    };
-    if status != 0 {
-        return None;
-    }
-    let _security_descriptor = OwnedSecurityDescriptor(security_descriptor);
-
-    if sacl.is_null() {
-        return None;
-    }
-
-    let ace_count = unsafe {
-        // SAFETY: `sacl` is populated by GetNamedSecurityInfoW on success.
-        (*sacl).AceCount
-    };
-
-    for index in 0..ace_count {
-        let mut ace = std::ptr::null_mut();
-        let ok = unsafe {
-            // SAFETY: `sacl` is a valid ACL pointer and `ace` is a valid
-            // out-pointer for the duration of the call.
-            GetAce(sacl, u32::from(index), &mut ace)
-        };
-        if ok == 0 || ace.is_null() {
-            continue;
-        }
-
-        let header = unsafe {
-            // SAFETY: `ace` points to a valid ACE entry returned by GetAce.
-            &*(ace as *const ACE_HEADER)
-        };
-        if u32::from(header.AceType) != SYSTEM_MANDATORY_LABEL_ACE_TYPE {
-            continue;
-        }
-
-        let label_ace = unsafe {
-            // SAFETY: We already checked the ACE type and can interpret the
-            // returned bytes as a SYSTEM_MANDATORY_LABEL_ACE.
-            &*(ace as *const SYSTEM_MANDATORY_LABEL_ACE)
-        };
-        let sid = (&label_ace.SidStart as *const u32).cast_mut().cast();
-        let subauthority_count = unsafe {
-            // SAFETY: `sid` points to the SID embedded in the label ACE.
-            GetSidSubAuthorityCount(sid)
-        };
-        if subauthority_count.is_null() {
-            continue;
-        }
-        let subauthority_count = unsafe { *subauthority_count };
-        if subauthority_count == 0 {
-            continue;
-        }
-
-        let rid = unsafe {
-            // SAFETY: The SID has at least one subauthority, so the final RID
-            // pointer is valid for the lifetime of the ACE buffer.
-            GetSidSubAuthority(sid, u32::from(subauthority_count) - 1)
-        };
-        if rid.is_null() {
-            continue;
-        }
-
-        return Some(unsafe { *rid });
-    }
-
-    None
+    low_integrity_label_ace(path)
+        .filter(|(_, _, flags)| (u32::from(*flags) & INHERIT_ONLY_ACE) == 0)
+        .map(|(rid, _, _)| rid)
 }
 
 /// Reads back the mandatory-label ACE on `path`, returning
@@ -3340,6 +3268,122 @@ mod tests {
             low_integrity_label_and_mask(&file),
             Some((rid, read_mask)),
             "low_integrity_label_and_mask must be a thin wrapper over low_integrity_label_ace"
+        );
+    }
+
+    /// Test-only helper (WR-18 regression coverage, Phase 117-29, ported
+    /// verbatim from `nono-cli`'s `labels_guard.rs::plant_mandatory_label_with_flags`
+    /// — it cannot be imported cross-crate as it is not `pub`): plants a
+    /// `SYSTEM_MANDATORY_LABEL_ACE` on `path` with a caller-supplied SDDL
+    /// ace-flags string (e.g. `"OICIIO"` for `INHERIT_ONLY_ACE` plus
+    /// object/container inherit), bypassing `try_set_mandatory_label` (which
+    /// always writes an EMPTY ace-flags field).
+    fn plant_mandatory_label_with_flags(path: &Path, mask: u32, ace_flags_sddl: &str) {
+        use windows_sys::Win32::Foundation::LocalFree;
+
+        let wide_path: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        let sddl = format!("S:(ML;{ace_flags_sddl};0x{mask:X};;;LW)");
+        let wide_sddl: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
+
+        let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        let ok = unsafe {
+            // SAFETY: `wide_sddl` is a valid nul-terminated UTF-16 buffer;
+            // `sd` is a valid mutable out-pointer. On success the callee
+            // allocates an SD which we free below via LocalFree.
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                wide_sddl.as_ptr(),
+                SDDL_REVISION_1,
+                &mut sd,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_ne!(
+            ok, 0,
+            "test setup: ConvertStringSecurityDescriptorToSecurityDescriptorW must succeed for \
+             SDDL {sddl:?} (GetLastError=0x{:08X})",
+            unsafe {
+                // SAFETY: thread-local read with no preconditions.
+                GetLastError()
+            }
+        );
+
+        let mut sacl: *mut ACL = std::ptr::null_mut();
+        let mut sacl_present: i32 = 0;
+        let mut sacl_defaulted: i32 = 0;
+        let _ = unsafe {
+            // SAFETY: `sd` is a valid SD pointer returned by
+            // ConvertStringSecurityDescriptorToSecurityDescriptorW above; the
+            // three out-parameters refer to live local storage for the
+            // duration of the call.
+            GetSecurityDescriptorSacl(sd, &mut sacl_present, &mut sacl, &mut sacl_defaulted)
+        };
+
+        let status = unsafe {
+            // SAFETY: `wide_path` is a valid nul-terminated UTF-16 buffer;
+            // `sacl` points into `sd`, which is kept alive until the
+            // LocalFree call below.
+            SetNamedSecurityInfoW(
+                wide_path.as_ptr(),
+                SE_FILE_OBJECT,
+                LABEL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                sacl,
+            )
+        };
+
+        unsafe {
+            // SAFETY: `sd` was allocated by
+            // ConvertStringSecurityDescriptorToSecurityDescriptorW and must
+            // be freed with LocalFree per the Win32 contract.
+            LocalFree(sd as _);
+        }
+
+        assert_eq!(
+            status, 0,
+            "test setup: SetNamedSecurityInfoW(LABEL_) must succeed for SDDL {sddl:?} \
+             (status=0x{status:08X})"
+        );
+    }
+
+    /// WR-18 regression test (Phase 117-29): `low_integrity_label_rid` used
+    /// to be a standalone SACL walk that never gained CR-01's
+    /// `INHERIT_ONLY_ACE` rejection. Plants a mandatory-label ACE at
+    /// `SECURITY_MANDATORY_LOW_RID` — a genuine low-integrity RID — but with
+    /// `AceFlags` carrying `INHERIT_ONLY_ACE` (structurally inert on the
+    /// object it sits on; the OS only evaluates it against children created
+    /// under it, never the object itself). Pre-fix, `low_integrity_label_rid`
+    /// would return `Some(rid)` for this and
+    /// `is_low_integrity_compatible_dir` would report `true`. Post-fix, both
+    /// must reject it — mirrors `labels_guard.rs`'s
+    /// `inherit_only_residue_is_not_treated_as_already_covered`.
+    #[test]
+    fn is_low_integrity_compatible_dir_rejects_an_inherit_only_label() {
+        let dir = tempdir().expect("tempdir");
+
+        // "OICIIO" = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE.
+        plant_mandatory_label_with_flags(
+            dir.path(),
+            SYSTEM_MANDATORY_LABEL_NO_WRITE_UP,
+            "OICIIO",
+        );
+
+        assert_eq!(
+            low_integrity_label_rid(dir.path()),
+            None,
+            "an INHERIT_ONLY_ACE mandatory-label ACE, even at the Low RID, must never be \
+             reported as an effective label by low_integrity_label_rid (WR-18)"
+        );
+        assert!(
+            !is_low_integrity_compatible_dir(dir.path()),
+            "is_low_integrity_compatible_dir must not treat an inherit-only residue ACE as \
+             label-compatible (WR-18)"
         );
     }
 
