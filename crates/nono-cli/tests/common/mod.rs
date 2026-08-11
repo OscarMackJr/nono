@@ -27,6 +27,16 @@ pub mod test_env;
 /// identifier boundary: end-of-string, or any character that is not an ASCII
 /// alphanumeric, `_`, or `!` (the `!` exclusion rules out a macro-invocation
 /// false positive, e.g. `fn foo!` is not a real function definition).
+///
+/// Per-target dead-code justification (same shape as `test_env.rs`'s
+/// `EnvVarGuard`/`lock_env` above it): each `tests/<name>.rs` file is a
+/// SEPARATE compilation unit, and dead-code analysis runs per-unit. Only
+/// `layer_registry_meta_test.rs` and `layer_registry_selfcheck.rs` call this
+/// function; the other `tests/*.rs` files that also declare `mod common;`
+/// (`env_vars.rs`, `auto_pull_e2e_linux.rs`) use unrelated parts of this
+/// module and never reference `is_ident_boundary`, so it appears dead in
+/// those units. Structural, not lazy — see `CLAUDE.md`'s dead-code rule.
+#[allow(dead_code)]
 #[must_use]
 pub fn is_ident_boundary(next: Option<char>) -> bool {
     !matches!(next, Some(c) if c.is_ascii_alphanumeric() || c == '_' || c == '!')

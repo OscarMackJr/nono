@@ -27,6 +27,8 @@
 //! `LayerId` variants; both parse it fresh out of `layer_registry.rs` on
 //! every run.
 
+mod common;
+
 use std::path::PathBuf;
 
 /// `crates/nono-cli` — the crate this integration test belongs to.
@@ -176,30 +178,98 @@ fn split_symbol_citation(citation: &str) -> (&str, &str) {
     })
 }
 
-/// Phase 117 Plan 24 (WR-08): does `content` define `symbol` at a real
-/// definition site, not merely mention it somewhere (a doc comment, a
-/// string/macro literal, a commented-out line)?
+/// Phase 117 Plan 31 (WR-13): is `word` present in `haystack` as a whole
+/// identifier — not as a substring of a longer one? Used to check whether an
+/// `impl` line's type name is the exact `ty` being resolved for
+/// (`impl FirewallRulesNetworkBackend` must not satisfy a search for
+/// `NetworkBackend`). Reuses `common::is_ident_boundary` on both sides of the
+/// match: the character before must not be an identifier character either
+/// (checked directly, since `is_ident_boundary`'s truth table — "not
+/// alphanumeric/`_`/`!`" — is symmetric and applies the same going backward
+/// as forward, minus the `!` case which cannot precede an identifier).
+fn line_contains_word(haystack: &str, word: &str) -> bool {
+    let mut search_start = 0usize;
+    while let Some(rel_pos) = haystack[search_start..].find(word) {
+        let match_start = search_start + rel_pos;
+        let before_ok = haystack[..match_start]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+        let after = match_start + word.len();
+        let after_ok = common::is_ident_boundary(haystack[after..].chars().next());
+        if before_ok && after_ok {
+            return true;
+        }
+        search_start = match_start + 1;
+    }
+    false
+}
+
+/// Phase 117 Plan 31 (WR-13): for a `Type::method` citation, does the
+/// nearest preceding `impl` block — scanning backward line-by-line from
+/// `match_pos` — name `ty`? Walks `content[..match_pos]`'s lines in reverse
+/// order (this naturally includes the partial line containing `match_pos`
+/// itself, so a single-line `impl Foo { fn bar() {} }` shape resolves
+/// correctly too, since the trimmed partial line up to the match already
+/// starts with `"impl "`). The first line whose trimmed text starts with
+/// `"impl "` decides the answer; if no such line exists before `match_pos`,
+/// there is no enclosing impl to resolve against and the citation is
+/// rejected.
+fn nearest_preceding_impl_names(content: &str, match_pos: usize, ty: &str) -> bool {
+    let before = &content[..match_pos];
+    for line in before.lines().rev() {
+        if let Some(rest) = line.trim_start().strip_prefix("impl ") {
+            return line_contains_word(rest, ty);
+        }
+    }
+    false
+}
+
+/// Phase 117 Plan 24 (WR-08), hardened by Plan 31 (WR-13): does `content`
+/// define `symbol` at a real definition site, not merely mention it
+/// somewhere (a doc comment, a string/macro literal, a commented-out line,
+/// or — the WR-13 gap — a differently-named function/method that happens to
+/// share `symbol`'s name as a PREFIX)?
 ///
-/// Takes the symbol's last `::`-separated segment (so `Type::method`
-/// citations check the method name, matching how a `fn` or `impl` block
-/// actually reads in source). Searches for both `"fn {last}"` and
-/// `"impl {last}"` needles. For each occurrence, walks back to the start of
-/// that line and takes the trimmed text before the match. The match is
-/// accepted only if that prefix is empty or consists entirely of
-/// whitespace-separated words drawn from the qualifier-keyword set
-/// (`pub`, `pub(crate)`, `pub(super)`, `async`, `unsafe`, `const`, or any
-/// word starting with `pub(` to cover `pub(in path)` forms) — i.e. the kind
-/// of text that only appears immediately before a real item declaration.
-/// Rejected matches are skipped, not treated as failures, so scanning
-/// continues to a later genuine match in the same file.
+/// `symbol` is split on its LAST `::` into `method` (searched for) and,
+/// where present, `ty` — the type qualifier of a `Type::method` citation
+/// (`None` for a bare symbol). Taking only the second `rsplit` segment as
+/// `ty` does not support a longer qualifier chain (`mod::Type::method`);
+/// none of this codebase's current citations need one, but a future one
+/// that does would need this resolution extended, not silently mis-resolved.
+///
+/// Searches for both `"fn {method}"` and `"impl {method}"` needles. For each
+/// occurrence:
+/// - the PREFIX (trimmed text from the start of that line up to the match)
+///   must be empty or consist entirely of qualifier-keyword words (`pub`,
+///   `pub(crate)`, `pub(super)`, `async`, `unsafe`, `const`, or any word
+///   starting with `pub(`) — unchanged from Plan 24;
+/// - the SUFFIX (the character immediately after the needle) must be a
+///   valid identifier boundary per `common::is_ident_boundary` — the WR-13
+///   fix: without this, `fn create_restricted_token_with_sid_v2` satisfies a
+///   search for `create_restricted_token_with_sid`, since the needle is only
+///   a PREFIX of the real (renamed) identifier;
+/// - when `ty.is_some()`, the match must additionally sit inside the
+///   nearest preceding `impl ty` block (`nearest_preceding_impl_names`) —
+///   the WR-13 fix for `Type::method` citations: without it,
+///   `WfpNetworkBackend::install` and `FirewallRulesNetworkBackend::install`
+///   both reduce to the bare needle `fn install` and become
+///   indistinguishable.
+///
+/// A rejected match at any of these three gates is skipped, not treated as
+/// a failure — scanning continues so a later genuine match in the same file
+/// is still found.
 fn content_defines_symbol(content: &str, symbol: &str) -> bool {
-    let last = symbol.rsplit("::").next().unwrap_or(symbol);
-    let needles = [format!("fn {last}"), format!("impl {last}")];
+    let mut parts = symbol.rsplit("::");
+    let method = parts.next().unwrap_or(symbol);
+    let ty = parts.next();
+    let needles = [format!("fn {method}"), format!("impl {method}")];
 
     for needle in &needles {
         let mut search_start = 0usize;
         while let Some(rel_pos) = content[search_start..].find(needle.as_str()) {
             let match_pos = search_start + rel_pos;
+            let after = match_pos + needle.len();
             let line_start = content[..match_pos]
                 .rfind('\n')
                 .map_or(0, |newline_pos| newline_pos + 1);
@@ -211,12 +281,17 @@ fn content_defines_symbol(content: &str, symbol: &str) -> bool {
                         "pub" | "pub(crate)" | "pub(super)" | "async" | "unsafe" | "const"
                     ) || word.starts_with("pub(")
                 });
-            if is_definition_prefix {
+            let boundary_ok = common::is_ident_boundary(content[after..].chars().next());
+            let impl_ok = match ty {
+                Some(ty) => nearest_preceding_impl_names(content, match_pos, ty),
+                None => true,
+            };
+            if is_definition_prefix && boundary_ok && impl_ok {
                 return true;
             }
-            // Not a real definition line (doc comment / string / macro
-            // literal) — keep scanning past this rejected match instead of
-            // giving up on the whole needle.
+            // Not a real definition line, not a trailing boundary, or not
+            // inside the right impl block — keep scanning past this
+            // rejected match instead of giving up on the whole needle.
             search_start = match_pos + 1;
         }
     }
@@ -424,5 +499,57 @@ fn content_defines_symbol_accepts_a_real_definition() {
     assert!(
         content_defines_symbol(src, "foo"),
         "a real `pub(crate) fn foo(` definition line must satisfy content_defines_symbol"
+    );
+}
+
+/// WR-13: a prefix-preserving rename must NOT satisfy `content_defines_symbol`
+/// for the original name — the regression this plan closes, confirmed
+/// empirically against `nono-shell-broker/src/main.rs` in the perturbation
+/// proof recorded in this plan's SUMMARY.md (`::run` vs.
+/// `run_fails_when_app_container_forced_unavailable`).
+#[test]
+fn content_defines_symbol_rejects_a_prefix_preserving_rename() {
+    let src = "pub(crate) fn create_restricted_token_with_sid_v2(x: u32) -> u32 {\n    x\n}\n";
+    assert!(
+        !content_defines_symbol(src, "create_restricted_token_with_sid"),
+        "`fn create_restricted_token_with_sid_v2` (a prefix-preserving rename) must not satisfy \
+         content_defines_symbol(\"create_restricted_token_with_sid\") — WR-13"
+    );
+}
+
+/// WR-13: two same-named methods in different `impl` blocks in the same file
+/// must be distinguishable by their `Type::method` qualifier — modeled on
+/// the real `WfpNetworkBackend::install` / `FirewallRulesNetworkBackend::
+/// install` pair the review cited.
+#[test]
+fn content_defines_symbol_distinguishes_same_named_methods_in_different_impls() {
+    let wrong_impl_only =
+        "impl FirewallRulesNetworkBackend {\n    pub(crate) fn install(&self) {}\n}\n";
+    assert!(
+        !content_defines_symbol(wrong_impl_only, "WfpNetworkBackend::install"),
+        "a `fn install` defined only inside `impl FirewallRulesNetworkBackend` must not satisfy \
+         the qualified citation `WfpNetworkBackend::install` — WR-13"
+    );
+
+    let both_impls = "impl FirewallRulesNetworkBackend {\n    pub(crate) fn install(&self) {}\n}\n\
+                       \nimpl WfpNetworkBackend {\n    pub(crate) fn install(&self) {}\n}\n";
+    assert!(
+        content_defines_symbol(both_impls, "WfpNetworkBackend::install"),
+        "the correct `impl WfpNetworkBackend {{ fn install }}` must satisfy \
+         `WfpNetworkBackend::install` even when a same-named method exists in a different impl \
+         in the same file — WR-13"
+    );
+}
+
+/// WR-13 positive case: an ordinary `Type::method` citation against its real
+/// definition must succeed — the hardening must not turn into a false
+/// negative for the legitimate, common shape.
+#[test]
+fn content_defines_symbol_accepts_a_qualified_type_method_citation() {
+    let src = "impl RealType {\n    pub(crate) fn real_method() {}\n}\n";
+    assert!(
+        content_defines_symbol(src, "RealType::real_method"),
+        "a real `impl RealType {{ pub(crate) fn real_method() {{}} }}` must satisfy the \
+         qualified citation `RealType::real_method`"
     );
 }
