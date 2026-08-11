@@ -110,36 +110,40 @@ impl SecurityEventLayer {
 
         let downgraded_layers_value = downgraded_layers.join(",");
 
-        // Build canonical event bytes for chain advancement (same shape as
-        // emit_override_event / on_event) via the sole cross-module
-        // chain-advancement accessor (WR-09) — locks `inner` once and
-        // returns a snapshot instead of exposing its fields.
-        let (session_id, chain_head, enabled) = self.advance_and_snapshot(|session_id| {
-            format!(
-                "{event_type:?}|{downgraded}|{session_id}|{ts}",
-                event_type = SecurityEventType::LayerAttestationDowngraded,
-                downgraded = downgraded_layers_value,
-                ts = timestamp_unix_ms,
-            )
-            .into_bytes()
-        })?;
-
-        if enabled {
-            let security_event = SecurityEvent {
-                event_type: SecurityEventType::LayerAttestationDowngraded,
-                agent_pid: std::process::id(),
-                path_hash: None,
-                path_category: None,
-                host: None,
-                session_id,
-                chain_head: chain_head.clone(),
-                timestamp_unix_ms,
-                downgraded_layers: Some(downgraded_layers_value),
-            };
-            emit_security_event(&security_event);
-        }
-
-        Ok(chain_head)
+        // Build canonical event bytes for chain advancement AND emit the
+        // Event Log record, both under the sole cross-module chain-advance
+        // accessor's ONE lock acquisition (WR-09 accessor discipline; WR-21
+        // point 1 atomicity — see `advance_and_emit`'s doc comment). The
+        // emit closure runs while the chain mutex is still held, matching
+        // `emit_override_event`'s existing single-critical-section shape.
+        self.advance_and_emit(
+            |session_id| {
+                format!(
+                    "{event_type:?}|{downgraded}|{session_id}|{ts}",
+                    event_type = SecurityEventType::LayerAttestationDowngraded,
+                    downgraded = downgraded_layers_value,
+                    ts = timestamp_unix_ms,
+                )
+                .into_bytes()
+            },
+            |session_id, chain_head, enabled| {
+                if enabled {
+                    let security_event = SecurityEvent {
+                        event_type: SecurityEventType::LayerAttestationDowngraded,
+                        agent_pid: std::process::id(),
+                        path_hash: None,
+                        path_category: None,
+                        host: None,
+                        session_id: session_id.to_string(),
+                        chain_head: chain_head.to_string(),
+                        timestamp_unix_ms,
+                        downgraded_layers: Some(downgraded_layers_value.clone()),
+                    };
+                    emit_security_event(&security_event);
+                }
+                chain_head.to_string()
+            },
+        )
     }
 }
 

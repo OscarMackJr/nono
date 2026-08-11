@@ -384,28 +384,57 @@ impl SecurityEventLayer {
         Ok(chain_head)
     }
 
-    /// Advance the HMAC chain by exactly one event and return a snapshot of
-    /// the fields external callers need (Phase 117 Plan 25 / WR-09).
+    /// Advance the HMAC chain by exactly one event and emit its record,
+    /// both under ONE lock acquisition (Phase 117 Plan 33 / WR-21 point 1).
     ///
     /// This is the sole cross-module accessor for the tamper-evident chain:
     /// every module outside `telemetry::mod` that needs to advance the chain
     /// (currently `exec_strategy_windows::attestation_downgrade_event`'s
     /// `emit_attestation_event`) MUST go through this method instead of
     /// reaching into `SecurityEventLayerInner`'s fields directly — those
-    /// fields are private again as of this plan.
+    /// fields are private again as of Plan 25.
+    ///
+    /// Replaces the former `advance_and_snapshot` (Plan 25), which locked
+    /// once, advanced the chain, and returned a `(session_id, chain_head,
+    /// enabled)` snapshot — dropping the lock BEFORE the caller built and
+    /// emitted its `SecurityEvent`. That left a window between chain
+    /// advancement and the Event Log write where a concurrent emitter
+    /// (`emit_override_event` or `on_event`, both of which hold the lock
+    /// across their own emit) could advance the chain and emit in between,
+    /// producing chain-advance order A,B but Event Log write order B,A. Each
+    /// record still carries its own correct `chain_head` (not a forgery
+    /// risk), but the two sibling emitters no longer shared the same
+    /// ordering guarantee — an undocumented divergence in a tamper-evidence
+    /// mechanism. `advance_and_emit` closes that window: the `MutexGuard`
+    /// stays in scope across the `emit` closure call, so no other emitter
+    /// can interleave between chain-advance and Event Log write.
     ///
     /// Locks `inner` exactly once. `build_event_bytes` receives the current
     /// `session_id` (so the caller never needs a separate lock just to read
-    /// it before building the bytes to chain), and its return value is
-    /// passed to [`advance_chain`].
+    /// it before building the bytes to chain) and its return value is
+    /// passed to [`advance_chain`]. `emit` then receives
+    /// `(&session_id, &chain_head_hex, telemetry_enabled)` and runs to
+    /// completion — including any Event Log emit it performs — WHILE THE
+    /// LOCK IS STILL HELD, mirroring `emit_override_event`'s existing
+    /// single-critical-section shape.
+    ///
+    /// # Deadlock analysis
+    ///
+    /// `emit` MUST NOT re-enter any path that takes `self.inner`'s lock
+    /// (or any clone's — all clones share the same `Arc<Mutex<...>>`).
+    /// The only caller of this method, `emit_attestation_event`, passes an
+    /// `emit` closure whose body calls `crate::telemetry::windows::
+    /// emit_security_event` — a free function that writes to the Windows
+    /// Application log / ETW and touches no `SecurityEventLayer` state, so
+    /// it cannot re-enter this mutex. No other `SecurityEventLayer` method
+    /// is called from within `emit`.
     ///
     /// # Returns
     ///
-    /// `Ok((session_id, chain_head_hex, telemetry_enabled))` on success —
-    /// a snapshot the caller can use to build its own `SecurityEvent`
-    /// without ever touching `inner` again. `Err("mutex poisoned")` if the
-    /// lock is poisoned (AUD-04 fail-closed — callers must treat this per
-    /// their own event's contract).
+    /// `Ok(R)` — the `emit` closure's own return value — on success.
+    /// `Err("mutex poisoned")` if the lock is poisoned (AUD-04 fail-closed —
+    /// callers must treat this per their own event's contract). `emit` is
+    /// never invoked when the lock is poisoned.
     // This method's only caller is `exec_strategy_windows::
     // attestation_downgrade_event::emit_attestation_event`, a file compiled
     // only into the `nono` binary (not `nono-agentd` — see that module's
@@ -416,15 +445,20 @@ impl SecurityEventLayer {
     // in production (`nono` binary) but has zero reachable callers within
     // `nono-agentd`'s independent compilation unit. Not actual dead code.
     #[allow(dead_code)]
-    pub(crate) fn advance_and_snapshot(
+    pub(crate) fn advance_and_emit<R>(
         &self,
         build_event_bytes: impl FnOnce(&str) -> Vec<u8>,
-    ) -> Result<(String, String, bool), &'static str> {
+        emit: impl FnOnce(&str, &str, bool) -> R,
+    ) -> Result<R, &'static str> {
         let mut inner = self.inner.lock().map_err(|_| "mutex poisoned")?;
         let event_bytes = build_event_bytes(&inner.session_id);
         advance_chain(&mut inner.chain, &event_bytes);
         let chain_head = chain_head_hex(&inner.chain.head);
-        Ok((inner.session_id.clone(), chain_head, inner.config.enabled))
+        // The MutexGuard (`inner`) stays alive across this call — `emit`
+        // runs, including any Event Log write it performs, WHILE the lock
+        // is still held (see "Deadlock analysis" above for why this is
+        // safe: `emit` never re-enters this mutex).
+        Ok(emit(&inner.session_id, &chain_head, inner.config.enabled))
     }
 
     // `emit_attestation_event` (Phase 117 CINT-02 / D-27's structured-telemetry
@@ -444,7 +478,8 @@ impl SecurityEventLayer {
     // the method there (as a second `impl SecurityEventLayer` block) makes
     // its compiled-into-one-binary-only reality match its real usage,
     // instead of silencing the mismatch with an attribute. It reaches the
-    // chain exclusively through `advance_and_snapshot` above (Plan 25).
+    // chain exclusively through `advance_and_emit` above (Plan 33; formerly
+    // `advance_and_snapshot`, Plan 25).
 }
 
 impl<S: Subscriber> Layer<S> for SecurityEventLayer {
@@ -942,4 +977,86 @@ mod tests {
     // `exec_strategy_windows::attestation_downgrade_event::tests` alongside
     // the method itself (Plan 17 NR3-05 follow-up — see the comment on this
     // impl block's now-empty tail above).
+
+    /// Perturbation-proof-carrying regression test (Phase 117 Plan 33 / WR-21
+    /// point 1): `advance_and_emit` must hold `inner`'s lock across the WHOLE
+    /// build+advance+emit sequence, not release it before `emit` runs.
+    ///
+    /// Two threads call `advance_and_emit` concurrently. Thread A's `emit`
+    /// closure sleeps for 150ms after signalling it has started (simulating
+    /// a slow Event Log write). Thread B starts ~30ms later and its
+    /// `build_event_bytes` closure — which runs INSIDE the lock, immediately
+    /// after acquisition — records whether A's emit had already finished by
+    /// the time B got the lock. If the lock is genuinely held across A's
+    /// full sequence, B cannot acquire it until A's 150ms sleep completes,
+    /// so B always observes `a_emit_finished == true`. This test was proven
+    /// to actually catch a regression: see this plan's SUMMARY.md
+    /// "Perturbation Proofs" section for the observed failure when
+    /// `advance_and_emit` was temporarily changed to drop the lock before
+    /// calling `emit` (the pre-fix `advance_and_snapshot` shape).
+    #[test]
+    fn advance_and_emit_holds_lock_across_full_build_advance_emit_sequence() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+        use std::time::Duration;
+
+        let layer = SecurityEventLayer::new(
+            TelemetryConfig::default(),
+            "concurrency-proof-session".to_string(),
+        );
+
+        let a_emit_finished = Arc::new(AtomicBool::new(false));
+        let b_observed_a_finished_before_its_own_advance = Arc::new(AtomicBool::new(false));
+        let start_barrier = Arc::new(Barrier::new(2));
+
+        let layer_a = layer.clone();
+        let a_emit_finished_writer = Arc::clone(&a_emit_finished);
+        let barrier_a = Arc::clone(&start_barrier);
+        let handle_a = thread::spawn(move || {
+            barrier_a.wait();
+            let _ = layer_a.advance_and_emit(
+                |_session_id| b"event-a".to_vec(),
+                |_session_id, _chain_head, _enabled| {
+                    // Simulate a slow Event Log write, still holding the lock.
+                    thread::sleep(Duration::from_millis(150));
+                    a_emit_finished_writer.store(true, Ordering::SeqCst);
+                },
+            );
+        });
+
+        let layer_b = layer.clone();
+        let a_emit_finished_reader = Arc::clone(&a_emit_finished);
+        let observed = Arc::clone(&b_observed_a_finished_before_its_own_advance);
+        let barrier_b = Arc::clone(&start_barrier);
+        let handle_b = thread::spawn(move || {
+            barrier_b.wait();
+            // Give thread A a head start into its critical section before B
+            // attempts to acquire the same lock.
+            thread::sleep(Duration::from_millis(30));
+            let _ = layer_b.advance_and_emit(
+                |_session_id| {
+                    // Runs INSIDE the lock, immediately after acquisition. If
+                    // the fix holds, B cannot reach this point until A's
+                    // 150ms emit-sleep (and lock release) has completed.
+                    if a_emit_finished_reader.load(Ordering::SeqCst) {
+                        observed.store(true, Ordering::SeqCst);
+                    }
+                    b"event-b".to_vec()
+                },
+                |_session_id, _chain_head, _enabled| {},
+            );
+        });
+
+        handle_a.join().unwrap();
+        handle_b.join().unwrap();
+
+        assert!(
+            b_observed_a_finished_before_its_own_advance.load(Ordering::SeqCst),
+            "thread B's build_event_bytes (which runs under the lock) must not \
+             be reachable until thread A's full build+advance+emit sequence has \
+             completed — this is the atomicity advance_and_emit must guarantee \
+             (WR-21 point 1)"
+        );
+    }
 }
