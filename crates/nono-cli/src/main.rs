@@ -244,14 +244,33 @@ fn main() {
 /// left unrendered here — WR-04 scopes only the `LayerAttestationFailed`
 /// case, and this function must not print a spurious line for errors whose
 /// remediation this plan does not cover.
+///
+/// Phase 117-29 WR-17: the remediation line used to name the CLI's
+/// check-only setup diagnostic for every failed layer, but that command
+/// (`print_check_only_summary`) performs no mandatory-label inspection on
+/// any path — it is only ever accurate for `MandatoryIntegrityLabel`, and
+/// actively misleading for the other four layers
+/// (`WfpEgressFilters`/`AppContainerProfile`/`JobObjectContainment`/a
+/// forced-unavailable-seam abort). This now branches on `layer`: the
+/// `MandatoryIntegrityLabel` case gets the real `icacls` remedy; every other
+/// layer points at the Windows Application event log, where the per-layer
+/// attestation record actually lives.
 fn render_error_for_operator(e: &nono::NonoError) -> Vec<String> {
     let mut lines = vec![format!("nono: {e}")];
     if let Some(nono::NonoRemediation::ClearStaleLayerResidue { layer }) = e.remediation() {
-        lines.push(format!(
-            "nono:   layer {layer} could not be confirmed. If a prior nono session exited \
-             abnormally, its residual confinement state may remain — run `nono setup \
-             --check-only` to diagnose."
-        ));
+        let remediation = match layer.as_str() {
+            "MandatoryIntegrityLabel" => format!(
+                "nono:   {layer} could not be confirmed. A prior session that exited \
+                 abnormally may have left mandatory-label ACEs on granted paths. Inspect with \
+                 `icacls <granted-path>` and clear with `icacls <granted-path> \
+                 /setintegritylevel Medium`."
+            ),
+            _ => format!(
+                "nono:   {layer} could not be confirmed at startup; see the Windows \
+                 Application event log (source `nono`) for the per-layer attestation record."
+            ),
+        };
+        lines.push(remediation);
     }
     lines
 }
@@ -276,9 +295,11 @@ mod tests {
         SandboxArgs::default()
     }
 
-    /// Phase 117-21 WR-04: `LayerAttestationFailed` must render both the
-    /// existing `Display` line AND a remediation line naming the failed
-    /// layer and the real `nono setup --check-only` subcommand.
+    /// Phase 117-21 WR-04 / Phase 117-29 WR-17: `LayerAttestationFailed` for
+    /// the `MandatoryIntegrityLabel` layer must render both the existing
+    /// `Display` line AND a remediation line naming the failed layer and the
+    /// real `icacls` remedy — the only command that can actually diagnose a
+    /// stale mandatory-label ACE.
     #[test]
     fn render_error_for_operator_adds_remediation_for_layer_attestation_failed() {
         let e = nono::NonoError::LayerAttestationFailed {
@@ -294,7 +315,30 @@ mod tests {
         assert!(lines[0].contains("MandatoryIntegrityLabel"));
         assert!(lines[0].contains("residual ACE present"));
         assert!(lines[1].contains("MandatoryIntegrityLabel"));
-        assert!(lines[1].contains("nono setup --check-only"));
+        assert!(lines[1].contains("icacls"));
+        assert!(lines[1].contains("/setintegritylevel Medium"));
+    }
+
+    /// Phase 117-29 WR-17: any layer other than `MandatoryIntegrityLabel`
+    /// must NOT be told to run the check-only setup diagnostic (that
+    /// command performs no mandatory-label inspection and cannot diagnose
+    /// any of these layers) — it must instead be pointed at the Windows
+    /// Application event log, where the per-layer attestation record lives.
+    #[test]
+    fn render_error_for_operator_names_the_event_log_for_non_label_layers() {
+        let e = nono::NonoError::LayerAttestationFailed {
+            layer: "WfpEgressFilters".to_string(),
+            reason: "filter enumeration returned zero entries".to_string(),
+        };
+        let lines = render_error_for_operator(&e);
+        assert_eq!(
+            lines.len(),
+            2,
+            "expected Display + remediation lines: {lines:?}"
+        );
+        assert!(lines[1].contains("WfpEgressFilters"));
+        assert!(lines[1].contains("Windows Application event log"));
+        assert!(!lines[1].contains("nono setup --check-only"));
     }
 
     /// Any other error variant renders unchanged from today — only the
