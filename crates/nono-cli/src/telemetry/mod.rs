@@ -461,12 +461,34 @@ impl SecurityEventLayer {
     ///
     /// `emit` MUST NOT re-enter any path that takes `self.inner`'s lock
     /// (or any clone's — all clones share the same `Arc<Mutex<...>>`).
-    /// The only caller of this method, `emit_attestation_event`, passes an
-    /// `emit` closure whose body calls `crate::telemetry::windows::
-    /// emit_security_event` — a free function that writes to the Windows
-    /// Application log / ETW and touches no `SecurityEventLayer` state, so
-    /// it cannot re-enter this mutex. No other `SecurityEventLayer` method
-    /// is called from within `emit`.
+    /// `std::sync::Mutex` is NOT reentrant, so a re-entry deadlocks the
+    /// supervisor before the child is ever resumed.
+    ///
+    /// WR-30 (Phase 117-41) corrected this section. It previously claimed
+    /// `emit_security_event` "touches no `SecurityEventLayer` state, so it
+    /// cannot re-enter this mutex." **That premise is false.**
+    /// `emit_security_event` ends in a `tracing::warn!`, which is dispatched
+    /// through the subscriber stack to
+    /// [`SecurityEventLayer::on_event`] — a `SecurityEventLayer` method that
+    /// takes exactly this mutex (`self.inner.lock()`).
+    ///
+    /// What actually prevents the deadlock is a STRING MISMATCH:
+    ///
+    /// - `on_event` early-returns unless
+    ///   `event.metadata().target().starts_with("nono_security::")` — note
+    ///   the trailing double colon.
+    /// - `emit_security_event`'s `tracing::warn!` uses the BARE target
+    ///   `"nono_security"`, which does not satisfy that prefix test.
+    ///
+    /// So `on_event` returns before reaching its `lock()` call, and the
+    /// re-entry never happens. This is incidental, not designed: aligning
+    /// the emit target with this module's own documented `nono_security::*`
+    /// convention — the obvious "cleanup" for a future reader, and one the
+    /// `telemetry/windows.rs` module docs actively invite — would make
+    /// `on_event` match, take the lock, and deadlock.
+    ///
+    /// `emit_security_event_target_must_not_match_on_event_prefix` pins the
+    /// real invariant mechanically so that edit fails the build instead.
     ///
     /// # Returns
     ///
@@ -495,8 +517,10 @@ impl SecurityEventLayer {
         let chain_head = chain_head_hex(&inner.chain.head);
         // The MutexGuard (`inner`) stays alive across this call — `emit`
         // runs, including any Event Log write it performs, WHILE the lock
-        // is still held (see "Deadlock analysis" above for why this is
-        // safe: `emit` never re-enters this mutex).
+        // is still held. See "Deadlock analysis" above: safety rests on the
+        // emit target being the BARE `"nono_security"`, which fails
+        // `on_event`'s `"nono_security::"` prefix test — NOT on `emit`
+        // touching no layer state (it does reach `on_event`).
         Ok(emit(&inner.session_id, &chain_head, inner.config.enabled))
     }
 
@@ -1123,6 +1147,90 @@ mod tests {
              be reachable until thread A's full build+advance+emit sequence has \
              completed — this is the atomicity advance_and_emit must guarantee \
              (WR-21 point 1)"
+        );
+    }
+
+    /// WR-30 (Phase 117-41): pin the invariant `advance_and_emit`'s safety
+    /// ACTUALLY rests on.
+    ///
+    /// `advance_and_emit` runs its `emit` closure while holding
+    /// `self.inner`'s lock. That closure reaches
+    /// `telemetry::windows::emit_security_event`, which ends in a
+    /// `tracing::warn!` — dispatched through the subscriber to
+    /// `SecurityEventLayer::on_event`, which takes THAT SAME mutex.
+    /// `std::sync::Mutex` is not reentrant, so the only thing preventing a
+    /// supervisor deadlock is that `on_event` early-returns on
+    /// `!target.starts_with("nono_security::")` while the emit uses the bare
+    /// `"nono_security"`.
+    ///
+    /// That is incidental, and actively fragile: `telemetry/windows.rs`'s own
+    /// module doc and `emit_security_event`'s doc comment both describe the
+    /// target as `"nono_security::*"`, so "aligning" the literal with the
+    /// documented convention looks like a tidy-up and is in fact a deadlock.
+    /// This test makes that edit fail the build.
+    ///
+    /// Source-text based on purpose: the deadlock cannot be exercised at
+    /// runtime without hanging the test process.
+    #[test]
+    fn emit_security_event_target_must_not_match_on_event_prefix() {
+        const WINDOWS_SRC: &str = include_str!("windows.rs");
+
+        // Every `target: "..."` literal in the emitter's source.
+        let mut targets = Vec::new();
+        let mut rest = WINDOWS_SRC;
+        while let Some(pos) = rest.find("target: \"") {
+            let after = &rest[pos + "target: \"".len()..];
+            let Some(end) = after.find('"') else { break };
+            targets.push(&after[..end]);
+            rest = &after[end + 1..];
+        }
+
+        assert!(
+            !targets.is_empty(),
+            "no `target: \"...\"` literal found in telemetry/windows.rs — this test has gone \
+             blind by construction; if the emit moved, move this gate with it"
+        );
+
+        for target in &targets {
+            assert!(
+                !target.starts_with("nono_security::"),
+                "DEADLOCK: telemetry/windows.rs emits on target {target:?}, which satisfies \
+                 SecurityEventLayer::on_event's `nono_security::` prefix test. on_event takes \
+                 the same mutex advance_and_emit holds across its emit closure, and \
+                 std::sync::Mutex is not reentrant — this hangs the supervisor before the \
+                 child is resumed. The target must stay the BARE \"nono_security\" (WR-30)."
+            );
+        }
+
+        assert!(
+            targets.contains(&"nono_security"),
+            "expected the bare \"nono_security\" emit target to still be present; found {targets:?}"
+        );
+    }
+
+    /// WR-30 companion: the prefix literal `on_event` tests against must keep
+    /// its trailing `::`. Dropping it would make the bare `"nono_security"`
+    /// emit target match, producing the same deadlock from the other side —
+    /// the sibling half of the invariant above.
+    #[test]
+    fn on_event_prefix_test_must_keep_its_trailing_colons() {
+        const MOD_SRC: &str = include_str!("mod.rs");
+
+        // Anchor on the FULL statement form, which occurs only in `on_event`'s
+        // production body. A bare `contains("starts_with(\"nono_security::\")")`
+        // also matches this test's own doc comment and assertion message, so it
+        // passes even after `on_event` is broken — caught by perturbation while
+        // writing this test. (Truncating at the first `#[cfg(test)]` does not
+        // work either: the first occurrence is inside a doc comment ~300 lines
+        // above `on_event`.)
+        const PRODUCTION_GUARD: &str =
+            "if !event.metadata().target().starts_with(\"nono_security::\") {";
+
+        assert!(
+            MOD_SRC.contains(PRODUCTION_GUARD),
+            "SecurityEventLayer::on_event must gate on the `nono_security::` prefix INCLUDING \
+             the trailing double colon; without it the bare \"nono_security\" emit target \
+             matches and advance_and_emit deadlocks (WR-30)"
         );
     }
 }

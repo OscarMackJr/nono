@@ -6,7 +6,7 @@
 //!    Writes a compact JSON insertion string (D-02) to the Phase-82-registered
 //!    `nono` Application source at EventIDs 10001-10005.
 //!
-//! 2. **ETW TraceLogging** (D-01.1).  The `tracing::warn!(target: "nono_security::*", …)`
+//! 2. **ETW TraceLogging** (D-01.1).  The `tracing::warn!(target: "nono_security", …)`
 //!    call inside [`emit_security_event`] is automatically picked up by any
 //!    `tracing-etw::LayerBuilder` registered in the `init_tracing()` subscriber
 //!    stack (Plan 02 wires that layer).
@@ -230,7 +230,17 @@ fn write_security_event_log(level: EventLogLevel, event_id: u32, event: &Securit
 /// Emit a security event to the Windows Application Event Log AND the ETW
 /// provider (dual-emit, D-01).
 ///
-/// The ETW emission is implicit: the `tracing::warn!(target: "nono_security::*", …)`
+/// The ETW emission is implicit: the `tracing::warn!(target: "nono_security", …)`
+///
+/// WR-30 (Phase 117-41): that target is the BARE `"nono_security"`, and it
+/// MUST stay bare. `SecurityEventLayer::on_event` early-returns unless the
+/// target starts with `"nono_security::"`, and `advance_and_emit` runs its
+/// emit closure — which reaches this function — while holding the very mutex
+/// `on_event` would take. Prefixing this target to match the `nono_security::*`
+/// convention used by the path_deny/network_deny events deadlocks the
+/// supervisor. Pinned by
+/// `telemetry::tests::emit_security_event_target_must_not_match_on_event_prefix`.
+///
 /// call below is intercepted by the `tracing-etw::LayerBuilder`-based layer that
 /// `init_tracing()` registers in the tracing subscriber stack.  No additional
 /// ETW API calls are needed here.
