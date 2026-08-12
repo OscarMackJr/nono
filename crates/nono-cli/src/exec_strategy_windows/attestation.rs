@@ -488,14 +488,46 @@ fn decide_from_entries(
     for entry in entries {
         let verdict = classify_row(entry, input);
         let status = verdict.status;
-        if status == LayerAttestationStatus::NotApplicable
-            || (status == LayerAttestationStatus::Confirmed && !verdict.partially_established)
-        {
+
+        // WR-29 (Phase 117-40): `tightened` is computed BEFORE any
+        // status-based short-circuit. It used to be read after, so a row that
+        // classified `NotApplicable` hit the `continue` below and the D-26
+        // tighten set was never consulted for it at all.
+        let layer_name = format!("{:?}", entry.id);
+        let tightened = required_names.contains(&layer_name);
+
+        // A genuinely Confirmed, fully-established row satisfies the contract
+        // — including a tightened one. Tightening raises the bar for layers
+        // that fall short; it can never turn a success into a failure, so this
+        // arm deliberately short-circuits regardless of `tightened`.
+        if status == LayerAttestationStatus::Confirmed && !verdict.partially_established {
             continue;
         }
 
-        let layer_name = format!("{:?}", entry.id);
-        let tightened = required_names.contains(&layer_name);
+        if status == LayerAttestationStatus::NotApplicable {
+            // WR-29: this is the fail-open D-37 opened. Before Plan 117-28, an
+            // ancestor walk that stopped at the first non-owned directory
+            // classified `PartiallyApplied` -> `EstablishedNotIndependentlyObservable`
+            // -> reached the tighten check -> aborted when tightened. D-37
+            // widened the `NotApplicable` arm, and `NotApplicable` short-circuited
+            // here before `tightened` was ever read — so an operator (or an
+            // `HKLM\...\RequiredLayers` fleet policy, once RF-13's enforcement
+            // wiring lands) who explicitly REQUIRED the layer got a silent
+            // Proceed. The SPEC's RF-16 paragraph was false for this case.
+            //
+            // Latent today only because `apply_startup_attestation_gate`
+            // hardcodes empty override/machine lists; it goes live the moment
+            // that wiring lands. CLAUDE.md's fail-secure rule is
+            // non-negotiable, so this is treated as fail-open regardless of
+            // the finding's Warning severity.
+            if tightened {
+                return AttestationDecision::Abort {
+                    layer: entry.id,
+                    status,
+                };
+            }
+            continue;
+        }
 
         match &entry.outcome {
             layer_registry::ContractOutcome::Abort => {
@@ -1019,6 +1051,95 @@ mod tests {
                 layer: LayerId::MandatoryIntegrityLabel,
                 status: LayerAttestationStatus::EstablishedNotIndependentlyObservable,
             }
+        );
+    }
+
+    /// WR-29 (Phase 117-40): a D-26-tightened row that classifies
+    /// `NotApplicable` must ABORT.
+    ///
+    /// Before this fix `decide_from_entries` short-circuited on
+    /// `NotApplicable` with a bare `continue` BEFORE it ever consulted
+    /// `required_names`, so an operator (or an `HKLM\...\RequiredLayers` fleet
+    /// policy) that explicitly REQUIRED the layer got a silent `Proceed`.
+    /// D-37 widened the `NotApplicable` arm, which is what made this
+    /// reachable: the same walk previously classified `PartiallyApplied` and
+    /// did reach the tighten check.
+    #[test]
+    fn tightened_not_applicable_row_aborts() {
+        const ENTRIES: [LayerRegistryEntry; 1] = [LayerRegistryEntry {
+            id: LayerId::MandatoryIntegrityLabel,
+            name: "synthetic-not-applicable",
+            call_sites: &[],
+            expectancy: &NULL_ARM_EXPECTANCY,
+            outcome: ContractOutcome::FailOpen {
+                justification: "test fixture",
+            },
+            probe: ProbeKind::ConfiguredOnly,
+        }];
+        let input = null_arm_input(layer_registry::AppliedLayers {
+            mandatory_integrity_label: layer_registry::LayerApplication::NotApplicable,
+            ..Default::default()
+        });
+
+        let mut required = HashSet::new();
+        required.insert(format!("{:?}", LayerId::MandatoryIntegrityLabel));
+        assert_eq!(
+            decide_from_entries(&ENTRIES, &input, &required),
+            AttestationDecision::Abort {
+                layer: LayerId::MandatoryIntegrityLabel,
+                status: LayerAttestationStatus::NotApplicable,
+            },
+            "WR-29: a tightened requirement on a NotApplicable row must abort — the tighten set \
+             must be consulted before the NotApplicable short-circuit"
+        );
+
+        // Discriminating sibling: the SAME row, untightened, is completely
+        // unaffected. Without this, the assertion above is satisfiable by
+        // simply aborting on every NotApplicable row, which would break every
+        // launch whose policy does not exercise a given layer.
+        let untightened = HashSet::new();
+        assert_eq!(
+            decide_from_entries(&ENTRIES, &input, &untightened),
+            AttestationDecision::Proceed,
+            "an UNtightened NotApplicable row must still Proceed, with no downgrade"
+        );
+    }
+
+    /// WR-29 companion: tightening must never turn a genuine success into a
+    /// failure. A tightened row that is fully `Applied` proceeds.
+    ///
+    /// This pins the arm that a naive restructuring breaks: moving the
+    /// `tightened` check ahead of the `Confirmed && !partially_established`
+    /// short-circuit makes a tightened, fully-confirmed row fall into the
+    /// per-outcome `match`, where `ContractOutcome::Abort`'s `if tightened`
+    /// branch would abort it.
+    #[test]
+    fn tightened_fully_applied_row_still_proceeds() {
+        const ENTRIES: [LayerRegistryEntry; 1] = [LayerRegistryEntry {
+            id: LayerId::WfpEgressFilters,
+            name: "synthetic-abort-outcome",
+            call_sites: &[],
+            expectancy: &NULL_ARM_EXPECTANCY,
+            outcome: ContractOutcome::Abort,
+            // Only this probe kind yields a genuine `Confirmed` status;
+            // `ConfiguredOnly` yields `EstablishedNotIndependentlyObservable`,
+            // which a tightened requirement is DESIGNED to abort (the operator
+            // asked for independent observability that does not exist).
+            probe: ProbeKind::ConfirmedByEnforcingComponentReport,
+        }];
+        let mut input = null_arm_input(layer_registry::AppliedLayers {
+            wfp_egress_filters: Some(true),
+            ..Default::default()
+        });
+        input.wfp_preconfirmed = true;
+
+        let mut required = HashSet::new();
+        required.insert(format!("{:?}", LayerId::WfpEgressFilters));
+        assert_eq!(
+            decide_from_entries(&ENTRIES, &input, &required),
+            AttestationDecision::Proceed,
+            "a tightened row that IS fully established must proceed — tightening raises the bar \
+             for layers that fall short, it cannot make success into failure"
         );
     }
 
