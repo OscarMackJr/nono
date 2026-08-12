@@ -488,6 +488,28 @@ fn looks_like_a_spec_citation(span: &str) -> bool {
                     .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
         });
 
+    // Phase 117 Plan 36 (CR-04): reject the illustrative placeholder token
+    // STRUCTURALLY, independent of the document's quoting convention. No real
+    // source file in this workspace is ever named literally `file.rs`, so a
+    // span whose file part's last path segment is `file` is always an example
+    // of the citation FORMAT, never a citation.
+    //
+    // Before this check, the only thing excluding the illustrative examples was
+    // the extra pair of literal double quotes the document wraps them in (which
+    // fails the character class above). Nothing enforced that convention, so
+    // Plan 117-34 — a later wave in the SAME round that built this gate — wrote
+    // an UNQUOTED one, and the gate then tried to resolve `file.rs::Symbol` as a
+    // real definition and failed the build (CR-04). Case-insensitive, so a
+    // future writer capitalizing the placeholder cannot reopen it either.
+    let last_segment = file_part.rsplit('/').next().unwrap_or(file_part);
+    if last_segment
+        .strip_suffix(".rs")
+        .unwrap_or(last_segment)
+        .eq_ignore_ascii_case("file")
+    {
+        return false;
+    }
+
     let symbol_segments: Vec<&str> = symbol_part.split("::").collect();
     let symbol_ok = !symbol_part.is_empty()
         && symbol_segments.len() <= 2
@@ -829,5 +851,103 @@ fn content_defines_symbol_accepts_a_qualified_type_method_citation() {
         content_defines_symbol(src, "RealType::real_method"),
         "a real `impl RealType {{ pub(crate) fn real_method() {{}} }}` must satisfy the \
          qualified citation `RealType::real_method`"
+    );
+}
+
+/// Phase 117 Plan 36 (CR-04 regression): the illustrative `file.rs::Symbol`
+/// placeholder — the example of the citation FORMAT this document uses to
+/// describe its own convention — must never be treated as a real citation,
+/// whether or not the writer remembered the extra pair of literal double
+/// quotes.
+///
+/// CR-04: Plan 117-32 built `every_spec_symbol_citation_resolves_to_a_real_definition`
+/// and relied on the quoting convention alone to exclude the illustrative
+/// examples. Plan 117-34 — a LATER WAVE IN THE SAME ROUND — then wrote an
+/// unquoted one into the WR-19 ledger row, and the gate failed the build
+/// trying to resolve `file.rs` as a real source file. The exclusion is now a
+/// property of the matcher, not a convention a future writer must remember.
+#[test]
+fn illustrative_format_example_is_not_treated_as_a_citation() {
+    assert!(
+        !looks_like_a_spec_citation("file.rs::Symbol"),
+        "the bare unquoted placeholder `file.rs::Symbol` is an example of the citation \
+         FORMAT, not a citation — this exact span failing to be excluded is CR-04"
+    );
+    assert!(
+        !looks_like_a_spec_citation("\"file.rs::Symbol\""),
+        "the quoted-convention form must remain excluded too — Plan 36 strengthens the \
+         existing rule, it does not replace it"
+    );
+    assert!(
+        !looks_like_a_spec_citation("File.rs::Symbol"),
+        "placeholder rejection is case-insensitive: a writer capitalizing the placeholder \
+         must not reopen CR-04"
+    );
+    assert!(
+        looks_like_a_spec_citation("launch.rs::is_dev_build_layout"),
+        "a REAL citation naming a real file must still qualify — the new exclusion must \
+         reject only the literal placeholder token `file`, never a real file name"
+    );
+    assert!(
+        looks_like_a_spec_citation(
+            "crates/nono-cli/src/exec_strategy_windows/launch.rs::is_dev_build_layout"
+        ),
+        "a real path-qualified citation must still qualify — the placeholder check reads \
+         only the LAST `/`-separated segment, so intermediate path segments are irrelevant"
+    );
+}
+
+/// Phase 117 Plan 36 (WR-32): `layer_registry.rs`'s OWN prose describing the
+/// citation convention must use the current `file.rs::Symbol` form, not the
+/// pre-WR-08 `"file:line"` form.
+///
+/// This is deliberately NARROW rather than a file-wide ban on `\w+\.rs:\d+`:
+/// `layer_registry.rs` legitimately cites other files' analogs in ordinary
+/// descriptive prose elsewhere in its own module docs (e.g. `network.rs:1500`,
+/// `crates/nono/src/undo/types.rs:333`), and a blanket rule would fail on
+/// those. WR-32's finding is specifically about the two doc comments that
+/// DEFINE the convention — those are what these two tests pin.
+#[test]
+fn call_sites_field_doc_describes_the_symbol_form() {
+    let src = read_layer_registry();
+
+    assert!(
+        !src.contains("\"file:line\""),
+        "layer_registry.rs still describes its call_sites citations as `\"file:line\"` — \
+         that convention was replaced by the `file.rs::Symbol` form in WR-08/NR3-08, and \
+         every real call_sites entry in this file has used the symbol form since (WR-32)"
+    );
+
+    let field_pos = src.find("pub call_sites:").unwrap_or_else(|| {
+        panic!("layer_registry.rs no longer declares a `pub call_sites:` field")
+    });
+    let doc_window = &src[field_pos.saturating_sub(400)..field_pos];
+    assert!(
+        doc_window.contains("file.rs::Symbol"),
+        "the doc comment immediately preceding `pub call_sites:` must describe the current \
+         `file.rs::Symbol` citation form (WR-32) — window was:\n{doc_window}"
+    );
+}
+
+/// Phase 117 Plan 36 (WR-32): the `token_arm` prose must cite a SYMBOL, not a
+/// raw line range. There were TWO such citations, not one — `ArmExpectancy`'s
+/// doc and `token_arm_names`' module doc both carried `launch.rs:1237-1278`.
+/// The second was not named in this plan's `<interfaces>` and was found only
+/// because the acceptance criterion demanded a zero count file-wide, which is
+/// why this test asserts absence across the whole file rather than at one site.
+#[test]
+fn token_arm_doc_cites_a_symbol_not_a_raw_line_range() {
+    let src = read_layer_registry();
+
+    assert!(
+        !src.contains("launch.rs:1237"),
+        "layer_registry.rs still carries the stale raw line-range citation \
+         `launch.rs:1237-1278` for the WindowsTokenArm variants; the real declaration is \
+         `launch.rs::select_windows_token_arm` (WR-32)"
+    );
+    assert!(
+        src.contains("launch.rs::select_windows_token_arm"),
+        "the token_arm prose must cite `launch.rs::select_windows_token_arm` by symbol so \
+         it survives line drift (WR-32)"
     );
 }

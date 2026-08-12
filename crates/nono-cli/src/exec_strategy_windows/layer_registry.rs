@@ -282,7 +282,8 @@ pub(crate) enum EntryPath {
 /// One cell of the D-08 expectancy matrix: is `LayerId` X expected to be
 /// active for the (entry_path, token_arm) combination this value names.
 ///
-/// `token_arm` names a `WindowsTokenArm` variant (`launch.rs:1237-1278`)
+/// `token_arm` names a `WindowsTokenArm` variant
+/// (`launch.rs::select_windows_token_arm`)
 /// as a `&'static str` rather than importing that enum directly — a
 /// deliberate decoupling choice so `layer_registry.rs` does not create a
 /// circular concern with `launch.rs` (which will, in a later plan, import
@@ -533,7 +534,8 @@ impl AppliedLayers {
 pub(crate) struct LayerRegistryEntry {
     pub id: LayerId,
     pub name: &'static str,
-    /// `"file:line"` citations of the enforcing call site(s). Layers
+    /// `file.rs::Symbol` citations of the enforcing call site(s),
+    /// content-verified against the cited file's real definitions. Layers
     /// present on both the `DirectCli`/`Daemon` entry paths (RESEARCH Open
     /// Question 3, resolved) cite BOTH sites in this one flat list rather
     /// than a structural (entry_path, call_site) pair type.
@@ -544,7 +546,7 @@ pub(crate) struct LayerRegistryEntry {
 }
 
 /// `token_arm` string constants naming `WindowsTokenArm` variants
-/// (`launch.rs:1237-1278`) by name, per `ArmExpectancy`'s decoupling
+/// (`launch.rs::select_windows_token_arm`) by name, per `ArmExpectancy`'s decoupling
 /// choice above. Kept as named constants (rather than inline literals in
 /// every `ArmExpectancy`) so a rename of `WindowsTokenArm` surfaces as a
 /// single-place update.
