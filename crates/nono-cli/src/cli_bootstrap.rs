@@ -45,8 +45,19 @@ static TRACING_LOG_TARGET_PATH: std::sync::Mutex<Option<PathBuf>> = std::sync::M
 /// resumed, so `log_target_is_private()` can check whether the log file the
 /// operator thinks is private actually sits inside a directory the child can
 /// itself read.
+///
+/// `None` means (fail-secure) no granted-path check has run yet for this
+/// launch — deliberately DISTINCT from `Some(vec![])`, which means the check
+/// ran and this launch grants the child nothing. Phase 117-42 (WR-23): this
+/// was a bare `Mutex<Vec<PathBuf>>` initialised to `Vec::new()`, so those two
+/// states were indistinguishable and the "no granted-path check has run" case
+/// documented on [`log_target_is_private`] could not be implemented. The
+/// final expression there is `!granted_paths.iter().any(..)`, which on an
+/// empty vec is `!false` = `true` ("private") — so the D-28 gate OPENED for
+/// any path reaching it before [`set_granted_read_paths`] ran. Mirrors
+/// [`TRACING_LOG_TARGET_PATH`]'s shape one declaration up.
 #[cfg(target_os = "windows")]
-static GRANTED_READ_PATHS: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+static GRANTED_READ_PATHS: std::sync::Mutex<Option<Vec<PathBuf>>> = std::sync::Mutex::new(None);
 
 /// Test-only override (Phase 117-27 WR-16): when `Some(v)`,
 /// `log_target_is_private()` returns `v` immediately, preserving the
@@ -68,6 +79,24 @@ static LOG_TARGET_IS_PRIVATE_TEST_OVERRIDE: std::sync::Mutex<Option<bool>> =
 /// Fail-secure on every unknown/error case (WR-16's own stated rule):
 /// no `--log-file` arm selected, no granted-path check has run, or the
 /// stored log path fails to canonicalize all return `false` ("not private").
+///
+/// # Fail-secure cases and the test that pins each (Phase 117-42, WR-23)
+///
+/// WR-16 wrote the rule above as prose and nothing checked it against the
+/// code, which is how WR-23 shipped: the "no granted-path check has run"
+/// clause was documented for two rounds while the data model could not
+/// express it. Every early return below now maps to a named test, so a future
+/// edit that adds a fail-secure branch without one is visible in review.
+///
+/// | Documented case | Branch | Test |
+/// |---|---|---|
+/// | file-log arm never selected | `!TRACING_LOG_TARGET_IS_PRIVATE` | `no_log_path_recorded_is_not_private` |
+/// | arm selected, no path recorded | `stored_path == None` | `log_arm_selected_but_no_path_recorded_is_not_private` |
+/// | stored path fails to canonicalize | `canonicalize(..).is_err()` | `uncanonicalizable_log_path_is_not_private` |
+/// | no granted-path check has run | `granted_paths == None` | `no_granted_paths_recorded_is_not_private` |
+/// | check ran, found nothing | `Some(vec![])` → not a gap | `granted_path_check_ran_and_found_nothing_is_still_private` |
+/// | log path inside a granted path | final `any(..)` | `log_path_inside_a_granted_directory_is_not_private` |
+/// | log path outside every granted path | final `any(..)` | `log_path_outside_every_granted_directory_is_private` |
 #[cfg(target_os = "windows")]
 pub(crate) fn log_target_is_private() -> bool {
     #[cfg(test)]
@@ -103,11 +132,40 @@ pub(crate) fn log_target_is_private() -> bool {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
+    let Some(granted_paths) = granted_paths else {
+        // WR-23: no granted-path check has run for this launch. The doc
+        // comment above has always claimed this returns `false`; before Phase
+        // 117-42 the state was not representable, so an unpopulated check
+        // reported "private" and opened the D-28 gate. Note this is NOT the
+        // same as `Some(vec![])` — a check that RAN and found this launch
+        // grants nothing must still be able to report a log target private.
+        return false;
+    };
 
     !granted_paths.iter().any(|granted| {
         // A not-yet-existing grant target must still be checked — never
-        // skipped — so fall back to the raw (uncanonicalized) path on
-        // canonicalization failure rather than dropping the comparison.
+        // skipped — so fall back to the stored path on canonicalization
+        // failure rather than dropping the comparison.
+        //
+        // WR-24 (Phase 117-42) questioned whether this fallback can ever
+        // match, on the grounds that `canonical_log_path` is verbatim
+        // (`\\?\C:\...`, `Prefix(VerbatimDisk)`) while a raw path would be
+        // `Prefix(Disk)`, and `Path::starts_with` is component-wise. The first
+        // half is correct and is now pinned by
+        // `verbatim_and_non_verbatim_prefixes_do_not_compare_equal`.
+        //
+        // The conclusion does not follow for production inputs, though: every
+        // value reaching `granted` is a `FsCapability::resolved`, which is
+        // ALWAYS produced by `path.canonicalize()` (`capability.rs:110`,
+        // `:144`, `:361`, `:457`) and is therefore already verbatim — including
+        // the not-yet-existing-file case, which joins a canonicalized parent
+        // with a file name (`capability.rs:392-405`). The only site that ever
+        // assigns a non-canonical `resolved` is `remap_procfs_self_references`
+        // (`capability.rs:1455`), which rewrites Linux `/proc/self` paths and
+        // cannot reach this Windows-only function. So the fallback compares
+        // verbatim against verbatim and DOES preserve the comparison, exactly
+        // as the first paragraph claims. Pinned by
+        // `fallback_branch_still_matches_for_a_verbatim_nonexistent_grant`.
         let canonical_granted = std::fs::canonicalize(granted).unwrap_or_else(|_| granted.clone());
         // CLAUDE.md path security: component-wise `Path::starts_with`, never
         // a string `starts_with` on the rendered path.
@@ -123,7 +181,7 @@ pub(crate) fn log_target_is_private() -> bool {
 pub(crate) fn set_granted_read_paths(paths: Vec<PathBuf>) {
     *GRANTED_READ_PATHS
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = paths;
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(paths);
 }
 
 /// Test-only seam (Phase 117-21 Task 2, rewritten Phase 117-27 WR-16) to
@@ -176,9 +234,13 @@ pub(crate) fn clear_log_target_is_private_test_state() {
     *TRACING_LOG_TARGET_PATH
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    // WR-23: restore the NOT-YET-POPULATED state (`None`), not
+    // `Some(Vec::new())` — the clear helper's job is to return every static to
+    // its pre-launch default, and getting this backwards would silently make
+    // every other test in this module exercise the wrong branch.
     *GRANTED_READ_PATHS
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Vec::new();
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     *LOG_TARGET_IS_PRIVATE_TEST_OVERRIDE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
@@ -733,6 +795,234 @@ mod tests {
                 !result,
                 "when the file-log arm was never selected, log_target_is_private() \
                  must fail-secure to false — got {result}"
+            );
+        }
+
+        /// (d) WR-23 (Phase 117-42): the file-log arm WAS selected and a valid
+        /// log path IS recorded, but no granted-path check has run for this
+        /// launch. Fail-secure to `false`.
+        ///
+        /// This is the case `log_target_is_private`'s doc comment has always
+        /// claimed ("no granted-path check has run ... returns false") and the
+        /// code could not implement: `GRANTED_READ_PATHS` was a
+        /// `Mutex<Vec<PathBuf>>` with nothing distinguishing "never populated"
+        /// from "populated empty", and `!granted_paths.iter().any(..)` on an
+        /// empty vec is `true` — so the D-28 gate OPENED.
+        #[test]
+        fn no_granted_paths_recorded_is_not_private() {
+            let _test_lock = lock_log_target_is_private_test();
+            clear_log_target_is_private_test_state();
+
+            let temp_dir = tempfile::tempdir().expect("tempdir");
+            let log_path = temp_dir.path().join("nono.log");
+            std::fs::write(&log_path, []).expect("create log file");
+
+            TRACING_LOG_TARGET_IS_PRIVATE.store(true, std::sync::atomic::Ordering::Relaxed);
+            set_log_target_path_for_test(Some(log_path.clone()));
+            // Deliberately NO set_granted_read_paths_for_test call.
+
+            let result = log_target_is_private();
+
+            clear_log_target_is_private_test_state();
+
+            assert!(
+                !result,
+                "WR-23: with no granted-path check recorded, log_target_is_private() must \
+                 fail-secure to false — got {result}, log_path={log_path:?}"
+            );
+        }
+
+        /// (e) WR-23's discriminating sibling: a check that RAN and found this
+        /// launch grants the child nothing is NOT the same state, and must
+        /// still be able to report a log target private.
+        ///
+        /// Without this test, (d) is satisfiable by hardcoding `false`, or by
+        /// collapsing both states back into one. The PAIR is what proves the
+        /// two remain distinguishable.
+        #[test]
+        fn granted_path_check_ran_and_found_nothing_is_still_private() {
+            let _test_lock = lock_log_target_is_private_test();
+            clear_log_target_is_private_test_state();
+
+            let temp_dir = tempfile::tempdir().expect("tempdir");
+            let log_path = temp_dir.path().join("nono.log");
+            std::fs::write(&log_path, []).expect("create log file");
+
+            TRACING_LOG_TARGET_IS_PRIVATE.store(true, std::sync::atomic::Ordering::Relaxed);
+            set_log_target_path_for_test(Some(log_path.clone()));
+            // The check RAN; this launch grants the child nothing.
+            set_granted_read_paths_for_test(vec![]);
+
+            let result = log_target_is_private();
+
+            clear_log_target_is_private_test_state();
+
+            assert!(
+                result,
+                "a granted-path check that ran and found nothing must still report a log \
+                 target outside every (vacuously zero) granted path as private — got \
+                 {result}, log_path={log_path:?}"
+            );
+        }
+
+        /// Task 3 gap (Phase 117-42): the doc comment's "no `--log-file` arm
+        /// selected" clause covers TWO distinct branches, and only one had a
+        /// test. This is the second: the arm WAS selected
+        /// (`TRACING_LOG_TARGET_IS_PRIVATE == true`) but no path was ever
+        /// recorded — an internal inconsistency that must fail secure.
+        #[test]
+        fn log_arm_selected_but_no_path_recorded_is_not_private() {
+            let _test_lock = lock_log_target_is_private_test();
+            clear_log_target_is_private_test_state();
+
+            TRACING_LOG_TARGET_IS_PRIVATE.store(true, std::sync::atomic::Ordering::Relaxed);
+            set_log_target_path_for_test(None);
+            set_granted_read_paths_for_test(vec![]);
+
+            let result = log_target_is_private();
+
+            clear_log_target_is_private_test_state();
+
+            assert!(
+                !result,
+                "the file-log arm reporting selected with no recorded path is an internal \
+                 inconsistency and must fail-secure to false — got {result}"
+            );
+        }
+
+        /// Task 3 gap (Phase 117-42): the doc comment's third documented
+        /// fail-secure case — "the stored log path fails to canonicalize" —
+        /// had no test before this plan.
+        #[test]
+        fn uncanonicalizable_log_path_is_not_private() {
+            let _test_lock = lock_log_target_is_private_test();
+            clear_log_target_is_private_test_state();
+
+            let temp_dir = tempfile::tempdir().expect("tempdir");
+            // Recorded but never created, so `canonicalize` fails.
+            let missing = temp_dir.path().join("never-created.log");
+            assert!(
+                std::fs::canonicalize(&missing).is_err(),
+                "precondition: the recorded log path must not canonicalize"
+            );
+
+            TRACING_LOG_TARGET_IS_PRIVATE.store(true, std::sync::atomic::Ordering::Relaxed);
+            set_log_target_path_for_test(Some(missing.clone()));
+            set_granted_read_paths_for_test(vec![]);
+
+            let result = log_target_is_private();
+
+            clear_log_target_is_private_test_state();
+
+            assert!(
+                !result,
+                "a stored log path that cannot be canonicalized must fail-secure to false — \
+                 got {result}, path={missing:?}"
+            );
+        }
+
+        /// WR-24 discovery (Phase 117-42): establish BY EXECUTION whether a
+        /// verbatim canonical path (`\\?\C:\...`, `Prefix(VerbatimDisk)`) and
+        /// the same path spelled non-verbatim (`Prefix(Disk)`) compare equal
+        /// under the component-wise `Path::starts_with`.
+        ///
+        /// The review asserted the `:131` fallback "can never match" because
+        /// of exactly this mismatch. This test converts that claim into a
+        /// recorded fact rather than a premise — see this plan's SUMMARY for
+        /// the production-reachability half of the analysis.
+        #[test]
+        fn verbatim_and_non_verbatim_prefixes_do_not_compare_equal() {
+            let temp_dir = tempfile::tempdir().expect("tempdir");
+            let child = temp_dir.path().join("child.txt");
+            std::fs::write(&child, []).expect("create child");
+
+            let verbatim_child = std::fs::canonicalize(&child).expect("canonicalize child");
+            let non_verbatim_parent = temp_dir.path().to_path_buf();
+
+            // `tempfile` hands back a non-verbatim path; canonicalize does not.
+            // If this precondition ever stops holding the assertion below is
+            // meaningless, so check it explicitly rather than assuming.
+            assert!(
+                verbatim_child.to_string_lossy().starts_with(r"\\?\"),
+                "precondition: canonicalize must yield a verbatim path on Windows — got \
+                 {verbatim_child:?}"
+            );
+            assert!(
+                !non_verbatim_parent.to_string_lossy().starts_with(r"\\?\"),
+                "precondition: the tempdir path must be non-verbatim — got \
+                 {non_verbatim_parent:?}"
+            );
+
+            assert!(
+                !verbatim_child.starts_with(&non_verbatim_parent),
+                "OBSERVED: Path::starts_with is component-wise and Prefix(VerbatimDisk) != \
+                 Prefix(Disk), so a verbatim path does NOT start with its own non-verbatim \
+                 parent. verbatim={verbatim_child:?} non_verbatim={non_verbatim_parent:?}"
+            );
+
+            // The same comparison with both sides canonical DOES match — so
+            // the mismatch above is about spelling, not about the paths.
+            let verbatim_parent =
+                std::fs::canonicalize(temp_dir.path()).expect("canonicalize parent");
+            assert!(
+                verbatim_child.starts_with(&verbatim_parent),
+                "control: with both sides canonical the comparison must succeed — \
+                 child={verbatim_child:?} parent={verbatim_parent:?}"
+            );
+        }
+
+        /// WR-24 (Phase 117-42): the `:131` fallback branch, which no test
+        /// covered before this plan.
+        ///
+        /// The production input to that branch is a `FsCapability::resolved`
+        /// value, which is ALWAYS produced by `path.canonicalize()` (see
+        /// `crates/nono/src/capability.rs:110,144,361,457`) and is therefore
+        /// verbatim even when the target does not exist — the
+        /// not-yet-existing-file case joins a canonicalized parent with a file
+        /// name (`capability.rs:392-405`). So the fallback compares
+        /// verbatim-against-verbatim and DOES work.
+        ///
+        /// This pins that, so the comment on the fallback is verified rather
+        /// than merely asserted.
+        #[test]
+        fn fallback_branch_still_matches_for_a_verbatim_nonexistent_grant() {
+            let _test_lock = lock_log_target_is_private_test();
+            clear_log_target_is_private_test_state();
+
+            let temp_dir = tempfile::tempdir().expect("tempdir");
+            let granted_dir = temp_dir.path().join("granted");
+            std::fs::create_dir_all(&granted_dir).expect("create granted dir");
+            let log_path = granted_dir.join("nono.log");
+            std::fs::write(&log_path, []).expect("create log file");
+
+            // A VERBATIM but non-existent grant target under the same tree —
+            // exactly the shape capability.rs:392-405 produces. It cannot be
+            // canonicalized (it does not exist), so it takes the fallback.
+            let canonical_granted =
+                std::fs::canonicalize(&granted_dir).expect("canonicalize granted dir");
+            let nonexistent_verbatim_grant = canonical_granted.join("not-created-yet");
+            assert!(
+                std::fs::canonicalize(&nonexistent_verbatim_grant).is_err(),
+                "precondition: the grant target must not exist, so the fallback is taken"
+            );
+
+            TRACING_LOG_TARGET_IS_PRIVATE.store(true, std::sync::atomic::Ordering::Relaxed);
+            set_log_target_path_for_test(Some(log_path.clone()));
+            // Both the covering canonical dir AND the non-existent verbatim
+            // child are granted; the log file sits under the former.
+            set_granted_read_paths_for_test(vec![
+                nonexistent_verbatim_grant.clone(),
+                canonical_granted.clone(),
+            ]);
+
+            let result = log_target_is_private();
+
+            clear_log_target_is_private_test_state();
+
+            assert!(
+                !result,
+                "the granted-path comparison must still see the covering grant — got \
+                 {result}, log_path={log_path:?} granted={canonical_granted:?}"
             );
         }
     }
