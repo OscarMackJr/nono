@@ -2099,16 +2099,37 @@ pub fn low_integrity_label_ace(path: &Path) -> Option<(u32, u32, u8)> {
     None
 }
 
-/// Reads back the mandatory-label ACE on `path`, returning `Some((rid, mask))`
-/// if a label is present. Returns `None` if the path has no SACL, no
-/// mandatory-label ACE, or the FFI fails.
+/// Reads back the **effective** mandatory-label ACE on `path`, returning
+/// `Some((rid, mask))` if one is present. Returns `None` if the path has no
+/// SACL, no mandatory-label ACE, the ACE is structurally inert, or the FFI
+/// fails.
 ///
 /// Thin wrapper over [`low_integrity_label_ace`] that drops the `AceFlags`
 /// byte for callers that only need `(rid, mask)`. Companion to
 /// `try_set_mandatory_label` for verification in tests.
+///
+/// # `INHERIT_ONLY_ACE` rejection (Phase 117-43, WR-25)
+///
+/// Applies the same CR-01 filter as [`low_integrity_label_rid`] — see that
+/// function for why an inherit-only mandatory-label ACE is not a label on the
+/// object it sits on. This wrapper previously discarded `flags` entirely, so
+/// an inert ACE was indistinguishable from an effective one at the **public
+/// API boundary**, where external consumers (`bindings/c`, `nono-py`,
+/// `nono-ts`) inherit the behaviour and never see `AceFlags` to filter it
+/// themselves.
+///
+/// WR-18's ledger row claimed the workspace had "exactly two" label readers
+/// and both were hardened. The independent re-enumeration for WR-25 found one
+/// SACL walk and THREE production consumers, of which this was the unhardened
+/// third.
+///
+/// Callers needing the raw ACE, inert or not, should use
+/// [`low_integrity_label_ace`] directly.
 #[must_use]
 pub fn low_integrity_label_and_mask(path: &Path) -> Option<(u32, u32)> {
-    low_integrity_label_ace(path).map(|(rid, mask, _flags)| (rid, mask))
+    low_integrity_label_ace(path)
+        .filter(|(_, _, flags)| (u32::from(*flags) & INHERIT_ONLY_ACE) == 0)
+        .map(|(rid, mask, _flags)| (rid, mask))
 }
 
 #[must_use]
@@ -3263,12 +3284,264 @@ mod tests {
             flags, 0,
             "try_set_mandatory_label's SDDL has an empty ACE-flags field; got 0x{flags:X}"
         );
-        // The 2-tuple wrapper must agree with the 3-tuple reader (thin-wrapper contract).
+        // The 2-tuple wrapper must agree with the 3-tuple reader for an
+        // EFFECTIVE ACE. Phase 117-43 (WR-25) narrowed the wrapper: it now
+        // also rejects INHERIT_ONLY_ACE, so it is no longer an unconditional
+        // thin wrapper — see
+        // `inherit_only_ace_is_rejected_by_low_integrity_label_and_mask`.
+        // This fixture plants via `try_set_mandatory_label`, whose SDDL has an
+        // empty ACE-flags field, so the filter is a no-op here.
         assert_eq!(
             low_integrity_label_and_mask(&file),
             Some((rid, read_mask)),
-            "low_integrity_label_and_mask must be a thin wrapper over low_integrity_label_ace"
+            "low_integrity_label_and_mask must agree with low_integrity_label_ace for an \
+             effective (non-inherit-only) ACE"
         );
+    }
+
+    /// WR-25 (Phase 117-43): the public wrapper must reject a structurally
+    /// inert `INHERIT_ONLY_ACE` mandatory label, matching
+    /// `low_integrity_label_rid`'s CR-01 hardening.
+    ///
+    /// This is the public API boundary: `bindings/c`, `nono-py` and `nono-ts`
+    /// consume this function and never see `AceFlags`, so they cannot apply
+    /// the filter themselves. WR-18's ledger row claimed the workspace had
+    /// exactly two label readers and both were hardened; the re-enumeration
+    /// for WR-25 found one SACL walk and three production consumers, of which
+    /// this was the unhardened third.
+    #[test]
+    fn inherit_only_ace_is_rejected_by_low_integrity_label_and_mask() {
+        let dir = tempdir().expect("tempdir");
+        let file = dir.path().join("inherit-only.txt");
+        std::fs::write(&file, "x").expect("write file");
+        let mask = SYSTEM_MANDATORY_LABEL_NO_WRITE_UP | SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP;
+
+        // "OICIIO" = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE.
+        plant_mandatory_label_with_flags(&file, mask, "OICIIO");
+
+        // Non-vacuity: the SACL walk DOES see the ACE, and it IS inherit-only.
+        // Without this, the assertion below could pass because nothing was
+        // planted at all.
+        let (rid, read_mask, flags) =
+            low_integrity_label_ace(&file).expect("the planted inherit-only ACE must be readable");
+        assert_eq!(rid, SECURITY_MANDATORY_LOW_RID as u32);
+        assert_eq!(read_mask, mask);
+        assert_ne!(
+            u32::from(flags) & INHERIT_ONLY_ACE,
+            0,
+            "test precondition: the planted ACE must carry INHERIT_ONLY_ACE; got 0x{flags:X}"
+        );
+
+        assert_eq!(
+            low_integrity_label_and_mask(&file),
+            None,
+            "WR-25: an inherit-only mandatory-label ACE is inert on the object it sits on and \
+             must not be reported as an effective label by the public wrapper"
+        );
+    }
+
+    /// WR-34 (Phase 117-43): the two `plant_mandatory_label_with_flags`
+    /// helpers must keep planting the SAME ACE shape.
+    ///
+    /// The helper is duplicated across two crates because there is no shared
+    /// test-support crate — `crates/nono/src/sandbox/windows.rs`'s copy carries
+    /// a doc comment saying it was ported verbatim from `nono-cli`'s. CR-01 and
+    /// WR-18's hardening is only meaningful if both crates' tests plant the
+    /// identical ACE, and until this gate nothing failed when they drifted.
+    ///
+    /// # Why this gates the SDDL, not whole-body equality
+    ///
+    /// The plan's default route was a normalised whole-body comparison. The
+    /// bodies have ALREADY diverged — 53 vs 61 normalised lines, differing from
+    /// the first line — because the `nono-cli` copy declares its `use`
+    /// statements inside the function while this one has some at module scope.
+    /// A body-equality gate is therefore not implementable without first
+    /// manufacturing equality, and would then be brittle against exactly that
+    /// kind of harmless placement difference.
+    ///
+    /// What CR-01/WR-18 actually depend on is the ACE SHAPE, which is the SDDL
+    /// string. Both construct it identically today; this pins that. A change to
+    /// either crate's ACE shape without the matching change fails the build.
+    #[test]
+    fn plant_mandatory_label_helpers_plant_the_same_ace_shape() {
+        const THIS_SRC: &str = include_str!("windows.rs");
+        const CLI_GUARD_SRC: &str =
+            include_str!("../../../nono-cli/src/exec_strategy_windows/labels_guard.rs");
+
+        fn sddl_line(src: &str, label: &str) -> String {
+            // Anchor on a line that DECLARES the fn, not any occurrence of its
+            // name: `include_str!` pulls in this test, whose own scanning code
+            // mentions the name in a string literal EARLIER in the file than
+            // the real declaration (line ~3373 vs ~3544). A plain
+            // `src.find("fn plant_...")` matches this test instead.
+            let decl_line = src
+                .lines()
+                .position(|l| {
+                    l.trim_start()
+                        .starts_with("fn plant_mandatory_label_with_flags")
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{label}: no `fn plant_mandatory_label_with_flags` DECLARATION found — \
+                            if it moved or was consolidated into a shared test-support helper, \
+                            update or retire this gate rather than deleting it"
+                    )
+                });
+            let fn_pos: usize = src.lines().take(decl_line).map(|l| l.len() + 1).sum();
+            // Scope to the helper's OWN brace-matched body. A fixed line window
+            // is not safe: `include_str!` pulls in THIS test too, and an 80-line
+            // window swept past the helper into this function's own scanning
+            // code, which mentions the same literals — the gate then extracted
+            // its own source line and failed on the non-vacuity check.
+            let open = src[fn_pos..]
+                .find('{')
+                .unwrap_or_else(|| panic!("{label}: helper declaration has no body"));
+            let body_start = fn_pos + open;
+            let mut depth = 0usize;
+            let mut body_end = body_start;
+            for (off, ch) in src[body_start..].char_indices() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            body_end = body_start + off + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            assert!(
+                body_end > body_start,
+                "{label}: unbalanced braces in plant_mandatory_label_with_flags"
+            );
+
+            src[body_start..body_end]
+                .lines()
+                .find(|l| l.contains("format!(") && l.contains("S:(ML;"))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{label}: no SDDL construction found in plant_mandatory_label_with_flags"
+                    )
+                })
+                .trim()
+                .to_string()
+        }
+
+        let nono_sddl = sddl_line(THIS_SRC, "crates/nono");
+        let cli_sddl = sddl_line(CLI_GUARD_SRC, "crates/nono-cli");
+
+        // Non-vacuity: this must be a real mandatory-label SDDL, not any
+        // format! that happens to be named `sddl`.
+        assert!(
+            nono_sddl.contains("S:(ML;"),
+            "the extracted SDDL must be a mandatory-label ACE: {nono_sddl}"
+        );
+
+        assert_eq!(
+            nono_sddl, cli_sddl,
+            "WR-34: the two plant_mandatory_label_with_flags helpers must plant the IDENTICAL \
+             ACE shape. CR-01/WR-18's hardening is verified in both crates against fixtures \
+             these helpers create, so a divergence silently makes one crate's regression tests \
+             assert against an ACE the other never plants.\n  crates/nono:     {nono_sddl}\n  \
+             crates/nono-cli: {cli_sddl}"
+        );
+    }
+
+    /// WR-25 class gate (Phase 117-43): every consumer of the single SACL walk
+    /// must filter `INHERIT_ONLY_ACE`.
+    ///
+    /// WR-18 closed this class by grep and its ledger row recorded the wrong
+    /// count; WR-25 was the consumer that enumeration missed. This makes the
+    /// enumeration mechanical, so the NEXT consumer added without the filter
+    /// fails the build instead of depending on a reviewer repeating the grep.
+    ///
+    /// Scoped to PRODUCTION call sites. Test code legitimately reads the raw
+    /// 3-tuple — `low_integrity_label_ace_reports_zero_flags_for_a_freshly_applied_label`
+    /// and `inherit_only_ace_is_rejected_by_low_integrity_label_and_mask` both
+    /// assert on `flags` directly, which is the whole point of the widened
+    /// reader — so the scan stops at the test module. Using a line-exact
+    /// `mod tests {` marker rather than `#[cfg(test)]`, which also occurs
+    /// inside doc comments.
+    #[test]
+    fn every_low_integrity_label_ace_consumer_filters_inherit_only() {
+        const THIS_SRC: &str = include_str!("windows.rs");
+        const CLI_GUARD_SRC: &str =
+            include_str!("../../../nono-cli/src/exec_strategy_windows/labels_guard.rs");
+
+        /// Production half of a source file: everything before the line that
+        /// is exactly `mod tests {`.
+        fn production_half(src: &str) -> Vec<(usize, &str)> {
+            src.lines()
+                .enumerate()
+                .take_while(|(_, line)| line.trim() != "mod tests {")
+                .collect()
+        }
+
+        for (label, src) in [
+            ("crates/nono/src/sandbox/windows.rs", THIS_SRC),
+            (
+                "crates/nono-cli/src/exec_strategy_windows/labels_guard.rs",
+                CLI_GUARD_SRC,
+            ),
+        ] {
+            let production = production_half(src);
+            assert!(
+                production.len() < src.lines().count(),
+                "{label}: no line exactly `mod tests {{` found, so the whole file was treated as \
+                 production — the marker changed and this gate's scoping is wrong"
+            );
+
+            let mut checked = 0usize;
+            for (idx, line) in production {
+                let trimmed = line.trim_start();
+                // Skip the declaration and any doc/comment mention.
+                if trimmed.starts_with("//") || trimmed.starts_with("pub fn ") {
+                    continue;
+                }
+                if !line.contains("low_integrity_label_ace(") {
+                    continue;
+                }
+                checked += 1;
+
+                // Scope the check to the ENCLOSING FUNCTION, not a fixed line
+                // window. The two production consumers have very different
+                // shapes: `low_integrity_label_rid` chains `.filter(..)` on the
+                // very next line, while `labels_guard.rs`'s residue predicate
+                // stores into a local and applies the check ~20 lines later,
+                // after a long explanatory comment. A fixed window either
+                // false-positives on the second or is too loose to mean
+                // anything.
+                let is_fn_decl = |l: &str| {
+                    let t = l.trim_start();
+                    t.starts_with("fn ")
+                        || t.starts_with("pub fn ")
+                        || t.starts_with("pub(") && t.contains(" fn ")
+                };
+                let all: Vec<&str> = src.lines().collect();
+                let fn_start = all[..=idx].iter().rposition(|l| is_fn_decl(l)).unwrap_or(0);
+                let fn_end = all[idx + 1..]
+                    .iter()
+                    .position(|l| is_fn_decl(l))
+                    .map_or(all.len(), |off| idx + 1 + off);
+                let window: String = all[fn_start..fn_end].join("\n");
+                assert!(
+                    window.contains("INHERIT_ONLY_ACE"),
+                    "WR-25: {label}:{} calls low_integrity_label_ace( without an \
+                     INHERIT_ONLY_ACE filter within the same expression. Every consumer of the \
+                     single SACL walk must reject a structurally-inert ACE — see \
+                     low_integrity_label_rid for the canonical form.\nline: {}",
+                    idx + 1,
+                    line.trim()
+                );
+            }
+            assert!(
+                checked > 0,
+                "found no low_integrity_label_ace( call sites in {label} — this gate has gone \
+                 blind by construction; if the reader moved, move this gate with it"
+            );
+        }
     }
 
     /// Test-only helper (WR-18 regression coverage, Phase 117-29, ported
