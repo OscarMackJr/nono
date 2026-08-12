@@ -125,6 +125,16 @@ pub(crate) struct LabelCoverage {
 }
 
 impl LabelCoverage {
+    /// Paths whose labelling this layer's contract actually requires.
+    ///
+    /// Mirrors [`super::dacl_guard::DaclGrantCoverage::writable_rules`]: sum the
+    /// categories the contract holds the layer responsible for, and omit the
+    /// contract-exempt one (`skipped_not_owned` — nono cannot label a path it
+    /// does not own, and does not claim to). Phase 117-39, WR-28.
+    fn non_exempt_paths(self) -> usize {
+        self.applied.saturating_add(self.skipped_pre_existing_label)
+    }
+
     /// Map the observed coverage onto the fail-direction contract's
     /// per-layer application vocabulary.
     ///
@@ -141,9 +151,33 @@ impl LabelCoverage {
     ///   part; the operator-visible claim is downgraded (D-27), never
     ///   silently accepted as the full baseline.
     /// - Every non-exempt path labelled → `Applied`.
+    ///
+    /// # Phase 117-39 (WR-28): the exempt category is excluded from the
+    /// denominator
+    ///
+    /// This used to gate `NotApplicable` on `policy_paths == 0`, which counts
+    /// `skipped_not_owned` — the CONTRACT-EXEMPT category, per its own field
+    /// doc. A policy composed entirely of paths nono cannot label therefore
+    /// classified `NotApplied` (a coverage GAP) rather than `NotApplicable`
+    /// (nothing to do), fabricating a gap out of an exemption on an
+    /// `expected: true` row.
+    ///
+    /// The sibling [`super::dacl_guard::DaclGrantCoverage::application`] already
+    /// applies the opposite — correct — rule via its `writable_rules()` helper,
+    /// which sums `applied + skipped_writable_not_owned` and deliberately omits
+    /// its own exempt category (`skipped_read_only`). Two sibling
+    /// implementations were applying contradictory rules to the same physical
+    /// shape, which is exactly what D-37/WR-12 was convened to fix one file
+    /// over.
+    ///
+    /// What is mirrored here is the RULE ("exclude your own contract-exempt
+    /// category from the denominator"), not the variant names — the two guards
+    /// classify "not owned" differently on purpose (for DACLs it is a gap,
+    /// because confined writes there will be denied; for labels it is exempt,
+    /// because nono simply cannot label a path it does not own).
     pub(crate) fn application(self) -> layer_registry::LayerApplication {
         use layer_registry::LayerApplication;
-        if self.policy_paths == 0 {
+        if self.non_exempt_paths() == 0 {
             return LayerApplication::NotApplicable;
         }
         if self.applied == 0 {
@@ -1102,13 +1136,27 @@ mod tests {
 
         // CR-14: an all-skip guard wrote ZERO mandatory-label ACEs. It must
         // NOT report the layer as established.
+        //
+        // WR-28 (Phase 117-39) corrected WHICH non-established variant this
+        // is. `SkipNotOwned` is the CONTRACT-EXEMPT category — nono cannot
+        // label a path it does not own and never claims to — so a policy
+        // composed entirely of exempt paths has nothing for this layer to
+        // establish: `NotApplicable`, not `NotApplied`. Reporting `NotApplied`
+        // fabricated a coverage GAP out of an exemption, and on an
+        // `expected: true` row that aborts the launch over a path the contract
+        // never held the layer responsible for.
+        //
+        // This mirrors `dacl_guard::DaclGrantCoverage::application`'s existing
+        // rule, which already omits its own exempt category
+        // (`skipped_read_only`) from `writable_rules()`.
         let coverage = guard.coverage();
         assert_eq!(coverage.applied, 0);
         assert_eq!(coverage.skipped_not_owned, 1);
         assert_eq!(
             coverage.application(),
-            layer_registry::LayerApplication::NotApplied,
-            "a guard that wrote zero ACEs must report NotApplied, not Applied: {coverage:?}"
+            layer_registry::LayerApplication::NotApplicable,
+            "WR-28: an all-SkipNotOwned policy is contract-exempt, so it must classify \
+             NotApplicable — never NotApplied, which fabricates a coverage gap: {coverage:?}"
         );
 
         drop(guard);
@@ -1262,6 +1310,19 @@ mod tests {
         );
         assert_eq!(coverage.skipped_not_owned, 1, "{coverage:?}");
 
+        // WR-20 (Phase 117-39): pin the DOWNSTREAM decision, not only the
+        // entry variant. The reclassification this test exists to prove is
+        // only meaningful if it changes what the attestation gate actually
+        // reads — `application()` — and until now this test stopped at the
+        // `AppliedLabel` variant, so a regression in the arithmetic that
+        // consumes it would not have failed here.
+        assert_eq!(
+            coverage.application(),
+            layer_registry::LayerApplication::NotApplicable,
+            "WR-28: an all-SkipNotOwned policy must classify NotApplicable, not NotApplied — \
+             the exempt category must never fabricate a coverage gap: {coverage:?}"
+        );
+
         drop(guard);
 
         // Cleanup only — not part of the assertion under test. Reassign
@@ -1383,6 +1444,138 @@ mod tests {
             pre_drop_ledger, post_drop_ledger,
             "AppliedLabelsGuard::drop must not mutate the audit ledger\n\
              pre:\n{pre_drop_ledger}\npost:\n{post_drop_ledger}"
+        );
+    }
+
+    /// WR-28 (Phase 117-39): the MIXED case, which is what distinguishes a
+    /// corrected denominator from a renamed variant.
+    ///
+    /// One owned path (labelled) + two contract-exempt non-owned paths must
+    /// classify `Applied` — the exempt paths must not drag the layer down to
+    /// `PartiallyApplied` any more than they may fabricate `NotApplied`.
+    ///
+    /// The all-exempt case alone would pass under several wrong rules (e.g.
+    /// "treat `skipped_not_owned` as applied"); only the mixed case pins that
+    /// the exempt category is EXCLUDED rather than counted-as-success.
+    #[test]
+    fn labels_guard_mixed_owned_and_non_owned_reports_applied_not_partially_applied() {
+        use std::path::PathBuf;
+
+        let dir = tempdir().expect("tempdir");
+        let owned = dir.path().join("owned.txt");
+        std::fs::write(&owned, "x").expect("write");
+
+        // C:\Windows is owned by TrustedInstaller — not labellable by an
+        // unprivileged user, so the guard records SkipNotOwned. Same fixture
+        // the sibling ownership test uses.
+        let system_root = std::env::var_os("SystemRoot")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+
+        let policy = WindowsFilesystemPolicy {
+            rules: vec![
+                file_rule(owned.clone()),
+                WindowsFilesystemRule {
+                    path: system_root.clone(),
+                    access: AccessMode::Read,
+                    is_file: false,
+                    source: CapabilitySource::User,
+                },
+            ],
+            unsupported: vec![],
+        };
+
+        let guard = AppliedLabelsGuard::snapshot_and_apply(&policy).expect("apply");
+        let coverage = guard.coverage();
+
+        assert_eq!(
+            coverage.applied, 1,
+            "the owned path must be labelled: {coverage:?}"
+        );
+        assert_eq!(
+            coverage.skipped_not_owned, 1,
+            "the non-owned path must be recorded exempt: {coverage:?}"
+        );
+        assert_eq!(
+            coverage.skipped_pre_existing_label, 0,
+            "no genuine coverage gap in this fixture: {coverage:?}"
+        );
+        assert_eq!(
+            coverage.application(),
+            layer_registry::LayerApplication::Applied,
+            "WR-28: every NON-EXEMPT path was labelled, so the layer is Applied — the exempt \
+             non-owned path must neither downgrade it to PartiallyApplied nor fabricate a \
+             gap: {coverage:?}"
+        );
+    }
+
+    /// CR-06 (Phase 117-39): prove the remediation `render_error_for_operator`
+    /// prints actually CLEARS the condition it names.
+    ///
+    /// The previous guidance (`icacls <path> /setintegritylevel Medium`) WRITES
+    /// a Medium mandatory-label ACE, which D-02 then reads back as
+    /// `SkipPreExistingLabel` — so an operator who followed the only printed
+    /// instruction aborted identically. This test walks the full loop:
+    /// broken state → apply the prescribed remedy → confirm the launch now
+    /// succeeds.
+    ///
+    /// `clear_mandatory_label` is the exact mechanism the printed PowerShell
+    /// snippet drives (`SetNamedSecurityInfoW` with
+    /// `LABEL_SECURITY_INFORMATION` and an empty SACL); the snippet was
+    /// separately verified on this host to return `ERROR_SUCCESS` and remove
+    /// the label from a non-elevated shell.
+    #[test]
+    fn cr_06_remediation_command_actually_clears_the_condition() {
+        use layer_registry::LayerApplication;
+
+        let dir = tempdir().expect("tempdir");
+        let file = dir.path().join("foreign-labeled.txt");
+        std::fs::write(&file, "x").expect("write");
+
+        // A third-party label whose mask genuinely differs from what this
+        // policy's Read rule would apply — otherwise it would be adopted as
+        // self-healing residue (NR3-01) and never reach the broken state.
+        let foreign_mask = label_mask_for_access_mode(AccessMode::Write);
+        assert_ne!(
+            foreign_mask,
+            label_mask_for_access_mode(AccessMode::Read),
+            "test precondition: the foreign mask must differ from the rule's own wanted mask"
+        );
+        plant_mandatory_label_with_flags(&file, foreign_mask, "");
+
+        let policy = single_file_read_rule(file.clone());
+
+        // 1. The CR-06 broken state: the launch cannot establish the layer.
+        {
+            let guard = AppliedLabelsGuard::snapshot_and_apply(&policy).expect("apply");
+            let coverage = guard.coverage();
+            assert_eq!(
+                coverage.skipped_pre_existing_label, 1,
+                "precondition: the foreign label must register as a coverage gap: {coverage:?}"
+            );
+            assert_eq!(
+                coverage.application(),
+                LayerApplication::NotApplied,
+                "precondition: this is the state the operator is aborted out of: {coverage:?}"
+            );
+        }
+
+        // 2. The operator follows the remediation: REMOVE the label.
+        clear_mandatory_label(&file).expect("the prescribed remedy must succeed");
+        assert!(
+            low_integrity_label_and_mask(&file).is_none(),
+            "the prescribed remedy must actually remove the mandatory-label ACE — this is the \
+             assertion `icacls /setintegritylevel Medium` fails, since it writes a Medium label"
+        );
+
+        // 3. Re-run the SAME policy: the launch now succeeds.
+        let guard = AppliedLabelsGuard::snapshot_and_apply(&policy).expect("re-apply");
+        let coverage = guard.coverage();
+        assert_eq!(
+            coverage.application(),
+            LayerApplication::Applied,
+            "CR-06: after following the printed remediation the layer must establish — a remedy \
+             that leaves the launch aborting is not a remedy: {coverage:?}"
         );
     }
 }

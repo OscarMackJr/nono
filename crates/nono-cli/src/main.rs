@@ -255,19 +255,56 @@ fn main() {
 /// `MandatoryIntegrityLabel` case gets the real `icacls` remedy; every other
 /// layer points at the Windows Application event log, where the per-layer
 /// attestation record actually lives.
+///
+/// Phase 117-39 CR-06/WR-27: both arms were wrong.
+///
+/// - The `MandatoryIntegrityLabel` arm prescribed `icacls <path>
+///   /setintegritylevel Medium`, which WRITES a Medium mandatory-label ACE.
+///   `AppliedLabelsGuard`'s D-02 rule treats any prior label that is not an
+///   exact Low+wanted-mask match as `SkipPreExistingLabel`, so an operator who
+///   followed the only printed guidance aborted identically — verified on this
+///   host: after `/setintegritylevel Medium`, `icacls` still reports
+///   `Mandatory Label\Medium Mandatory Level:(NW)`. It also blamed "a prior
+///   session that exited abnormally", a cause Plan 117-13 (NR3-01) had already
+///   made NON-aborting (that residue is now recognized as self-healing).
+///   The arm now names the causes that CAN still abort and prescribes REMOVAL
+///   via `SetNamedSecurityInfoW(.., LABEL_SECURITY_INFORMATION, .., <empty
+///   ACL>)` — the same mechanism `labels_guard::clear_mandatory_label` uses
+///   internally, verified on this host to return `ERROR_SUCCESS` and clear the
+///   label from a NON-elevated shell. (`Get-Acl -Audit`/`Set-Acl` was
+///   evaluated and rejected: it requests the whole SACL and fails without
+///   `SeSecurityPrivilege`, which a non-elevated operator does not hold.)
+///
+/// - The `_` arm pointed at the Windows Application event log, which receives
+///   NOTHING on the abort path. Enumerated every `LayerAttestationFailed`
+///   construction site in the workspace: all are plain `return Err(..)`, and
+///   `emit_attestation_event` has exactly one production caller
+///   (`launch.rs::apply_startup_attestation_gate`), inside the
+///   `ProceedDowngraded` arm. The arm now points at the failing guard's own
+///   `tracing` diagnostic, which does exist on this path.
 fn render_error_for_operator(e: &nono::NonoError) -> Vec<String> {
     let mut lines = vec![format!("nono: {e}")];
     if let Some(nono::NonoRemediation::ClearStaleLayerResidue { layer }) = e.remediation() {
         let remediation = match layer.as_str() {
             "MandatoryIntegrityLabel" => format!(
-                "nono:   {layer} could not be confirmed. A prior session that exited \
-                 abnormally may have left mandatory-label ACEs on granted paths. Inspect with \
-                 `icacls <granted-path>` and clear with `icacls <granted-path> \
-                 /setintegritylevel Medium`."
+                "nono:   {layer} could not be confirmed: a granted path already carries a \
+                 mandatory-label ACE that is not the one this launch would apply (a \
+                 third-party label, a different access mask, or a structurally-inert \
+                 INHERIT_ONLY_ACE). nono never mutates a pre-existing label. Inspect with \
+                 `icacls <granted-path>` (look for the `Mandatory Label\\...` line). The label \
+                 must be REMOVED — `icacls /setintegritylevel Medium` writes a Medium label \
+                 and re-triggers this same abort. In PowerShell: `Add-Type -Namespace N -Name \
+                 L -MemberDefinition '[DllImport(\"advapi32.dll\",CharSet=CharSet.Unicode)] \
+                 public static extern uint SetNamedSecurityInfoW(string p,int t,uint i,IntPtr \
+                 o,IntPtr g,IntPtr d,byte[] s);'; [N.L]::SetNamedSecurityInfoW('<granted-path>',\
+                 1,0x10,[IntPtr]::Zero,[IntPtr]::Zero,[IntPtr]::Zero,[byte[]]@(2,0,8,0,0,0,0,0))`"
             ),
             _ => format!(
-                "nono:   {layer} could not be confirmed at startup; see the Windows \
-                 Application event log (source `nono`) for the per-layer attestation record."
+                "nono:   {layer} could not be confirmed at startup. Re-run with `-vv \
+                 --log-file <path>` and search that file for `{layer}` — the failing guard \
+                 emits its own diagnostic there. (No Windows Application event log record is \
+                 written on this path: the audit event is emitted only when nono PROCEEDS with \
+                 a downgraded claim, never when it aborts.)"
             ),
         };
         lines.push(remediation);
@@ -295,11 +332,16 @@ mod tests {
         SandboxArgs::default()
     }
 
-    /// Phase 117-21 WR-04 / Phase 117-29 WR-17: `LayerAttestationFailed` for
-    /// the `MandatoryIntegrityLabel` layer must render both the existing
-    /// `Display` line AND a remediation line naming the failed layer and the
-    /// real `icacls` remedy — the only command that can actually diagnose a
-    /// stale mandatory-label ACE.
+    /// Phase 117-21 WR-04 / Phase 117-29 WR-17 / Phase 117-39 CR-06:
+    /// `LayerAttestationFailed` for the `MandatoryIntegrityLabel` layer must
+    /// render the `Display` line AND a remediation line that names a command
+    /// which ACTUALLY CLEARS the condition.
+    ///
+    /// CR-06: the previous text prescribed `icacls <path> /setintegritylevel
+    /// Medium`, which writes a Medium label — verified on this host to leave
+    /// `Mandatory Label\Medium Mandatory Level:(NW)` in place, which D-02
+    /// reads back as `SkipPreExistingLabel`, aborting identically. `icacls` is
+    /// still named for INSPECTION; the removal step must not be it.
     #[test]
     fn render_error_for_operator_adds_remediation_for_layer_attestation_failed() {
         let e = nono::NonoError::LayerAttestationFailed {
@@ -315,17 +357,42 @@ mod tests {
         assert!(lines[0].contains("MandatoryIntegrityLabel"));
         assert!(lines[0].contains("residual ACE present"));
         assert!(lines[1].contains("MandatoryIntegrityLabel"));
+        // icacls remains the INSPECTION command.
         assert!(lines[1].contains("icacls"));
-        assert!(lines[1].contains("/setintegritylevel Medium"));
+        // CR-06: but never as the remedy — it cannot remove a label.
+        assert!(
+            !lines[1].contains("/setintegritylevel Medium`."),
+            "the Medium-label command must never be prescribed as the remedy (CR-06): {}",
+            lines[1]
+        );
+        // The remedy must name the removal mechanism.
+        assert!(
+            lines[1].contains("SetNamedSecurityInfoW"),
+            "the remediation must name the label-REMOVAL mechanism: {}",
+            lines[1]
+        );
+        // CR-06b: Plan 117-13 (NR3-01) made nono's own abnormal-exit residue
+        // non-aborting, so blaming it is now a false cause.
+        assert!(
+            !lines[1].contains("exited abnormally"),
+            "abnormal-exit residue is self-healing since NR3-01 and must not be blamed: {}",
+            lines[1]
+        );
     }
 
-    /// Phase 117-29 WR-17: any layer other than `MandatoryIntegrityLabel`
-    /// must NOT be told to run the check-only setup diagnostic (that
-    /// command performs no mandatory-label inspection and cannot diagnose
-    /// any of these layers) — it must instead be pointed at the Windows
-    /// Application event log, where the per-layer attestation record lives.
+    /// Phase 117-29 WR-17 / Phase 117-39 WR-27: any layer other than
+    /// `MandatoryIntegrityLabel` must be pointed at a channel that ACTUALLY
+    /// RECEIVES a record on the abort path.
+    ///
+    /// WR-27: the previous text named the Windows Application event log, which
+    /// receives nothing when nono aborts — every `LayerAttestationFailed`
+    /// construction site in the workspace is a plain `return Err(..)`, and
+    /// `emit_attestation_event` has exactly one production caller, inside
+    /// `apply_startup_attestation_gate`'s `ProceedDowngraded` arm. The
+    /// operator is now pointed at the failing guard's own `tracing`
+    /// diagnostic, reachable via `-vv --log-file <path>`.
     #[test]
-    fn render_error_for_operator_names_the_event_log_for_non_label_layers() {
+    fn render_error_for_operator_names_a_reachable_channel_for_non_label_layers() {
         let e = nono::NonoError::LayerAttestationFailed {
             layer: "WfpEgressFilters".to_string(),
             reason: "filter enumeration returned zero entries".to_string(),
@@ -337,8 +404,22 @@ mod tests {
             "expected Display + remediation lines: {lines:?}"
         );
         assert!(lines[1].contains("WfpEgressFilters"));
-        assert!(lines[1].contains("Windows Application event log"));
-        assert!(!lines[1].contains("nono setup --check-only"));
+        assert!(
+            lines[1].contains("--log-file"),
+            "the operator must be pointed at a channel that exists on the abort path: {}",
+            lines[1]
+        );
+        assert!(
+            !lines[1].contains("nono setup --check-only"),
+            "check-only performs no per-layer inspection (WR-17): {}",
+            lines[1]
+        );
+        // WR-27: the event log must not be named as the place to look.
+        assert!(
+            !lines[1].contains("see the Windows Application event log"),
+            "no event-log record exists on the abort path (WR-27): {}",
+            lines[1]
+        );
     }
 
     /// Any other error variant renders unchanged from today — only the
