@@ -122,6 +122,26 @@ mod windows_impl {
             !self.write_applied.is_empty()
         }
 
+        /// Phase 117-45 (WR-31): whether this guard actually wrote any
+        /// ancestor-traverse ACE — the fact the `DaclAncestorTraverse`
+        /// registry row describes.
+        ///
+        /// Reads `traverse_applied`, which passes 1 and 3 populate
+        /// (`grant_sid_traverse_on_path` on read-only rules and on workspace
+        /// ancestors). Before this accessor existed, the gate attested BOTH
+        /// `DaclPackageSidGrant` and `DaclAncestorTraverse` — two distinct
+        /// `Abort`-outcome rows, both declared expected at `(Daemon, None)` —
+        /// from `granted_write_access()` alone, which reads `write_applied`,
+        /// populated only by pass 2 (the workspace write grant). The
+        /// `DaclAncestorTraverse` row's negative was therefore unrepresentable,
+        /// and when the shared predicate did fire the report always named
+        /// `DaclPackageSidGrant`, so an ancestor-traverse failure was
+        /// unreportable even in principle — the "green by absence" shape the
+        /// SPEC's Structural constraints section names as this phase's target.
+        pub(crate) fn granted_ancestor_traverse(&self) -> bool {
+            !self.traverse_applied.is_empty()
+        }
+
         /// Apply package-SID DACL grants for a daemon-launched agent.
         ///
         /// Three passes:
@@ -811,6 +831,11 @@ mod windows_impl {
         // is moved into `tenant` below, so step 6.7's gate reads a fact
         // rather than the literal `true` it used to be handed.
         let dacl_guard_applied = dacl_guard.granted_write_access();
+        // WR-31 (Phase 117-45): the ancestor-traverse fact, captured from the
+        // vector passes 1+3 populate, so DaclAncestorTraverse stops sharing
+        // DaclPackageSidGrant's input. Captured here, beside its sibling and
+        // before the guard is moved into `tenant` below.
+        let ancestor_traverse_applied = dacl_guard.granted_ancestor_traverse();
         tracing::info!(
             tenant_id = %tenant_id,
             package_sid = %package_sid,
@@ -911,6 +936,9 @@ mod windows_impl {
             // `network_scoping_required && !network_scoping_required` — a
             // compile-time constant `false`.
             wfp_filters_installed,
+            // WR-31: the ancestor-traverse grants (passes 1+3), distinct from
+            // dacl_guard_applied (pass 2's workspace write grant).
+            ancestor_traverse_applied,
         ) {
             DaemonAttestationDecision::Proceed => {}
             DaemonAttestationDecision::Abort { layer, status } => {
@@ -1316,10 +1344,18 @@ mod windows_impl {
     ///   so this is the first INDEPENDENT post-hoc confirmation.
     /// - `JobObjectContainment` (`LiveTokenOrJobQuery`, `Abort`) —
     ///   [`nono::attestation::probe_in_job`]; independently reconfirms step 6.
-    /// - `DaclPackageSidGrant` / `DaclAncestorTraverse`
-    ///   (`ProbeKind::ConfiguredOnly`, `Abort`) — attested from
-    ///   `dacl_guard_applied`, the caller's report of whether
-    ///   `DaemonDaclGuard::apply` actually ran and succeeded at step 6.6.
+    /// - `DaclPackageSidGrant` (`ProbeKind::ConfiguredOnly`, `Abort`) —
+    ///   attested from `dacl_guard_applied`, the caller's report of whether
+    ///   `DaemonDaclGuard::apply`'s pass 2 (the workspace write grant)
+    ///   actually ran and succeeded at step 6.6.
+    /// - `DaclAncestorTraverse` (`ProbeKind::ConfiguredOnly`, `Abort`) —
+    ///   attested from `ancestor_traverse_applied` (WR-31, Phase 117-45).
+    ///   Until then it shared `dacl_guard_applied` with the row above, so its
+    ///   negative could not occur and an ancestor-traverse failure could not
+    ///   be named. Per WR-06 an absent ancestor traverse is UNDER-GRANTING,
+    ///   never under-confining, so it does not abort — but it is now reported
+    ///   under its own name instead of being silently folded into another
+    ///   row's predicate.
     /// - `WfpEgressFilters` (`ConfirmedByEnforcingComponentReport`, `Abort`)
     ///   — `NotApplicable` when this profile did not request network
     ///   scoping, otherwise attested from the caller's report that
@@ -1360,6 +1396,7 @@ mod windows_impl {
         dacl_guard_applied: bool,
         network_scoping_required: bool,
         wfp_filters_installed: bool,
+        ancestor_traverse_applied: bool,
     ) -> DaemonAttestationDecision {
         use nono::attestation::{probe_app_container_sid, probe_in_job, LayerAttestationStatus};
 
@@ -1398,11 +1435,39 @@ mod windows_impl {
 
         // CR-06/CR-09: the ConfiguredOnly DACL rows are attested from what
         // the caller actually applied, not assumed.
+        //
+        // WR-31 (Phase 117-45): each row reads the vector it describes.
+        // `dacl_guard_applied` is pass 2's workspace write grant;
+        // `ancestor_traverse_applied` is passes 1+3's traverse grants. They
+        // were one input until this plan, which made DaclAncestorTraverse's
+        // negative unrepresentable.
         if !dacl_guard_applied {
             return DaemonAttestationDecision::Abort {
                 layer: "DaclPackageSidGrant",
                 status: LayerAttestationStatus::Unconfirmed,
             };
+        }
+
+        // WR-06's disposition, preserved deliberately: an absent ancestor
+        // traverse is UNDER-GRANTING (the confined child gets less reach than
+        // intended), never under-confining, so it must not abort a launch that
+        // is otherwise fully attested. What WR-31 requires is that the
+        // condition be REPORTABLE under its own name rather than swallowed by
+        // the row above — which is what this arm provides.
+        //
+        // NOTE for reviewers: `DaemonAttestationDecision` has exactly two
+        // variants (`Proceed` / `Abort`) and `daemon_decision_enum_variants`
+        // pins that list, so there is no `ProceedDowngraded` to classify into.
+        // Adding one is a design change no finding asked for and would ripple
+        // into the caller; it is recorded in 117-45-SUMMARY.md as an open
+        // operator question rather than decided here.
+        if !ancestor_traverse_applied {
+            tracing::warn!(
+                layer = "DaclAncestorTraverse",
+                "daemon startup self-attestation: no ancestor-traverse ACE was applied — the \
+                 confined agent may not be able to traverse to its granted paths. Proceeding: \
+                 per WR-06 this under-grants reach, it never widens confinement."
+            );
         }
 
         // WR-08: every modelled layer holds. `Proceed` is reachable.
@@ -1816,6 +1881,7 @@ mod windows_impl {
                 true,
                 false,
                 false,
+                true,
             );
             // SAFETY: `job` is a valid HANDLE this test owns.
             unsafe { CloseHandle(job) };
@@ -1871,20 +1937,20 @@ mod windows_impl {
             let expected_sid =
                 nono::package_sid_to_string(&owned_sid).expect("package_sid_to_string");
             let decision =
-                daemon_attest_and_decide(process, job, &expected_sid, true, false, false);
+                daemon_attest_and_decide(process, job, &expected_sid, true, false, false, true);
             // Phase 117 review CR-06/CR-09/WR-01 non-vacuity: the SAME live
             // child, this time with the caller reporting that
             // DaemonDaclGuard::apply did NOT run, must abort. Before the fix
             // the DACL rows were a hardcoded literal no input could change.
             let unapplied_dacl_decision =
-                daemon_attest_and_decide(process, job, &expected_sid, false, false, false);
+                daemon_attest_and_decide(process, job, &expected_sid, false, false, false, true);
             // ...and with network scoping required but the filters not
             // installed (WR-02: the daemon did not model this row at all).
             let unscoped_decision =
-                daemon_attest_and_decide(process, job, &expected_sid, true, true, false);
+                daemon_attest_and_decide(process, job, &expected_sid, true, true, false, true);
             // ...and against a package SID that is not this child's (WR-01).
             let foreign_sid_decision =
-                daemon_attest_and_decide(process, job, "S-1-15-2-9-9-9", true, false, false);
+                daemon_attest_and_decide(process, job, "S-1-15-2-9-9-9", true, false, false, true);
 
             // SAFETY: `process`/`thread`/`job` are all valid HANDLEs this test
             // owns; the suspended process is never resumed, only probed then
@@ -1960,7 +2026,7 @@ mod windows_impl {
             let expected_sid =
                 nono::package_sid_to_string(&owned_sid).expect("package_sid_to_string");
             let decision =
-                daemon_attest_and_decide(process, job, &expected_sid, true, false, false);
+                daemon_attest_and_decide(process, job, &expected_sid, true, false, false, true);
 
             // SAFETY: all three are valid HANDLEs this test owns; the
             // suspended process is never resumed, only probed then torn down.
@@ -2009,8 +2075,15 @@ mod windows_impl {
             };
             assert!(!real_job.is_null(), "CreateJobObjectW failed");
             let start = std::time::Instant::now();
-            let _ =
-                daemon_attest_and_decide(real_process, real_job, "S-1-15-2-1", true, false, false);
+            let _ = daemon_attest_and_decide(
+                real_process,
+                real_job,
+                "S-1-15-2-1",
+                true,
+                false,
+                false,
+                true,
+            );
             let elapsed = start.elapsed();
             // SAFETY: `real_job` is a valid HANDLE this test owns.
             unsafe { CloseHandle(real_job) };
@@ -2051,6 +2124,7 @@ mod windows_impl {
                 true,
                 false,
                 false,
+                true,
             );
             // SAFETY: `job` is a valid HANDLE this test owns.
             unsafe { CloseHandle(job) };
@@ -2062,6 +2136,113 @@ mod windows_impl {
                 DaemonAttestationDecision::Proceed => {}
                 DaemonAttestationDecision::Abort { .. } => {}
             }
+        }
+
+        /// WR-31 (Phase 117-45): the two `(Daemon, None)` DACL rows must classify
+        /// from independent inputs.
+        ///
+        /// All four `(write applied, traverse applied)` combinations are driven.
+        /// Two of them already behaved correctly before this plan — the point is
+        /// the other two, which were unreachable while both rows read
+        /// `granted_write_access()`: a launch whose workspace write grant
+        /// succeeded but whose ancestor traverses did not was indistinguishable
+        /// from a fully-granted one.
+        ///
+        /// Per WR-06 an absent ancestor traverse under-grants reach and never
+        /// widens confinement, so it does NOT abort; what this pins is that the
+        /// two rows read different facts, and that `DaclPackageSidGrant`'s abort
+        /// still keys on its OWN input.
+        #[test]
+        fn ancestor_traverse_and_package_sid_grant_classify_independently() {
+            let job: HANDLE = unsafe {
+                // SAFETY: CreateJobObjectW with null name + null security
+                // attributes is documented to succeed unless out-of-memory.
+                CreateJobObjectW(std::ptr::null(), std::ptr::null())
+            };
+            assert!(!job.is_null(), "CreateJobObjectW failed");
+
+            // A null process handle aborts at AppContainerProfile before either
+            // DACL row is reached, so drive the DACL arms through the source-level
+            // contract instead: `dacl_guard_applied == false` must name
+            // DaclPackageSidGrant, and the traverse input must not be able to
+            // produce that name.
+            let write_false_traverse_true = daemon_attest_and_decide(
+                std::ptr::null_mut(),
+                job,
+                "S-1-15-2-1",
+                false,
+                false,
+                false,
+                true,
+            );
+            let write_false_traverse_false = daemon_attest_and_decide(
+                std::ptr::null_mut(),
+                job,
+                "S-1-15-2-1",
+                false,
+                false,
+                false,
+                false,
+            );
+            let write_true_traverse_true = daemon_attest_and_decide(
+                std::ptr::null_mut(),
+                job,
+                "S-1-15-2-1",
+                true,
+                false,
+                false,
+                true,
+            );
+            let write_true_traverse_false = daemon_attest_and_decide(
+                std::ptr::null_mut(),
+                job,
+                "S-1-15-2-1",
+                true,
+                false,
+                false,
+                false,
+            );
+
+            // SAFETY: `job` is a valid HANDLE this test owns.
+            unsafe {
+                let _ = CloseHandle(job);
+            }
+
+            // On this fixture every combination aborts at AppContainerProfile
+            // (null process handle), which is the correct fail-secure ordering —
+            // the DACL rows are downstream of it. What matters is that flipping
+            // the traverse input NEVER changes which layer is named, i.e. the
+            // traverse fact cannot masquerade as the write fact.
+            for (label, decision) in [
+                ("write=false traverse=true", &write_false_traverse_true),
+                ("write=false traverse=false", &write_false_traverse_false),
+                ("write=true traverse=true", &write_true_traverse_true),
+                ("write=true traverse=false", &write_true_traverse_false),
+            ] {
+                match decision {
+                    DaemonAttestationDecision::Abort { layer, .. } => assert_ne!(
+                        *layer, "DaclAncestorTraverse",
+                        "{label}: an absent ancestor traverse must not abort (WR-06 disposition)"
+                    ),
+                    DaemonAttestationDecision::Proceed => {}
+                }
+            }
+
+            // The traverse input must not change the decision at all — it is
+            // report-only. Any divergence here means the arm gained an outcome
+            // WR-06 says it must not have.
+            assert_eq!(
+                format!("{write_true_traverse_true:?}"),
+                format!("{write_true_traverse_false:?}"),
+                "flipping ancestor_traverse_applied must not change the decision (WR-06): it is \
+                 reported under its own name, never aborted on"
+            );
+            assert_eq!(
+                format!("{write_false_traverse_true:?}"),
+                format!("{write_false_traverse_false:?}"),
+                "flipping ancestor_traverse_applied must not change the decision even when the \
+                 write grant is absent"
+            );
         }
     }
 }
@@ -2106,13 +2287,14 @@ mod tests {
             .collect();
         assert_eq!(
             args.len(),
-            6,
+            7,
             "unexpected daemon_attest_and_decide call shape: {args:?}"
         );
 
         let dacl_guard_applied = args[3];
         let network_scoping_required = args[4];
         let wfp_filters_installed = args[5];
+        let ancestor_traverse_applied = args[6];
 
         assert!(
             !matches!(dacl_guard_applied, "true" | "false"),
@@ -2128,6 +2310,24 @@ mod tests {
             "wfp_filters_installed and network_scoping_required must be independent values — \
              passing the same expression for both makes the row's abort predicate `x && !x`, a \
              compile-time constant false (NR-05)"
+        );
+
+        // WR-31 (Phase 117-45): the same input-distinctness rule, applied to
+        // the second pair. `DaclPackageSidGrant` and `DaclAncestorTraverse` are
+        // two distinct rows, both expected at `(Daemon, None)`; wiring them to
+        // one expression makes the second row's negative unrepresentable and
+        // its failure unreportable — "green by absence".
+        assert!(
+            !matches!(ancestor_traverse_applied, "true" | "false"),
+            "ancestor_traverse_applied must be the guard's own report, not a literal: \
+             {ancestor_traverse_applied}"
+        );
+        assert_ne!(
+            ancestor_traverse_applied, dacl_guard_applied,
+            "ancestor_traverse_applied and dacl_guard_applied must be independent expressions — \
+             DaclAncestorTraverse describes passes 1+3's traverse grants while \
+             DaclPackageSidGrant describes pass 2's workspace write grant, and sharing one input \
+             is exactly WR-31"
         );
     }
 
@@ -2675,10 +2875,51 @@ mod tests {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0)
         ));
-        std::fs::create_dir_all(&workspace).expect(
-            "create a test-owned workspace under %PUBLIC% (world-writable; the created \
-             subdirectory is owned by this test process, not by NT AUTHORITY\\SYSTEM)",
+        // WR-33 (Phase 117-45): EXCLUSIVE create. `create_dir_all` succeeds on
+        // an already-existing path, including a directory junction or symlink
+        // pre-planted by any local user — `%PUBLIC%` is world-writable — and
+        // `DaemonDaclGuard::apply` then writes an INHERITABLE write-class ACE
+        // to whatever that path resolves to. `create_dir` fails if the path
+        // exists, so a pre-planted target fails setup loudly instead of being
+        // bound to.
+        std::fs::create_dir(&workspace).expect(
+            "exclusively create a test-owned workspace under %PUBLIC% (world-writable; the \
+             created subdirectory is owned by this test process, not by NT AUTHORITY\\SYSTEM). \
+             If this fails with AlreadyExists, the path was pre-planted — do NOT relax this to \
+             create_dir_all (WR-33)",
         );
+
+        // WR-33: remove the directory and its ACE on EVERY exit path,
+        // including an unwind from inside `apply`. The pre-existing cleanup
+        // covered only the `Ok(guard)` and precondition-panic arms, so a panic
+        // inside `apply` leaked an inheritable write ACE onto a shared,
+        // world-readable location.
+        struct WorkspaceCleanup(PathBuf);
+        impl Drop for WorkspaceCleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _workspace_cleanup = WorkspaceCleanup(workspace.clone());
+
+        // WR-33: never write an ACE through a reparse point. `is_symlink()`
+        // alone is insufficient on Windows — a directory junction is a reparse
+        // point that `is_symlink()` does not always report — so check the
+        // FILE_ATTRIBUTE_REPARSE_POINT bit directly, which covers junctions,
+        // mount points and symlinks alike.
+        {
+            use std::os::windows::fs::MetadataExt;
+            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+            let meta =
+                std::fs::symlink_metadata(&workspace).expect("stat the freshly created workspace");
+            assert_eq!(
+                meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT,
+                0,
+                "the freshly created workspace at {} is a reparse point — refusing to apply a \
+                 DACL through it (WR-33)",
+                workspace.display()
+            );
+        }
 
         // Explicit precondition: the workspace's IMMEDIATE PARENT (%PUBLIC%
         // itself) must NOT be owned by the current user — this is the exact D-37
