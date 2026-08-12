@@ -71,6 +71,11 @@ fn event_id_for(t: &SecurityEventType) -> u32 {
 /// This is the single string passed to `ReportEventW`.  It contains only the
 /// already-scrubbed/hashed fields from [`SecurityEvent`]; raw paths and URLs
 /// are structurally absent from the type (enforced by the schema in event.rs).
+///
+/// Only referenced by the Windows-only Event Log emit path (Phase 117 Plan 37
+/// moved both calls inside `write_security_event_log`, which is itself
+/// `#[cfg(target_os = "windows")]`).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn build_event_payload(event: &SecurityEvent) -> String {
     serde_json::to_string(event).unwrap_or_else(|e| {
         // Serialization failure must not silently drop the event body.
@@ -96,6 +101,33 @@ fn build_event_log_message(level: EventLogLevel, event_id: u32, body: &str) -> S
     )
 }
 
+// ── build_redacted_fallback_message ───────────────────────────────────────────
+
+/// Render the D-03 NULL-handle stderr fallback message for `event`, with
+/// `downgraded_layers` redacted (Phase 117 Plan 37, CR-05).
+///
+/// Extracted as its own function rather than inlined into
+/// [`write_security_event_log`]'s NULL branch for one reason: the branch itself
+/// cannot be driven from a unit test (it requires a host whose `nono`
+/// Application-log source is unregistered), so if the test re-implemented the
+/// redaction it would pass even after the production redaction was removed — a
+/// test that cannot fail. Both the NULL branch and the test call THIS function,
+/// so a perturbation of the redaction fails the test.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn build_redacted_fallback_message(
+    level: EventLogLevel,
+    event_id: u32,
+    event: &SecurityEvent,
+) -> String {
+    // D-28: stderr is shared with the confined child on the non-detached-stdio
+    // path; specific LayerId names must not reach it.
+    let redacted = SecurityEvent {
+        downgraded_layers: None,
+        ..event.clone()
+    };
+    build_event_log_message(level, event_id, &build_event_payload(&redacted))
+}
+
 // ── write_security_event_log ──────────────────────────────────────────────────
 
 /// Write a security event to the Windows Application Event Log.
@@ -106,8 +138,25 @@ fn build_event_log_message(level: EventLogLevel, event_id: u32, body: &str) -> S
 ///
 /// If `RegisterEventSourceW` returns NULL, emit the formatted message to
 /// `stderr` and return.  Never panics; never blocks the confined run.
+///
+/// # D-28 channel asymmetry (Phase 117 Plan 37, CR-05)
+///
+/// This function renders the event to TWO channels with DIFFERENT audiences,
+/// and they do not get the same content:
+///
+/// - `ReportEventW` → the Windows Application Event Log, the legitimate
+///   operator/audit channel (D-27). Gets the FULL event, `downgraded_layers`
+///   included.
+/// - `eprintln!` → the supervisor's stderr, which the confined child SHARES on
+///   the non-detached-stdio path. Gets a `downgraded_layers`-redacted copy,
+///   because specific `LayerId` names on that channel hand the confined process
+///   a map of which confinement layers are inert (D-28).
+///
+/// Taking `&SecurityEvent` rather than a pre-built `body: &str` is what makes
+/// that asymmetry expressible: the caller cannot pass one string that is
+/// simultaneously correct for both channels.
 #[cfg(target_os = "windows")]
-fn write_security_event_log(level: EventLogLevel, event_id: u32, body: &str) {
+fn write_security_event_log(level: EventLogLevel, event_id: u32, event: &SecurityEvent) {
     use windows_sys::Win32::System::EventLog::{
         DeregisterEventSource, RegisterEventSourceW, ReportEventW, EVENTLOG_INFORMATION_TYPE,
         EVENTLOG_WARNING_TYPE,
@@ -126,12 +175,26 @@ fn write_security_event_log(level: EventLogLevel, event_id: u32, body: &str) {
     if handle.is_null() {
         // Source not registered (development environment or broken MSI install).
         // D-03: loud non-fatal — emit to stderr, do NOT silently drop the event.
+        //
+        // Phase 117 Plan 37 (CR-05): this is the D-28 leak site. stderr is the
+        // channel the confined child shares on the non-detached-stdio path, and
+        // this is a raw `eprintln!`, NOT a `tracing` call — so
+        // `log_target_is_private()`, the predicate CR-02/CR-03 built their whole
+        // approach around, structurally cannot gate it. Round 3's enumeration
+        // stopped at `apply_startup_attestation_gate`'s function boundary and
+        // never followed `emit_attestation_event` down four call frames to here.
+        // Redact at the render site: the full detail still reaches the Event Log
+        // below, which is the legitimate audit channel.
         eprintln!(
             "nono: telemetry: RegisterEventSourceW returned NULL (source not registered) — {}",
-            build_event_log_message(level, event_id, body)
+            build_redacted_fallback_message(level, event_id, event)
         );
         return;
     }
+
+    // Past the NULL branch: the real Application Event Log receives the FULL
+    // event, `downgraded_layers` included (D-27's audit channel).
+    let body = build_event_payload(event);
 
     let event_type = match level {
         EventLogLevel::Information => EVENTLOG_INFORMATION_TYPE,
@@ -179,12 +242,15 @@ fn write_security_event_log(level: EventLogLevel, event_id: u32, body: &str) {
 /// If the Application-log write fails (source not registered), the error is
 /// emitted to stderr and the function returns without affecting the confined run.
 pub fn emit_security_event(event: &SecurityEvent) {
-    let payload = build_event_payload(event);
     let event_id = event_id_for(&event.event_type);
 
     // Application Event Log write (D-01.2, cfg-gated).
+    //
+    // Phase 117 Plan 37 (CR-05): the EVENT is passed, not a pre-built payload
+    // string, because the Event Log and the stderr fallback require different
+    // content — see `write_security_event_log`'s D-28 channel-asymmetry note.
     #[cfg(target_os = "windows")]
-    write_security_event_log(EventLogLevel::Warning, event_id, &payload);
+    write_security_event_log(EventLogLevel::Warning, event_id, event);
 
     // ETW TraceLogging emit (D-01.1).
     // The tracing-etw LayerBuilder registered in init_tracing() intercepts this
@@ -207,10 +273,6 @@ pub fn emit_security_event(event: &SecurityEvent) {
         timestamp_unix_ms = event.timestamp_unix_ms,
         "security event"
     );
-
-    // Suppress unused-variable warnings on non-Windows where the cfg-gated
-    // write_security_event_log call above is absent.
-    let _ = payload;
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -263,5 +325,79 @@ mod tests {
         };
         // Must not panic.
         emit_security_event(&event);
+    }
+
+    /// Phase 117 Plan 37 (CR-05): the D-03 NULL-handle stderr fallback must not
+    /// render `downgraded_layers`.
+    ///
+    /// stderr is the channel the confined child SHARES on the
+    /// non-detached-stdio path, so a specific `LayerId` name rendered there
+    /// hands the confined process a map of which confinement layers are inert
+    /// (D-28). The fallback is a raw `eprintln!`, not a `tracing` call, so
+    /// `log_target_is_private()` cannot gate it — redaction at the render site
+    /// is the only available control.
+    ///
+    /// # Scope
+    ///
+    /// This asserts the RENDERED TEXT of the exact function the NULL branch
+    /// calls — [`build_redacted_fallback_message`] — not a re-implementation of
+    /// it. The FFI branch itself cannot be driven deterministically from a unit
+    /// test (it needs a host whose `nono` Application-log source is
+    /// unregistered), but routing both the branch and this test through one
+    /// function means removing the production redaction FAILS this test. A test
+    /// that rebuilt the redacted clone itself would pass either way.
+    ///
+    /// CR-05 shipped because the leak was checked in the structured event
+    /// object while the rendered output went unexamined, so asserting on the
+    /// string is the point.
+    #[test]
+    fn null_handle_fallback_rendering_never_carries_a_downgraded_layer_name() {
+        let event = SecurityEvent {
+            event_type: SecurityEventType::LayerAttestationDowngraded,
+            agent_pid: 4242,
+            path_hash: None,
+            path_category: None,
+            host: None,
+            session_id: "test-session".to_string(),
+            chain_head: "0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
+            timestamp_unix_ms: 0,
+            downgraded_layers: Some("MandatoryIntegrityLabel,AppContainerProfile".to_string()),
+        };
+
+        // THE function the NULL-handle branch calls — not a copy of it.
+        let rendered = build_redacted_fallback_message(
+            EventLogLevel::Warning,
+            event_id_for(&event.event_type),
+            &event,
+        );
+
+        assert!(
+            !rendered.contains("MandatoryIntegrityLabel"),
+            "the stderr fallback rendering must not carry a LayerId name (D-28) — got: {rendered}"
+        );
+        assert!(
+            !rendered.contains("AppContainerProfile"),
+            "the stderr fallback rendering must not carry a LayerId name (D-28) — got: {rendered}"
+        );
+        assert!(
+            !rendered.contains("downgraded_layers"),
+            "`downgraded_layers: None` is `skip_serializing_if`-omitted, so even the FIELD NAME \
+             must be absent from the fallback rendering — got: {rendered}"
+        );
+
+        // Non-vacuity: the unredacted event WOULD leak, so the assertions above
+        // are testing the redaction rather than a payload that never had the
+        // names in it.
+        let unredacted = build_event_log_message(
+            EventLogLevel::Warning,
+            event_id_for(&event.event_type),
+            &build_event_payload(&event),
+        );
+        assert!(
+            unredacted.contains("MandatoryIntegrityLabel"),
+            "non-vacuity check: the UNREDACTED rendering must contain the layer name, otherwise \
+             this test proves nothing about the redaction — got: {unredacted}"
+        );
     }
 }
