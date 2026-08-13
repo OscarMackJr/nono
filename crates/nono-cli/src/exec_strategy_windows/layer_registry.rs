@@ -1496,6 +1496,42 @@ mod tests {
         );
     }
 
+    /// Phase 117 review WR-08: `ProbeKind::ConfirmedByEnforcingComponentReport`
+    /// has exactly ONE user, and adding a second must be a build failure.
+    ///
+    /// `classify_row`'s arm for this probe kind reads
+    /// `AttestationInput::wfp_preconfirmed` — a WFP-specific fact. It used to
+    /// do so for ANY row carrying this probe kind, keyed on nothing but the
+    /// probe kind, so a second row (the kind's own doc invites one: "a report
+    /// *from* the enforcing component itself") would have been confirmed or
+    /// denied by evidence about a different mechanism entirely — the same
+    /// wrong-object defect RF-01 removed from `MandatoryIntegrityLabel`.
+    ///
+    /// `classify_row` now keys the evidence by `LayerId` and fails CLOSED for
+    /// any other row. This test is the loud half: it makes the coupling
+    /// visible at the moment a second row is added, rather than letting that
+    /// row silently classify `Unconfirmed` forever with no explanation.
+    #[test]
+    fn exactly_one_row_is_confirmed_by_enforcing_component_report() {
+        let rows: Vec<LayerId> = all_entries()
+            .iter()
+            .filter(|e| e.probe == ProbeKind::ConfirmedByEnforcingComponentReport)
+            .map(|e| e.id)
+            .collect();
+
+        assert_eq!(
+            rows,
+            vec![LayerId::WfpEgressFilters],
+            "ProbeKind::ConfirmedByEnforcingComponentReport is consumed in \
+             attestation.rs::classify_row by an arm whose evidence \
+             (`AttestationInput::wfp_preconfirmed`) is WFP-SPECIFIC. Rows carrying this probe \
+             kind today: {rows:?}. If you are adding a second one, give it its own evidence \
+             channel on AttestationInput and its own arm in classify_row's `match entry.id` \
+             FIRST — until you do, it classifies Unconfirmed (fail-closed) and will refuse \
+             every launch. Do not widen the WFP arm to cover it (WR-08)."
+        );
+    }
+
     /// Sanity check that the registry actually has broker-expected rows to
     /// exercise the invariant above (a vacuously-true loop over zero
     /// matching rows would be a weaker test than it appears).

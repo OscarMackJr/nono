@@ -443,7 +443,29 @@ fn classify_row(
                 // so "backend selected but enforcement not confirmed" is a
                 // representable production state, not a test-only input.
                 application => {
-                    if input.wfp_preconfirmed {
+                    // WR-08: `wfp_preconfirmed` is a WFP-SPECIFIC fact, and
+                    // this arm used to read it for ANY row carrying this
+                    // probe kind, keyed on nothing but the probe kind. Today
+                    // only `WfpEgressFilters` uses it, so the coupling was
+                    // invisible — but the probe kind's own doc invites a
+                    // second user ("a report *from* the enforcing component
+                    // itself"), and that row would have been confirmed or
+                    // denied by evidence about a different mechanism
+                    // entirely. That is the same wrong-object defect RF-01
+                    // removed from `MandatoryIntegrityLabel`, latent one row
+                    // away.
+                    //
+                    // The evidence is now keyed by `LayerId`. A future row
+                    // with this probe kind and no evidence channel fails
+                    // CLOSED (`Unconfirmed`) rather than inheriting WFP's
+                    // answer — and `exactly_one_row_is_confirmed_by_enforcing_component_report`
+                    // makes adding one a build failure, so the fail-closed
+                    // branch is a backstop, not the intended path.
+                    let component_confirmed = match entry.id {
+                        layer_registry::LayerId::WfpEgressFilters => input.wfp_preconfirmed,
+                        _ => false,
+                    };
+                    if component_confirmed {
                         RowVerdict::from_application(application, LayerAttestationStatus::Confirmed)
                     } else {
                         RowVerdict::plain(LayerAttestationStatus::Unconfirmed)
