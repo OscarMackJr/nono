@@ -72,6 +72,28 @@ pub fn print_banner(silent: bool) {
 /// marker-write failure defaults to printing again next time, never to
 /// silently suppressing more than intended.
 ///
+/// # WR-04: the dedup marker is a hint, not a security boundary
+///
+/// State this honestly, because "unconditional" above is a strong claim.
+/// The marker lives under the user's own sessions directory, so ANY process
+/// running as this user can write it. Since WR-04 the marker's CONTENT is
+/// authoritative (the stored `dedup_key` must match exactly), which closes
+/// the two failure modes that were not adversarial at all — a 64-bit
+/// `DefaultHasher` collision between two different downgraded-layer-sets
+/// silently suppressing the second, and a zero-byte file of the right name
+/// suppressing everything — and makes a stale, empty or unreadable marker
+/// print rather than suppress.
+///
+/// It does NOT make suppression impossible for a same-user process: the key
+/// space is a sorted comma-join drawn from a 13-element enum, so an attacker
+/// can enumerate and pre-plant every valid marker. That is accepted, not
+/// overlooked. Such a process already holds strictly greater capability over
+/// this launch (it can edit nono's config, or shadow `nono` on `PATH`), so
+/// the marker is not the weakest link; and the audit event and the
+/// `tracing::warn!` on the same path are independent channels it does not
+/// control. "Unconditional" above means "not gated on `--silent`, and not
+/// suppressed by any nono code path", not "tamper-proof".
+///
 /// `dedup_key` is an opaque `&str` this function never parses or displays,
 /// only hashes — the caller (which already has the layer identity type in
 /// scope) computes the sorted, comma-joined dedup key string and passes it
@@ -105,9 +127,7 @@ pub fn print_attestation_downgrade_banner(
     let marker_path = session_id.and_then(|id| attestation_downgrade_marker_path(id, dedup_key));
 
     if let Some(path) = &marker_path {
-        if path.exists() {
-            // Already announced this exact downgraded-layer-set this
-            // session — an identical repeat, not a first occurrence.
+        if marker_says_already_announced(path, dedup_key) {
             return;
         }
     }
@@ -164,13 +184,63 @@ pub fn print_attestation_downgrade_banner(
                 return;
             }
         }
-        if let Err(e) = std::fs::write(&path, []) {
-            tracing::debug!(
-                "attestation-downgrade dedup marker write failed \
-                 (non-fatal, banner will re-print next time): {e}"
-            );
+        // WR-04: write the dedup key VERBATIM (the reader compares contents,
+        // not just the hashed filename), and `create_new` so a pre-existing
+        // file is never clobbered — if one is there with different content,
+        // this launch has already announced, and overwriting it would only
+        // hide that fact from the next launch.
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut f) => {
+                use std::io::Write as _;
+                if let Err(e) = f.write_all(dedup_key.as_bytes()) {
+                    tracing::debug!(
+                        "attestation-downgrade dedup marker write failed \
+                         (non-fatal, banner will re-print next time): {e}"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::debug!(
+                    "attestation-downgrade dedup marker create failed \
+                     (non-fatal, banner will re-print next time): {e}"
+                );
+            }
         }
     }
+}
+
+/// Has this exact `dedup_key` already been announced this session?
+///
+/// # WR-04: marker PRESENCE is not authoritative — its CONTENT is
+///
+/// The marker filename is a 64-bit `DefaultHasher` digest of `dedup_key`.
+/// `DefaultHasher::new()` is documented to use fixed keys, so the mapping is
+/// deterministic and offline-computable, and the key space is a sorted
+/// comma-join drawn from a 13-element enum (at most 2^13 sets). Returning
+/// `path.exists()` therefore meant:
+///
+/// - a 64-bit collision between two DIFFERENT downgraded-layer-sets in one
+///   session silently suppressed the second, genuinely different one; and
+/// - a zero-byte file of the right name, from any source, suppressed the
+///   announcement entirely — for a channel whose own doc calls it
+///   unconditional.
+///
+/// Requiring the stored key to match exactly makes an absent, empty,
+/// unreadable, collided or tampered marker ANNOUNCE rather than suppress:
+/// every failure mode resolves toward more visibility, never less. It also
+/// makes a `DefaultHasher` change across a toolchain bump merely re-print
+/// once instead of silently aliasing two different sets.
+///
+/// See [`print_attestation_downgrade_banner`]'s doc for what this does NOT
+/// close (a same-user process can still pre-plant a correct marker) and why
+/// that is accepted.
+#[cfg(target_os = "windows")]
+fn marker_says_already_announced(path: &std::path::Path, dedup_key: &str) -> bool {
+    matches!(std::fs::read_to_string(path), Ok(existing) if existing == dedup_key)
 }
 
 /// Compute the per-session, content-addressed dedup marker path for
@@ -1300,7 +1370,62 @@ pub fn print_profile_hint(program: &str, profile: &str, silent: bool) {
 /// (always-print) rather than a path outside the sessions root.
 #[cfg(all(test, target_os = "windows"))]
 mod attestation_marker_path_tests {
-    use super::{attestation_downgrade_marker_path, session_id_is_safe_path_component};
+    use super::{
+        attestation_downgrade_marker_path, marker_says_already_announced,
+        session_id_is_safe_path_component,
+    };
+
+    /// WR-04: the four ways a marker can be present-but-not-an-announcement
+    /// must all resolve to "announce". Only an exact content match suppresses.
+    #[test]
+    fn only_an_exact_key_match_suppresses_the_banner() {
+        let dir = std::env::temp_dir().join(format!(
+            "nono-wr04-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("marker");
+        let key = "DaclAncestorTraverse,WfpEgressFilters";
+
+        // 1. Absent.
+        assert!(
+            !marker_says_already_announced(&path, key),
+            "an absent marker must not suppress"
+        );
+
+        // 2. Zero-byte — the pre-plantable shape the old `path.exists()`
+        //    check trusted, and the one that made the 'unconditional' channel
+        //    silenceable.
+        std::fs::write(&path, []).expect("write empty");
+        assert!(
+            !marker_says_already_announced(&path, key),
+            "a zero-byte marker must not suppress (WR-04): presence alone was the whole \
+             suppression condition before this fix"
+        );
+
+        // 3. Different content — the 64-bit-collision case, where a
+        //    genuinely different downgraded-layer-set hashes to this name.
+        std::fs::write(&path, b"SomeOtherLayerSet").expect("write other");
+        assert!(
+            !marker_says_already_announced(&path, key),
+            "a marker holding a DIFFERENT key must not suppress — that is a hash collision \
+             between two different downgraded-layer-sets, not a repeat"
+        );
+
+        // 4. Exact match — the one genuine repeat.
+        std::fs::write(&path, key.as_bytes()).expect("write key");
+        assert!(
+            marker_says_already_announced(&path, key),
+            "an exact key match IS a genuine repeat and must suppress, or the dedup does \
+             nothing and the hook path re-prints on every tool call"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn accepts_the_generated_session_id_shapes() {
