@@ -72,18 +72,57 @@ fn read_spec() -> String {
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()))
 }
 
+/// The `call_sites: &[ ... ]` list bodies in `layer_registry.rs`, as raw
+/// source slices.
+///
+/// # Why the extractors are scoped instead of scanning the whole file
+///
+/// They used to scan EVERY double-quoted literal in `layer_registry.rs`, on
+/// the stated assumption that "this file's `call_sites: &[...]` arrays are
+/// the only place double-quoted string literals containing a real citation
+/// appear". That assumption held only by luck, and stopped holding the
+/// moment this phase's fix pass added assertion messages to the file's own
+/// `#[cfg(test)]` module that legitimately name symbols in prose
+/// (`attestation.rs::classify_row`, and a `"file.rs::Symbol"` shape
+/// example). Those were scraped as citations and "resolved" to paths like
+/// `exec_strategy_windows/ProbeKind`, failing the build for a citation
+/// nobody wrote.
+///
+/// Scoping to the `call_sites` lists is what this test always meant. The
+/// narrowing is the fail-OPEN direction if it ever goes quiet, so
+/// `registry_call_sites_exist` asserts a floor on both the number of lists
+/// found and the number of citations in them.
+fn call_sites_regions(src: &str) -> Vec<&str> {
+    const MARKER: &str = "call_sites: &[";
+    let mut out = Vec::new();
+    let mut rest = src;
+    while let Some(start) = rest.find(MARKER) {
+        let after = &rest[start + MARKER.len()..];
+        let Some(end) = after.find(']') else {
+            break;
+        };
+        out.push(&after[..end]);
+        rest = &after[end + 1..];
+    }
+    out
+}
+
 /// Extract every `"file:line"`-shaped double-quoted Rust string literal from
-/// `layer_registry.rs`'s source text. A plain substring scan, not a full
-/// parser: this file's `call_sites: &[...]` arrays are the only place
-/// double-quoted string literals containing a real `.rs:<digit>` citation
-/// appear. Doc-comment call site citations normally use backtick code
-/// spans, e.g. `` `network.rs:1730` `` (no double quotes at all), but one
-/// doc comment illustrates the *shape* with a literal, non-numeric example
-/// (`` `"file:line"` ``) — backticks wrapping an actual double-quoted
-/// string. Requiring the character immediately after the final `:` to be an
-/// ASCII digit excludes that illustrative example while keeping every real
+/// `layer_registry.rs`'s `call_sites` lists. A plain substring scan, not a
+/// full parser.
+///
+/// Requiring the character immediately after the final `:` to be an ASCII
+/// digit excludes shape-illustrating examples while keeping every real
 /// citation (all of which end in `<digits>` or `<digits>-<digits>`).
 fn extract_call_site_citations(src: &str) -> Vec<String> {
+    let mut citations = Vec::new();
+    for region in call_sites_regions(src) {
+        citations.extend(extract_call_site_citations_in(region));
+    }
+    citations
+}
+
+fn extract_call_site_citations_in(src: &str) -> Vec<String> {
     let mut citations = Vec::new();
     let mut rest = src;
     while let Some(start) = rest.find('"') {
@@ -144,12 +183,22 @@ fn resolve_citation_path(citation: &str) -> PathBuf {
 }
 
 /// Extract every `"file.rs::Symbol"`-shaped double-quoted Rust string
-/// literal from `layer_registry.rs`'s source text (Phase 117 gap closure,
-/// NR3-08). A citation is symbol-form if it contains the literal substring
-/// `".rs::"` — the double-colon distinguishes it from the line-form
-/// `".rs:<digit>"` citations `extract_call_site_citations` finds. Same
-/// plain-substring-scan shape as that function, not a full parser.
+/// literal from `layer_registry.rs`'s `call_sites` lists (Phase 117 gap
+/// closure, NR3-08). A citation is symbol-form if it contains the literal
+/// substring `".rs::"` — the double-colon distinguishes it from the
+/// line-form `".rs:<digit>"` citations `extract_call_site_citations` finds.
+///
+/// Scoped via [`call_sites_regions`]: see that function for why a
+/// whole-file scan was wrong.
 fn extract_symbol_citations(src: &str) -> Vec<String> {
+    let mut citations = Vec::new();
+    for region in call_sites_regions(src) {
+        citations.extend(extract_symbol_citations_in(region));
+    }
+    citations
+}
+
+fn extract_symbol_citations_in(src: &str) -> Vec<String> {
     let mut citations = Vec::new();
     let mut rest = src;
     while let Some(start) = rest.find('"') {
@@ -322,6 +371,27 @@ fn registry_call_sites_exist() {
         "expected at least one call_sites citation (\"file:line\" or \"file.rs::Symbol\") in \
          layer_registry.rs — found zero of either shape; the extraction scan may be broken, or \
          the registry lost its citations"
+    );
+
+    // Non-vacuity floors for the region-scoped scan. Narrowing the scan from
+    // "every literal in the file" to "the call_sites lists" is the fail-OPEN
+    // direction if the marker ever stops matching (a rustfmt change, a field
+    // rename), so pin both the number of lists found and the number of
+    // citations inside them. Two of the thirteen rows carry `call_sites: &[]`
+    // deliberately (DaclSessionSidGrant, MinifilterAbsence), so the citation
+    // floor mirrors layer_registry.rs's own `every_call_site_string_is_symbol_form`.
+    let regions = call_sites_regions(&src).len();
+    assert!(
+        regions >= 13,
+        "only {regions} `call_sites: &[` list(s) found in layer_registry.rs, but every \
+         LayerRegistryEntry declares one. The region marker has stopped matching, so this \
+         test is now scanning almost nothing."
+    );
+    assert!(
+        citations.len() + symbol_citations.len() >= 20,
+        "only {} call_sites citation(s) extracted from {regions} list(s) — the scan went \
+         quiet. A citation gate that resolves nothing passes for the wrong reason.",
+        citations.len() + symbol_citations.len()
     );
 
     let mut missing = Vec::new();
@@ -578,8 +648,12 @@ fn registry_citations_by_layer_id(registry_src: &str) -> Vec<(String, Vec<String
                 let array_body = after_open
                     .find(']')
                     .map_or("", |cs_end| &after_open[..cs_end]);
-                let mut c = extract_symbol_citations(array_body);
-                c.extend(extract_call_site_citations(array_body));
+                // `array_body` is ALREADY a `call_sites` list body, so use
+                // the region-level extractors directly — the top-level
+                // `extract_*_citations` wrappers re-scope by searching for
+                // `call_sites: &[`, which does not occur inside a body.
+                let mut c = extract_symbol_citations_in(array_body);
+                c.extend(extract_call_site_citations_in(array_body));
                 c
             }
             None => Vec::new(),
