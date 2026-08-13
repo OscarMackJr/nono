@@ -1413,6 +1413,99 @@ pub(super) fn select_windows_token_arm(
 /// Returns `Err` on `AttestationDecision::Abort` or on `attest_and_decide`'s
 /// own `Err` (an unrecognized required-layer name — fail-closed, D-26).
 ///
+
+/// Emit the D-27 audit record for a `ProceedDowngraded` outcome and report
+/// WHICH channel actually received the per-layer detail.
+///
+/// Phase 117-44 folds WR-26 and WR-22 into one seam:
+///
+/// - **WR-26** — the banner and operator warn used to name the Windows
+///   Application event log unconditionally, but that destination receives the
+///   record only when `SECURITY_LAYER` is initialised, telemetry is `enabled`,
+///   AND `RegisterEventSourceW` succeeds. This returns what actually happened
+///   so the caller can render a pointer that is true.
+/// - **WR-22** — as an inline block this was untestable. `SECURITY_LAYER` is
+///   never `set` in a unit-test binary (the only `set` call sites are
+///   `cli_bootstrap.rs` and `agent_daemon/telemetry_init.rs`, neither reachable
+///   from a test), so site 1 always fired and sites 2 and 3 had zero coverage —
+///   and the private-channel assertion was satisfiable by site 1 alone. Taking
+///   `Option<&SecurityEventLayer>` lets a test drive all three arms directly
+///   without touching the process-global `OnceLock`.
+///
+/// `layer_detail` is the caller's D-28 decision, already made: non-empty only
+/// when `log_target_is_private()`. This function never re-decides it.
+#[cfg(target_os = "windows")]
+fn emit_downgrade_diagnostics(
+    security_layer: Option<&crate::telemetry::SecurityEventLayer>,
+    downgraded_refs: &[&str],
+    layer_detail: &str,
+) -> attestation_downgrade_event::DowngradeDetailChannel {
+    use attestation_downgrade_event::DowngradeDetailChannel;
+
+    // The private log wins whenever it is active: it is the channel the
+    // operator asked for, and the only one permitted to carry specific
+    // `LayerId` names (D-28). `layer_detail` non-empty IS that condition.
+    let private = !layer_detail.is_empty();
+
+    match security_layer {
+        // Site 1: no layer initialised, so no audit record is emitted at all.
+        None => {
+            tracing::warn!(
+                "attestation downgrade audit emission unavailable                  (AUD-04: SecurityEventLayer not initialized) —                  proceeding per AUD-04's non-fatal contract{layer_detail}"
+            );
+            if private {
+                DowngradeDetailChannel::PrivateLogFile
+            } else {
+                DowngradeDetailChannel::None
+            }
+        }
+        Some(layer) => match layer.emit_attestation_event(downgraded_refs) {
+            // Site 2: the audit record was NOT committed.
+            Err(e) => {
+                tracing::warn!(
+                    "attestation downgrade audit emission failed (AUD-04) —                      proceeding per AUD-04's non-fatal contract: {e}{layer_detail}"
+                );
+                if private {
+                    DowngradeDetailChannel::PrivateLogFile
+                } else {
+                    DowngradeDetailChannel::None
+                }
+            }
+            // Site 3: emission ran; `emitted_channel` says where it landed.
+            Ok((_chain_head, emitted_channel)) => {
+                if private {
+                    DowngradeDetailChannel::PrivateLogFile
+                } else {
+                    emitted_channel
+                }
+            }
+        },
+    }
+}
+
+/// Render the operator-facing "where to look" suffix for `channel`.
+///
+/// WR-26: one `match` with no `_` arm, so a future `DowngradeDetailChannel`
+/// variant is a compile error rather than a silently wrong pointer.
+#[cfg(target_os = "windows")]
+fn downgrade_detail_pointer(
+    channel: attestation_downgrade_event::DowngradeDetailChannel,
+) -> String {
+    use attestation_downgrade_event::DowngradeDetailChannel;
+    match channel {
+        DowngradeDetailChannel::EventLog => " (layer detail is in the Windows Application event              log, source `nono`, event id 10011; re-run with --log-file <path> to capture it              locally)"
+            .to_string(),
+        // The names are already in the operator's own private log, so no
+        // destination sentence is needed — and naming one here would be the
+        // only place a LayerId could reach a shared channel.
+        DowngradeDetailChannel::PrivateLogFile => String::new(),
+        DowngradeDetailChannel::Stderr => " (the `nono` event source is not registered, so the              attestation record went to this console in redacted form — layer names are withheld;              run `nono setup` to register the source, or re-run with --log-file <path>)"
+            .to_string(),
+        DowngradeDetailChannel::None => " (layer detail could not be recorded on any channel —              re-run with --log-file <path> to capture it locally)"
+            .to_string(),
+    }
+}
+
 /// # AUD-04 contract (per `SecurityEventLayer::emit_attestation_event`'s own
 /// doc comment)
 ///
@@ -1504,67 +1597,32 @@ fn apply_startup_attestation_gate(
                 String::new()
             };
 
-            // D-27 audit-event channel. Access idiom mirrors
-            // `execution_runtime.rs:267`'s `SECURITY_LAYER.get()` (Warning-5
-            // fix — no parameter threading needed or added). Per
-            // `emit_attestation_event`'s own AUD-04 contract (this function's
-            // doc comment above), a failure to commit the audit record is
-            // logged but NEVER blocks the launch — the banner below still
-            // prints unconditionally. These two diagnostics are
-            // audit-emission-FAILURE fallbacks, not the primary operator
-            // channel, so on the shared-console arm they carry only the
-            // withheld/present layer_detail suffix (never the destination
-            // sentence — that lives on the banner and the operator warn
-            // below).
-            match crate::telemetry::SECURITY_LAYER.get() {
-                None => {
-                    tracing::warn!(
-                        "attestation downgrade audit emission unavailable \
-                         (AUD-04: SecurityEventLayer not initialized) — \
-                         proceeding per AUD-04's non-fatal contract{layer_detail}"
-                    );
-                }
-                Some(security_layer) => {
-                    if let Err(e) = security_layer.emit_attestation_event(&downgraded_refs) {
-                        tracing::warn!(
-                            "attestation downgrade audit emission failed (AUD-04) — \
-                             proceeding per AUD-04's non-fatal contract: {e}{layer_detail}"
-                        );
-                    }
-                }
-            }
+            // WR-22/WR-26 (Phase 117-44): the three emission sites are now a
+            // pure function, so each is individually testable and the channel
+            // it reports is derived from what actually happened. Previously
+            // this block was inline, `SECURITY_LAYER` is never `set` in a test
+            // binary, and sites 2 and 3 therefore had ZERO coverage.
+            let channel = emit_downgrade_diagnostics(
+                crate::telemetry::SECURITY_LAYER.get(),
+                &downgraded_refs,
+                &layer_detail,
+            );
 
-            // Phase 117 NR3-04: this warn is the call that populates the
-            // operator diagnostic channel the banner below points at. Unlike
-            // the audit-emission warns above (which only fire on FAILURE to
-            // commit the audit record), this one fires unconditionally on
-            // every `ProceedDowngraded` occurrence, so the banner's claim is
-            // true on the common success path too. Mirrors the daemon's own
-            // equivalent (`agent_daemon/launch.rs:965-972`), minus
-            // `tenant_id` (no tenant concept on the direct-CLI path).
-            //
-            // Phase 117-27 WR-15: when the channel is NOT private
-            // (`layer_detail` empty), this is the primary operator-facing
-            // site, so it states the REAL destination — the Windows
-            // Application event log (event id 10011,
-            // `EVENT_ID_LAYER_ATTESTATION_DOWNGRADED`) that
-            // `emit_attestation_event` above actually writes to — instead of
-            // a destination that never receives the record. When the channel IS private,
-            // `layer_detail` itself already carries the specific
-            // `downgraded_layers=...` names, so no destination sentence is
-            // needed.
+            // NR3-04: this warn is the primary operator-facing site, and it
+            // fires unconditionally on every ProceedDowngraded. When the
+            // channel is private the specific names go HERE (D-28 permits it
+            // only there); otherwise a destination sentence that names the
+            // channel which actually received the record (WR-26).
             let operator_suffix = if layer_detail.is_empty() {
-                " (layer detail is in the Windows Application event log, source `nono`, \
-                 event id 10011; re-run with --log-file <path> to capture it locally)"
-                    .to_string()
+                downgrade_detail_pointer(channel)
             } else {
                 layer_detail.clone()
             };
             tracing::warn!(
                 downgraded_count = downgraded.len(),
-                "startup self-attestation: {} confinement layer(s) could not be fully \
-                 confirmed at startup — proceeding with a downgraded confinement claim{operator_suffix}",
-                downgraded.len()
+                "startup self-attestation: {} confinement layer(s) could not be fully                  confirmed at startup — proceeding with a downgraded confinement claim{}",
+                downgraded.len(),
+                operator_suffix
             );
 
             // D-27 human-visible banner channel (Item-2 fix: session_id +
@@ -1574,6 +1632,7 @@ fn apply_startup_attestation_gate(
                 downgraded.len(),
                 session_id,
                 &dedup_key,
+                channel,
             );
             Ok(())
         }
@@ -3789,10 +3848,23 @@ mod attestation_gate_tests {
         // "message" field carries interpolated text, not a hand-named field,
         // and a future rewrite that moves the detail between a structured
         // field and message text must not silently defeat this assertion.
+        // WR-22 (Phase 117-44): this assertion must be satisfiable ONLY by
+        // site 3 (the unconditional operator warn). It previously scanned every
+        // captured event for the LayerId name anywhere, which site 1 alone
+        // satisfies: `SECURITY_LAYER` is never `set` in this test binary, so
+        // the "not initialized" arm always fires and its message already
+        // interpolates `layer_detail`. Deleting the detail from site 3 left the
+        // test green.
+        //
+        // Site 3 is the only site carrying a structured `downgraded_count`
+        // field. Requiring BOTH in the SAME captured event pins site 3
+        // specifically.
         let found = events.iter().any(|fields| {
-            fields
+            let has_site3_marker = fields.iter().any(|(name, _v)| name == "downgraded_count");
+            let has_layer_name = fields
                 .iter()
-                .any(|(_name, value)| value.contains("MandatoryIntegrityLabel"))
+                .any(|(_name, value)| value.contains("MandatoryIntegrityLabel"));
+            has_site3_marker && has_layer_name
         });
         assert!(
             found,
@@ -3801,6 +3873,106 @@ mod attestation_gate_tests {
              active (not only inside the audit-emission-failure arms), so the D-27 \
              banner's operator-detail claim is truthful; captured events: \
              {events:?}"
+        );
+    }
+
+    /// WR-22 (Phase 117-44): site 2 — `emit_attestation_event` returns `Err`,
+    /// so the audit record was NOT committed.
+    ///
+    /// This arm had ZERO coverage on any path before this plan. It is
+    /// unreachable through `apply_startup_attestation_gate` in a test binary
+    /// because `crate::telemetry::SECURITY_LAYER` is never `set` there — the
+    /// only `set` call sites are `cli_bootstrap.rs` and
+    /// `agent_daemon/telemetry_init.rs`, neither reachable from a unit test.
+    /// Driving `emit_downgrade_diagnostics` directly sidesteps the
+    /// process-global `OnceLock` entirely.
+    #[test]
+    fn emit_downgrade_diagnostics_site_2_emission_error_reports_no_channel() {
+        use crate::telemetry::SecurityEventLayer;
+        use nono::{TelemetryConfig, TelemetrySeverity};
+
+        let layer = SecurityEventLayer::new(
+            TelemetryConfig {
+                enabled: true,
+                channel: "Application".to_string(),
+                min_severity: TelemetrySeverity::Warning,
+            },
+            "test-wr22-site2".to_string(),
+        );
+        // Force `emit_attestation_event` to return Err.
+        layer.poison_for_test();
+
+        // Shared console (layer_detail empty): nothing received the detail.
+        let channel = emit_downgrade_diagnostics(Some(&layer), &["MandatoryIntegrityLabel"], "");
+        assert_eq!(
+            channel,
+            attestation_downgrade_event::DowngradeDetailChannel::None,
+            "site 2: a failed audit emission on a shared console means NO channel holds the              layer detail — the operator must not be pointed at the event log"
+        );
+
+        // Private log active: the names are in the operator's own log even
+        // though the audit emission failed.
+        let channel_private =
+            emit_downgrade_diagnostics(Some(&layer), &["MandatoryIntegrityLabel"], "; detail");
+        assert_eq!(
+            channel_private,
+            attestation_downgrade_event::DowngradeDetailChannel::PrivateLogFile,
+            "site 2 with a private log: the detail is in the operator's --log-file target"
+        );
+    }
+
+    /// WR-22 (Phase 117-44): site 3 — `emit_attestation_event` returns `Ok`,
+    /// the success path. Also previously uncovered.
+    ///
+    /// The shared-console assertion is a disjunction because the answer depends
+    /// on whether this host's `nono` event source is registered: an
+    /// unregistered source (this dev host, and any machine before
+    /// `nono setup`) yields `Stderr`, a registered one yields `EventLog`.
+    /// Encoding one host's configuration as the expected value would make this
+    /// test assert the environment rather than the behaviour.
+    #[test]
+    fn emit_downgrade_diagnostics_site_3_success_reports_the_real_channel() {
+        use crate::telemetry::SecurityEventLayer;
+        use attestation_downgrade_event::DowngradeDetailChannel;
+        use nono::{TelemetryConfig, TelemetrySeverity};
+
+        let layer = SecurityEventLayer::new(
+            TelemetryConfig {
+                enabled: true,
+                channel: "Application".to_string(),
+                min_severity: TelemetrySeverity::Warning,
+            },
+            "test-wr22-site3".to_string(),
+        );
+
+        let channel = emit_downgrade_diagnostics(Some(&layer), &["MandatoryIntegrityLabel"], "");
+        assert!(
+            matches!(
+                channel,
+                DowngradeDetailChannel::EventLog | DowngradeDetailChannel::Stderr
+            ),
+            "site 3: a successful emission lands in the Application Event Log, or in the              redacted stderr fallback when the source is unregistered — got {channel:?}"
+        );
+
+        // The private log takes precedence: it is the channel the operator
+        // asked for and the only one permitted to carry LayerId names (D-28).
+        let channel_private =
+            emit_downgrade_diagnostics(Some(&layer), &["MandatoryIntegrityLabel"], "; detail");
+        assert_eq!(
+            channel_private,
+            DowngradeDetailChannel::PrivateLogFile,
+            "the private log wins over the audit channel when both received the downgrade"
+        );
+    }
+
+    /// WR-22 (Phase 117-44): site 1 — no layer initialised at all.
+    #[test]
+    fn emit_downgrade_diagnostics_site_1_absent_layer_reports_no_channel() {
+        let channel = emit_downgrade_diagnostics(None, &["MandatoryIntegrityLabel"], "");
+        assert_eq!(
+            channel,
+            attestation_downgrade_event::DowngradeDetailChannel::None,
+            "site 1: with no SecurityEventLayer no audit record is emitted anywhere"
         );
     }
 
@@ -3837,10 +4009,24 @@ mod attestation_gate_tests {
     /// false — the common case), NONE of the ProceedDowngraded arm's three
     /// D-28 emission sites may put a downgraded LayerId's name — as a field
     /// OR as message text — on the shared console. `downgraded_count` alone
-    /// may still appear. This drives the SECURITY_LAYER-present arm (the
-    /// audit-emission success path, the third site); the sibling test below
-    /// drives the SECURITY_LAYER-ABSENT arm (`SECURITY_LAYER.get() ==
-    /// None`), the first site — the one CR-03 found ungated before this fix.
+    /// may still appear.
+    ///
+    /// # WR-22 correction (Phase 117-44)
+    ///
+    /// This doc comment used to claim "This drives the SECURITY_LAYER-present
+    /// arm (the audit-emission success path, the third site)". **It does
+    /// not.** `crate::telemetry::SECURITY_LAYER` is never `set` in this test
+    /// binary — the only `set` call sites are `cli_bootstrap.rs` and
+    /// `agent_daemon/telemetry_init.rs`, neither reachable from a unit test —
+    /// so this test and the sibling below drive the IDENTICAL
+    /// `SECURITY_LAYER`-absent arm. The claim was false for two rounds.
+    ///
+    /// Both are kept: they exercise the same arm through the full
+    /// `apply_startup_attestation_gate` entry point, which is worth pinning.
+    /// The `SECURITY_LAYER`-PRESENT arms (sites 2 and 3) are covered directly
+    /// by `emit_downgrade_diagnostics_site_2_emission_error_reports_no_channel`
+    /// and `emit_downgrade_diagnostics_site_3_success_reports_the_real_channel`,
+    /// which take `Option<&SecurityEventLayer>` and so need no `OnceLock`.
     #[test]
     fn proceed_downgraded_success_path_withholds_layer_names_on_the_shared_console_channel() {
         // Held for the whole test: serializes against the sibling

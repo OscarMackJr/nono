@@ -835,7 +835,7 @@ pub(crate) mod attestation;
 // itself) because this entire `exec_strategy_windows` tree is only
 // `#[path]`-included on `target_os = "windows"` (main.rs) and is never
 // included by `nono-agentd.rs`.
-mod attestation_downgrade_event;
+pub(crate) mod attestation_downgrade_event;
 mod dacl_guard;
 mod labels_guard;
 mod launch;

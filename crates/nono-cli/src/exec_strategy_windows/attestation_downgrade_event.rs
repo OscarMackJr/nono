@@ -59,9 +59,36 @@
 //! directly (WR-21 point 2).
 
 use crate::telemetry::event::{SecurityEvent, SecurityEventType};
-use crate::telemetry::windows::emit_security_event;
+use crate::telemetry::windows::{emit_security_event, EventLogDelivery};
 use crate::telemetry::SecurityEventLayer;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Which channel actually received this downgrade's per-layer detail.
+///
+/// Phase 117-44 (WR-26): the banner and the operator warn used to name the
+/// Windows Application event log unconditionally. That destination receives the
+/// record only when ALL THREE of these hold — `SECURITY_LAYER` is initialised,
+/// telemetry is `enabled`, and `RegisterEventSourceW` succeeds — so on any dev
+/// host, any fleet with the HKLM telemetry control off, and any broken MSI
+/// install, the operator was sent somewhere provably empty. That is the same
+/// defect class WR-15 was written to close, reintroduced by making the pointer
+/// unconditional instead of conditional on the emission succeeding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DowngradeDetailChannel {
+    /// The Windows Application Event Log holds the record (source `nono`,
+    /// event id 10011).
+    EventLog,
+    /// The operator's own `--log-file` target holds the layer names. This wins
+    /// over `EventLog` when both apply: the private log is the channel the
+    /// operator asked for, and it is the only one permitted to carry specific
+    /// `LayerId` names (D-28).
+    PrivateLogFile,
+    /// `RegisterEventSourceW` returned NULL, so a REDACTED copy went to the
+    /// supervisor's stderr. The layer names are NOT there (CR-05).
+    Stderr,
+    /// Nothing received the per-layer detail.
+    None,
+}
 
 impl SecurityEventLayer {
     /// Emit a `LayerAttestationDowngraded` event directly into the HMAC chain
@@ -108,7 +135,7 @@ impl SecurityEventLayer {
     pub fn emit_attestation_event(
         &self,
         downgraded_layers: &[&str],
-    ) -> Result<String, &'static str> {
+    ) -> Result<(String, DowngradeDetailChannel), &'static str> {
         let timestamp_unix_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
@@ -122,7 +149,16 @@ impl SecurityEventLayer {
         // point 1 atomicity — see `advance_and_emit`'s doc comment). The
         // emit closure runs while the chain mutex is still held, matching
         // `emit_override_event`'s existing single-critical-section shape.
-        self.advance_and_emit(
+        // WR-26: `advance_and_emit`'s emit closure returns the chain head, so
+        // the emission outcome is captured through Cells rather than by
+        // widening that method's signature — `telemetry/mod.rs` is a different
+        // plan's file, and WR-21/WR-30 constrain its locking discipline. The
+        // Cells are read after `advance_and_emit` returns, so no borrow
+        // outlives the closure and the chain mutex is untouched.
+        let emitted = std::cell::Cell::new(false);
+        let delivery = std::cell::Cell::new(EventLogDelivery::NotAvailable);
+
+        let chain_head = self.advance_and_emit(
             |session_id| {
                 format!(
                     "{event_type:?}|{downgraded}|{session_id}|{ts}",
@@ -133,6 +169,7 @@ impl SecurityEventLayer {
                 .into_bytes()
             },
             |session_id, chain_head, enabled| {
+                emitted.set(enabled);
                 if enabled {
                     let security_event = SecurityEvent {
                         event_type: SecurityEventType::LayerAttestationDowngraded,
@@ -145,11 +182,28 @@ impl SecurityEventLayer {
                         timestamp_unix_ms,
                         downgraded_layers: Some(downgraded_layers_value.clone()),
                     };
-                    emit_security_event(&security_event);
+                    delivery.set(emit_security_event(&security_event));
                 }
                 chain_head.to_string()
             },
-        )
+        )?;
+
+        // WR-26: precedence is decided by the CALLER, which alone knows whether
+        // the private log channel is active (D-28). This reports only what THIS
+        // function can observe.
+        let channel = if !emitted.get() {
+            // Telemetry disabled by policy: the chain still advanced (D-14
+            // degrade-not-abort) but nothing was written anywhere.
+            DowngradeDetailChannel::None
+        } else {
+            match delivery.get() {
+                EventLogDelivery::EventLog => DowngradeDetailChannel::EventLog,
+                EventLogDelivery::StderrFallback => DowngradeDetailChannel::Stderr,
+                EventLogDelivery::NotAvailable => DowngradeDetailChannel::None,
+            }
+        };
+
+        Ok((chain_head, channel))
     }
 }
 
@@ -201,6 +255,74 @@ mod tests {
             layer.chain_sequence(),
             1,
             "chain must still advance by exactly 1 (enabled=false, D-14 degrade-not-abort)"
+        );
+    }
+
+    /// WR-26 (Phase 117-44): telemetry disabled by policy means NOTHING
+    /// received the per-layer detail, so the caller must not point an operator
+    /// at the Application event log.
+    ///
+    /// This is emptying-condition 2 of three. It is invisible from the return
+    /// value alone: `emit_attestation_event` returns `Ok` in this case, because
+    /// the HMAC chain still advances (D-14 degrade-not-abort). Before this plan
+    /// the caller could not tell an emission from a chain advance.
+    #[test]
+    fn disabled_telemetry_reports_channel_none() {
+        let layer = SecurityEventLayer::new(
+            TelemetryConfig {
+                enabled: false,
+                channel: "Application".to_string(),
+                min_severity: TelemetrySeverity::Warning,
+            },
+            "test-wr26-disabled".to_string(),
+        );
+
+        let (_chain_head, channel) = layer
+            .emit_attestation_event(&["MandatoryIntegrityLabel"])
+            .expect("D-14: disabled telemetry must still return Ok");
+
+        assert_eq!(
+            channel,
+            DowngradeDetailChannel::None,
+            "WR-26: with telemetry disabled nothing is written to any channel, so the operator              must not be pointed at the Application event log"
+        );
+    }
+
+    /// WR-26 companion: with telemetry ENABLED the channel is whatever the
+    /// Application-log write actually reported — never `None`.
+    ///
+    /// On a host whose `nono` event source is unregistered (this dev host, and
+    /// any machine before `nono setup`), `RegisterEventSourceW` returns NULL and
+    /// the redacted copy goes to stderr, so `Stderr` is the correct answer and
+    /// `EventLog` would be a lie. Asserting the disjunction rather than a single
+    /// variant keeps this test honest on both kinds of host instead of encoding
+    /// one host's configuration as the expected result.
+    #[test]
+    fn enabled_telemetry_reports_the_channel_that_actually_received_it() {
+        let layer = SecurityEventLayer::new(
+            TelemetryConfig {
+                enabled: true,
+                channel: "Application".to_string(),
+                min_severity: TelemetrySeverity::Warning,
+            },
+            "test-wr26-enabled".to_string(),
+        );
+
+        let (_chain_head, channel) = layer
+            .emit_attestation_event(&["MandatoryIntegrityLabel"])
+            .expect("enabled emission must succeed");
+
+        assert_ne!(
+            channel,
+            DowngradeDetailChannel::None,
+            "with telemetry enabled the emission ran, so SOME channel received it"
+        );
+        assert!(
+            matches!(
+                channel,
+                DowngradeDetailChannel::EventLog | DowngradeDetailChannel::Stderr
+            ),
+            "an enabled emission lands either in the Application Event Log or, when the source              is unregistered, in the redacted stderr fallback — got {channel:?}"
         );
     }
 

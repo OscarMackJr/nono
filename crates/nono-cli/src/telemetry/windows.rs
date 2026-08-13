@@ -54,6 +54,33 @@ enum EventLogLevel {
     Warning,
 }
 
+// ── EventLogDelivery ─────────────────────────────────────────────────────────
+
+/// Where a security event's Application-log write actually landed.
+///
+/// Phase 117-44 (WR-26): callers that tell an operator where to look for the
+/// record need to know whether the record went there. Before this, both
+/// [`write_security_event_log`] and [`emit_security_event`] returned `()`, so
+/// the banner and the operator warn named the Windows Application event log
+/// unconditionally — including on the D-03 NULL-handle path, where the record
+/// provably went to stderr instead.
+///
+/// Returned rather than stashed in a global so the answer is per-call and
+/// cannot be raced by a concurrent emit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventLogDelivery {
+    /// `ReportEventW` wrote the record to the Windows Application Event Log.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    EventLog,
+    /// `RegisterEventSourceW` returned NULL — a `downgraded_layers`-redacted
+    /// copy went to stderr instead (see [`build_redacted_fallback_message`]).
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    StderrFallback,
+    /// Non-Windows build: there is no Application Event Log to write to.
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    NotAvailable,
+}
+
 // ── event_id_for ─────────────────────────────────────────────────────────────
 
 /// Return the EventID for a [`SecurityEventType`] (ROADMAP-locked, 10001-10005).
@@ -156,7 +183,11 @@ fn build_redacted_fallback_message(
 /// that asymmetry expressible: the caller cannot pass one string that is
 /// simultaneously correct for both channels.
 #[cfg(target_os = "windows")]
-fn write_security_event_log(level: EventLogLevel, event_id: u32, event: &SecurityEvent) {
+fn write_security_event_log(
+    level: EventLogLevel,
+    event_id: u32,
+    event: &SecurityEvent,
+) -> EventLogDelivery {
     use windows_sys::Win32::System::EventLog::{
         DeregisterEventSource, RegisterEventSourceW, ReportEventW, EVENTLOG_INFORMATION_TYPE,
         EVENTLOG_WARNING_TYPE,
@@ -189,7 +220,9 @@ fn write_security_event_log(level: EventLogLevel, event_id: u32, event: &Securit
             "nono: telemetry: RegisterEventSourceW returned NULL (source not registered) — {}",
             build_redacted_fallback_message(level, event_id, event)
         );
-        return;
+        // WR-26: the record did NOT reach the Application Event Log. Callers
+        // must not point an operator at it.
+        return EventLogDelivery::StderrFallback;
     }
 
     // Past the NULL branch: the real Application Event Log receives the FULL
@@ -223,6 +256,9 @@ fn write_security_event_log(level: EventLogLevel, event_id: u32, event: &Securit
         );
         let _ = DeregisterEventSource(handle);
     }
+
+    // WR-26: the record reached the Application Event Log.
+    EventLogDelivery::EventLog
 }
 
 // ── emit_security_event ───────────────────────────────────────────────────────
@@ -251,7 +287,7 @@ fn write_security_event_log(level: EventLogLevel, event_id: u32, event: &Securit
 ///
 /// If the Application-log write fails (source not registered), the error is
 /// emitted to stderr and the function returns without affecting the confined run.
-pub fn emit_security_event(event: &SecurityEvent) {
+pub fn emit_security_event(event: &SecurityEvent) -> EventLogDelivery {
     let event_id = event_id_for(&event.event_type);
 
     // Application Event Log write (D-01.2, cfg-gated).
@@ -260,7 +296,9 @@ pub fn emit_security_event(event: &SecurityEvent) {
     // string, because the Event Log and the stderr fallback require different
     // content — see `write_security_event_log`'s D-28 channel-asymmetry note.
     #[cfg(target_os = "windows")]
-    write_security_event_log(EventLogLevel::Warning, event_id, event);
+    let delivery = write_security_event_log(EventLogLevel::Warning, event_id, event);
+    #[cfg(not(target_os = "windows"))]
+    let delivery = EventLogDelivery::NotAvailable;
 
     // ETW TraceLogging emit (D-01.1).
     // The tracing-etw LayerBuilder registered in init_tracing() intercepts this
@@ -283,6 +321,8 @@ pub fn emit_security_event(event: &SecurityEvent) {
         timestamp_unix_ms = event.timestamp_unix_ms,
         "security event"
     );
+
+    delivery
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

@@ -96,6 +96,7 @@ pub fn print_attestation_downgrade_banner(
     downgraded_count: usize,
     session_id: Option<&str>,
     dedup_key: &str,
+    channel: crate::exec_strategy::attestation_downgrade_event::DowngradeDetailChannel,
 ) {
     if downgraded_count == 0 {
         return;
@@ -111,14 +112,39 @@ pub fn print_attestation_downgrade_banner(
         }
     }
 
+    // WR-26 (Phase 117-44): name a destination ONLY when it received the
+    // record. One match, no `_` arm — a future variant is a compile error, not
+    // a silently wrong pointer. The dedup marker below deliberately does NOT
+    // key on `channel`: the same downgraded layer-set on the same session is
+    // still a repeat, whatever channel carried it.
+    use crate::exec_strategy::attestation_downgrade_event::DowngradeDetailChannel;
+    let where_to_look = match channel {
+        DowngradeDetailChannel::EventLog => {
+            "layer detail is in the Windows Application event log (source `nono`, event id \
+             10011); re-run with --log-file <path> to capture it locally"
+        }
+        // The operator's own private log already holds the specific names.
+        DowngradeDetailChannel::PrivateLogFile => {
+            "layer detail was written to your --log-file target"
+        }
+        DowngradeDetailChannel::Stderr => {
+            "the `nono` event source is not registered, so the record went to this console with \
+             layer names withheld; run `nono setup` to register it, or re-run with --log-file \
+             <path>"
+        }
+        DowngradeDetailChannel::None => {
+            "layer detail could not be recorded on any channel — re-run with --log-file <path> \
+             to capture it locally"
+        }
+    };
+
     let t = theme::current();
     eprintln!(
         "  {}",
         theme::fg(
             &format!(
                 "{downgraded_count} confinement layer(s) could not be fully confirmed at \
-                 startup — layer detail is in the Windows Application event log (source \
-                 `nono`, event id 10011); re-run with --log-file <path> to capture it locally"
+                 startup — {where_to_look}"
             ),
             attestation_downgrade_color(downgraded_count, t),
         )
@@ -1456,11 +1482,21 @@ mod tests {
         let dedup_key = "TestLayer";
 
         let cold_start = std::time::Instant::now();
-        print_attestation_downgrade_banner(1, Some(&session_id), dedup_key);
+        print_attestation_downgrade_banner(
+            1,
+            Some(&session_id),
+            dedup_key,
+            crate::exec_strategy::attestation_downgrade_event::DowngradeDetailChannel::EventLog,
+        );
         let cold_elapsed = cold_start.elapsed();
 
         let warm_start = std::time::Instant::now();
-        print_attestation_downgrade_banner(1, Some(&session_id), dedup_key);
+        print_attestation_downgrade_banner(
+            1,
+            Some(&session_id),
+            dedup_key,
+            crate::exec_strategy::attestation_downgrade_event::DowngradeDetailChannel::EventLog,
+        );
         let warm_elapsed = warm_start.elapsed();
 
         eprintln!(
@@ -1488,5 +1524,84 @@ mod tests {
             "warm dedup marker stat took {warm_elapsed:?}, exceeding the generous 100ms \
              sanity bound"
         );
+    }
+
+    /// WR-26 class gate (Phase 117-44): no operator-facing string may name a
+    /// detail destination unconditionally.
+    ///
+    /// Fixing only the two sites WR-26 named would repeat this phase's defining
+    /// failure — three consecutive rounds each closed the enumerated sites and
+    /// not the class. This scans every production string literal in the files
+    /// that render downgrade guidance and requires each mention of the
+    /// Application event log to sit inside a `DowngradeDetailChannel::EventLog`
+    /// arm, i.e. to be reached only when that channel actually received the
+    /// record.
+    ///
+    /// `main.rs` is included because WR-27 is the same class on the abort path:
+    /// there the event log receives NOTHING, so it must never be named as a
+    /// place to look at all.
+    #[test]
+    fn every_operator_detail_pointer_is_conditional() {
+        const OUTPUT_SRC: &str = include_str!("output.rs");
+        const LAUNCH_SRC: &str = include_str!("exec_strategy_windows/launch.rs");
+        const MAIN_SRC: &str = include_str!("main.rs");
+
+        const NEEDLE: &str = "Windows Application event log";
+
+        // Production half only: test modules legitimately assert ON these
+        // strings (117-39's render_error_for_operator tests do exactly that).
+        fn production(src: &str) -> Vec<(usize, &str)> {
+            src.lines()
+                .enumerate()
+                .take_while(|(_, l)| l.trim() != "mod tests {")
+                .filter(|(_, l)| {
+                    let t = l.trim_start();
+                    // Skip doc comments and ordinary comments: prose ABOUT the
+                    // rule is not an instance of it.
+                    !t.starts_with("///") && !t.starts_with("//")
+                })
+                .collect()
+        }
+
+        for (label, src) in [
+            ("output.rs", OUTPUT_SRC),
+            ("exec_strategy_windows/launch.rs", LAUNCH_SRC),
+        ] {
+            let lines: Vec<&str> = src.lines().collect();
+            for (idx, line) in production(src) {
+                if !line.contains(NEEDLE) {
+                    continue;
+                }
+                // Walk back to the nearest DowngradeDetailChannel arm.
+                let arm = lines[..=idx]
+                    .iter()
+                    .rev()
+                    .take(12)
+                    .find_map(|l| {
+                        l.find("DowngradeDetailChannel::")
+                            .map(|i| l[i + "DowngradeDetailChannel::".len()..].to_string())
+                    })
+                    .unwrap_or_default();
+                assert!(
+                    arm.starts_with("EventLog"),
+                    "WR-26: {label}:{} names the Windows Application event log but is not inside                      a `DowngradeDetailChannel::EventLog` arm, so it can be rendered when that                      channel received nothing. Nearest arm found: {arm:?}
+line: {}",
+                    idx + 1,
+                    line.trim()
+                );
+            }
+        }
+
+        // WR-27: on the abort path no record is ever written to the event log,
+        // so main.rs must not name it as a destination at all.
+        for (idx, line) in production(MAIN_SRC) {
+            assert!(
+                !line.contains("see the Windows Application event log"),
+                "WR-27: main.rs:{} points the operator at the Windows Application event log, but                  no record is written there on the abort path — every LayerAttestationFailed                  construction site is a plain `return Err(..)`.
+line: {}",
+                idx + 1,
+                line.trim()
+            );
+        }
     }
 }
