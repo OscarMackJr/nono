@@ -34,16 +34,29 @@
 //!
 //! # Automated vs. manually-verified rows (D-31/D-32)
 //!
-//! Of the 13 `LayerId` rows, this file automates the 3 that are BOTH (a)
+//! WR-07: the counts below were wrong (they read "the 3" and "the remaining
+//! 10", describing a third `#[test]` in this file that does not exist —
+//! Phase 117-44's WR-05 removed the duplicate). The real split is
+//! **2 automated here + 8 `ALSO_AUTOMATED` + 3 `MANUALLY_VERIFIED` = 13**,
+//! and `layer_registry_meta_test.rs::coverage_split_accounts_for_every_layer_id`
+//! now asserts that arithmetic mechanically, so this prose cannot drift
+//! again without failing the build.
+//!
+//! Of the 13 `LayerId` rows, this file automates the 2 that are BOTH (a)
 //! reachable via a plain, ordinary-host `nono run` subprocess, (b) able to
 //! independently demonstrate THEIR OWN row's short-circuit (not merely a
 //! shared call site's short-circuit a different row would also trip), and
 //! (c) checked EARLY — inside `prepare_live_windows_launch`, before the
 //! Windows `Supervised`-strategy session/capability-pipe event loop starts —
 //! which turns out to be load-bearing for reliable external subprocess
-//! testing (see below). The remaining 10 rows are on
-//! `layer_registry_meta_test.rs`'s `MANUALLY_VERIFIED` list, each with its
-//! own named, loud reason (D-31): a live-elevated-service requirement
+//! testing (see below). The remaining 11 rows are split across
+//! `layer_registry_meta_test.rs`'s two lists — 8 on `ALSO_AUTOMATED` (a
+//! real, ordinary-host-runnable in-process test elsewhere in the tree,
+//! existence-checked on every run by `also_automated_entries_are_non_vacuous`)
+//! and 3 on `MANUALLY_VERIFIED` (`DaclSessionSidGrant`,
+//! `MinifilterAbsence`, `BrokerAuthenticodeTrustGate`) — each with its
+//! own named, loud reason (D-31). The reasons below cover rows on BOTH
+//! lists: a live-elevated-service requirement
 //! (`WfpEgressFilters`), structural absence (`MinifilterAbsence`), no shipped
 //! force-unavailable seam for this plan to consume (`FirewallRulesEgress`), a
 //! gate that is inert outside a signed production install

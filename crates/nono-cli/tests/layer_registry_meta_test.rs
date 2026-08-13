@@ -420,6 +420,58 @@ fn also_automated_entries_are_non_vacuous() {
     );
 }
 
+/// Phase 117 review WR-07: the three coverage buckets must account for every
+/// `LayerId`, exactly once, and the arithmetic must be checked by a machine.
+///
+/// `layer_force_unavailable.rs`'s module doc claimed "this file automates the
+/// 3 ..." and "The remaining 10 rows are on `MANUALLY_VERIFIED`". Both
+/// numbers were wrong: only two `#[test] fn force_unavailable_*` functions
+/// exist (117-44's WR-05 removed a duplicate), and the real split is
+/// 2 + 8 `ALSO_AUTOMATED` + 3 `MANUALLY_VERIFIED` = 13. A reader auditing
+/// coverage from that doc went looking for a test that does not exist.
+///
+/// Prose drifts silently; this cannot. It also enforces DISJOINTNESS, which
+/// the arithmetic alone would not: a row on both lists would otherwise let a
+/// genuinely-uncovered row hide inside a correct-looking total.
+#[test]
+fn coverage_split_accounts_for_every_layer_id() {
+    let registry_src = read_layer_registry();
+    let all = extract_all_layer_id_names(&registry_src);
+
+    // Count DEFINITIONS, not mentions: the module doc names the convention
+    // repeatedly, and counting those would inflate the total exactly when the
+    // functions went missing.
+    let force_src = read_force_unavailable_tests();
+    let automated = force_src
+        .lines()
+        .filter(|l| l.trim_start().starts_with("fn force_unavailable_"))
+        .count();
+
+    let also: Vec<&str> = ALSO_AUTOMATED.iter().map(|(n, _, _)| *n).collect();
+    let manual: Vec<&str> = MANUALLY_VERIFIED.iter().map(|(n, _)| *n).collect();
+
+    for name in &also {
+        assert!(
+            !manual.contains(name),
+            "{name} is on BOTH ALSO_AUTOMATED and MANUALLY_VERIFIED. Double-counting a row \
+             lets a genuinely-uncovered row hide inside a correct-looking total (WR-07)."
+        );
+    }
+
+    assert_eq!(
+        automated + also.len() + manual.len(),
+        all.len(),
+        "WR-07: the coverage buckets do not account for every LayerId exactly once. \
+         layer_force_unavailable.rs defines {automated} `fn force_unavailable_*` test(s), \
+         ALSO_AUTOMATED has {}, MANUALLY_VERIFIED has {}, and LayerId::ALL has {}. Update \
+         the buckets AND layer_force_unavailable.rs's module doc, which states this split in \
+         prose.",
+        also.len(),
+        manual.len(),
+        all.len()
+    );
+}
+
 /// Phase 117 review WR-03: locate the SPEC's manual-verification section and
 /// return only the text FROM that heading onward.
 ///
