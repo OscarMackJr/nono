@@ -73,8 +73,22 @@ pub enum NonoRemediation {
     /// failed so the operator/embedder can distinguish which one. Deliberately
     /// generic prose rather than a single CLI flag: there is no one flag that
     /// clears an arbitrary layer's stale state, and the exact remedy is
-    /// layer-specific (e.g. `icacls <path> /setintegritylevel Medium` for
-    /// `MandatoryIntegrityLabel`). Self-healing for the common case (a prior
+    /// layer-specific.
+    ///
+    /// **WR-03: this doc deliberately no longer carries an example command.**
+    /// It used to name `icacls <path> /setintegritylevel Medium` for
+    /// `MandatoryIntegrityLabel`. That command WRITES a Medium mandatory-label
+    /// ACE and re-triggers the identical abort — verified on-host and recorded
+    /// as CR-06 in `nono-cli`'s `render_error_for_operator`, which now
+    /// prescribes REMOVAL via `SetNamedSecurityInfoW(..,
+    /// LABEL_SECURITY_INFORMATION, .., <empty ACL>)` and carries a regression
+    /// assertion forbidding the old text. Two mirrored sites carrying
+    /// contradictory guidance for one condition is precisely the
+    /// classification-consistency failure this phase exists to eliminate, so
+    /// the renderer is the single source: see
+    /// `nono-cli/src/main.rs::render_error_for_operator`.
+    ///
+    /// Self-healing for the common case (a prior
     /// launch's own residue matching this launch's own mode-derived mask) is
     /// handled automatically before this remediation would ever surface.
     ClearStaleLayerResidue {
