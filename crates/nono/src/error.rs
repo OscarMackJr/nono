@@ -502,6 +502,35 @@ impl NonoError {
             // leaving the operator/embedder with no structured remediation —
             // just the raw `reason` string. Thread the real `layer` field
             // through so the caller can tell which layer failed.
+            //
+            // ⚠ WR-14 OPEN (NOT FIXED — grep `WR-14 OPEN`): this returns
+            // `ClearStaleLayerResidue` for EVERY `LayerAttestationFailed`,
+            // including three cause classes with nothing stale to clear:
+            //
+            //   1. `exec_strategy_windows/attestation.rs`'s unrecognized
+            //      required-layer name, where `layer` is an admin's typo and
+            //      not a `LayerId` at all — so the operator is told to search
+            //      their log for a name that appears nowhere;
+            //   2. each `layer-fault-injection` seam (`restricted_token.rs`,
+            //      `labels_guard.rs`, `dacl_guard.rs`);
+            //   3. `crate::attestation::probe_in_job`'s null-job refusal,
+            //      which is a programming error, not operator-actionable.
+            //
+            // All three are UNREACHABLE in a shipped build today: (2) is
+            // compiled out of default builds, (3) requires a null job handle
+            // no production caller passes, and (1) cannot fire while both
+            // tighten inputs at the launch gate are hardcoded empty slices
+            // (WR-12). (1) becomes reachable the moment that plumbing lands,
+            // so THIS ARM MUST BE FIXED IN THE SAME CHANGE.
+            //
+            // The fix needs a discriminator the library can see — a
+            // `kind: LayerAttestationFailureKind` field on the variant, plus
+            // a `NonoRemediation::CheckRequiredLayersPolicy` for case (1) and
+            // `None` for case (2) — which is a public-API shape change
+            // rippling through ~20 construction sites, ~15 destructuring test
+            // patterns and the C FFI. Deliberately not bundled into a review
+            // fix pass; `nono-cli`'s `render_error_for_operator` `_` arm must
+            // NOT be the place that decides this.
             Self::LayerAttestationFailed { layer, .. } => {
                 Some(NonoRemediation::ClearStaleLayerResidue {
                     layer: layer.clone(),
