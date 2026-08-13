@@ -1657,6 +1657,27 @@ mod tests {
     /// `main.rs` is included because WR-27 is the same class on the abort path:
     /// there the event log receives NOTHING, so it must never be named as a
     /// place to look at all.
+    ///
+    /// # CR-01: why `production` looks like this
+    ///
+    /// The first version of this gate covered **zero** sites in `launch.rs`,
+    /// for two independent reasons, and so could relabel but never deny:
+    ///
+    /// 1. It ended the production half at `l.trim() != "mod tests {"`.
+    ///    `launch.rs` has no such line — its twelve test modules are named
+    ///    `attestation_gate_tests`, `job_hardening_tests`, ... — so the scan
+    ///    silently ran over the whole 5862-line file, the opposite of the
+    ///    stated invariant. `output.rs`'s first test module is not named
+    ///    `tests` either. The marker is now a top-level `#[cfg(test)]` line,
+    ///    which is asserted to EXIST in every scanned file.
+    /// 2. The needle was matched against raw source lines, so a `\`-continued
+    ///    literal that straddles two lines — or, as WR-01 found, one whose
+    ///    continuation had collapsed into a run of literal spaces — was
+    ///    invisible. Lines are now continuation-joined and
+    ///    whitespace-normalised before matching.
+    ///
+    /// A `hits` counter closes the loop: a gate of this shape must never be
+    /// allowed to pass by covering nothing.
     #[test]
     fn every_operator_detail_pointer_is_conditional() {
         const OUTPUT_SRC: &str = include_str!("output.rs");
@@ -1665,30 +1686,65 @@ mod tests {
 
         const NEEDLE: &str = "Windows Application event log";
 
-        // Production half only: test modules legitimately assert ON these
-        // strings (117-39's render_error_for_operator tests do exactly that).
-        fn production(src: &str) -> Vec<(usize, &str)> {
-            src.lines()
-                .enumerate()
-                .take_while(|(_, l)| l.trim() != "mod tests {")
-                .filter(|(_, l)| {
-                    let t = l.trim_start();
-                    // Skip doc comments and ordinary comments: prose ABOUT the
-                    // rule is not an instance of it.
-                    !t.starts_with("///") && !t.starts_with("//")
-                })
-                .collect()
+        /// Production half of `src` as `(first_line_index, normalised_text)`.
+        ///
+        /// Ends at the first *top-level* `#[cfg(test)]` — test modules
+        /// legitimately assert ON these strings (117-39's
+        /// `render_error_for_operator` tests do exactly that). Panics when no
+        /// such marker exists rather than degrading to "scan everything",
+        /// which is the fail-secure direction for a drift gate: a missing
+        /// structural marker is a defect in the gate, not a licence to guess.
+        fn production(label: &str, src: &str) -> Vec<(usize, String)> {
+            let lines: Vec<&str> = src.lines().collect();
+            let end = lines
+                .iter()
+                .position(|l| *l == "#[cfg(test)]")
+                .unwrap_or_else(|| {
+                    panic!(
+                        "CR-01: {label} has no top-level `#[cfg(test)]` line, so this gate cannot \
+                     tell production text from test assertions. Add one, or teach `production` \
+                     a marker that does exist in {label} — do NOT let it fall back to scanning \
+                     the whole file (that is the exact defect CR-01 recorded)."
+                    )
+                });
+
+            let mut out: Vec<(usize, String)> = Vec::new();
+            let mut idx = 0usize;
+            while idx < end {
+                if lines[idx].trim_start().starts_with("//") {
+                    // Prose ABOUT the rule is not an instance of it.
+                    idx += 1;
+                    continue;
+                }
+                // Rejoin `\`-continued string literals so a needle split
+                // across source lines is still seen.
+                let start = idx;
+                let mut merged = lines[idx].to_string();
+                while merged.trim_end().ends_with('\\') && idx + 1 < end {
+                    merged.truncate(merged.trim_end().len() - 1);
+                    idx += 1;
+                    merged.push_str(lines[idx]);
+                }
+                out.push((
+                    start,
+                    merged.split_whitespace().collect::<Vec<_>>().join(" "),
+                ));
+                idx += 1;
+            }
+            out
         }
 
+        let mut hits = 0usize;
         for (label, src) in [
             ("output.rs", OUTPUT_SRC),
             ("exec_strategy_windows/launch.rs", LAUNCH_SRC),
         ] {
             let lines: Vec<&str> = src.lines().collect();
-            for (idx, line) in production(src) {
+            for (idx, line) in production(label, src) {
                 if !line.contains(NEEDLE) {
                     continue;
                 }
+                hits += 1;
                 // Walk back to the nearest DowngradeDetailChannel arm.
                 let arm = lines[..=idx]
                     .iter()
@@ -1711,9 +1767,22 @@ line: {}",
             }
         }
 
+        // Non-vacuity (CR-01). The gate must cover at least two known sites:
+        // `output.rs`'s downgrade-banner EventLog arm and `launch.rs`'s
+        // `downgrade_detail_pointer` EventLog arm. Anything lower means the
+        // needle has drifted out of the scanned production text again, which
+        // is indistinguishable from "the class is clean" without this check.
+        assert!(
+            hits >= 2,
+            "CR-01: the WR-26 class gate matched {hits} site(s); it must cover at least \
+             output.rs's downgrade-banner EventLog arm and launch.rs's \
+             downgrade_detail_pointer EventLog arm. A low count means the needle no longer \
+             appears in the scanned production text, so the gate can relabel but never deny."
+        );
+
         // WR-27: on the abort path no record is ever written to the event log,
         // so main.rs must not name it as a destination at all.
-        for (idx, line) in production(MAIN_SRC) {
+        for (idx, line) in production("main.rs", MAIN_SRC) {
             assert!(
                 !line.contains("see the Windows Application event log"),
                 "WR-27: main.rs:{} points the operator at the Windows Application event log, \
