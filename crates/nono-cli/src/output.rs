@@ -237,15 +237,38 @@ fn attestation_downgrade_marker_path(
 /// Allow-list, not deny-list: ASCII alphanumerics plus `-` and `_`. That
 /// covers every id `nono` generates (uuid-simple / hex session tokens) and
 /// structurally excludes separators, `..`, drive prefixes, ADS colons,
-/// reserved-device names with extensions, trailing dots/spaces, and every
-/// non-ASCII homoglyph trick — none of which can appear at all.
+/// trailing dots/spaces, and every non-ASCII homoglyph trick — none of which
+/// can appear at all.
+///
+/// # WR-11: bare reserved device names need their own exclusion
+///
+/// The allow-list does NOT exclude them: `CON`, `PRN`, `AUX`, `NUL`,
+/// `COM0`..`COM9` and `LPT0`..`LPT9` are pure ASCII alphanumerics and passed.
+/// Today's impact would be benign in direction (the later `create_dir_all`
+/// fails, no marker is written, and the banner re-prints — the fail-safe
+/// side), but the doc asserted a guarantee the predicate did not provide,
+/// which is how the next consumer of this helper gets bitten. Rejecting them
+/// here keeps the doc and the code saying the same thing, and rejection is
+/// itself the safe direction: `None` means "no dedup marker", i.e. the
+/// banner prints MORE, never less.
+///
+/// `COM0`/`LPT0` are included: they are reserved in the Win32 namespace even
+/// though the `COM1`..`COM9` form is the one usually listed. Comparison is
+/// ASCII-case-insensitive because the Win32 device namespace is.
 #[cfg(target_os = "windows")]
 fn session_id_is_safe_path_component(session_id: &str) -> bool {
+    const RESERVED: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+        "COM8", "COM9", "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8",
+        "LPT9",
+    ];
+
     !session_id.is_empty()
         && session_id.len() <= 128
         && session_id
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && !RESERVED.iter().any(|r| session_id.eq_ignore_ascii_case(r))
 }
 
 /// Color for [`print_attestation_downgrade_banner`]'s line — yellow/warning
@@ -1313,6 +1336,46 @@ mod attestation_marker_path_tests {
             assert!(
                 attestation_downgrade_marker_path(hostile, "k").is_none(),
                 "{hostile:?} must yield no marker path (always-print), never an escaped one"
+            );
+        }
+    }
+
+    /// WR-11: bare Windows reserved device names are pure ASCII
+    /// alphanumerics, so the allow-list alone accepted every one of them
+    /// while the doc claimed they were "structurally excluded". Checks the
+    /// whole class (all 24 names, both cases) rather than the one or two a
+    /// hand-written list would remember.
+    #[test]
+    fn rejects_bare_reserved_device_names() {
+        for base in [
+            "CON", "PRN", "AUX", "NUL", "COM0", "COM1", "COM5", "COM9", "LPT0", "LPT1", "LPT5",
+            "LPT9",
+        ] {
+            for variant in [base.to_string(), base.to_lowercase(), {
+                let mut s = base.to_lowercase();
+                s.replace_range(0..1, &base[0..1]);
+                s
+            }] {
+                assert!(
+                    !session_id_is_safe_path_component(&variant),
+                    "{variant:?} is a Win32 reserved device name and must be rejected as a \
+                     session id (WR-11); the Win32 device namespace is case-insensitive"
+                );
+                assert!(
+                    attestation_downgrade_marker_path(&variant, "k").is_none(),
+                    "{variant:?} must yield no marker path (always-print)"
+                );
+            }
+        }
+
+        // Control: reserved-name PREFIXES and suffixed forms are ordinary
+        // components and must still be accepted, or the exclusion has
+        // over-reached into rejecting legitimate ids.
+        for benign in ["CONSOLE", "NULL", "COM10", "LPT10", "con-1", "aux_x"] {
+            assert!(
+                session_id_is_safe_path_component(benign),
+                "{benign:?} is not a reserved device name and must still be accepted — an \
+                 over-broad exclusion silently disables dedup for legitimate sessions"
             );
         }
     }
