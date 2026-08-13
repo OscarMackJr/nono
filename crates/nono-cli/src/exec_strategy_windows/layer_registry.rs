@@ -1540,16 +1540,43 @@ mod tests {
         );
     }
 
+    /// WR-05: assert the convention the rows actually use, and be
+    /// non-vacuous about it.
+    ///
+    /// This was `every_call_site_string_names_a_line_number`, asserting
+    /// `site.contains(".rs:")`. NR3-08 converted every citation to
+    /// `"file.rs::Symbol"` form, which satisfies `.rs:` — so a test named
+    /// "names a line number" verified only that the substring `.rs:` existed,
+    /// and verified nothing at all for the two rows with `call_sites: &[]`
+    /// (`DaclSessionSidGrant`, `MinifilterAbsence`). It provided false
+    /// reassurance next to
+    /// `layer_registry_selfcheck.rs::registry_call_sites_exist`, which is the
+    /// real content check (it resolves each symbol in the cited file). This
+    /// one is kept, renamed, and narrowed to the one thing it can check
+    /// in-crate that the integration test does not: the citation SHAPE.
     #[test]
-    fn every_call_site_string_names_a_line_number() {
+    fn every_call_site_string_is_symbol_form() {
+        let mut checked = 0usize;
         for entry in all_entries() {
             for site in entry.call_sites {
                 assert!(
-                    site.contains(".rs:"),
-                    "{:?}'s call_sites entry {site:?} does not look like a \"file:line\" citation",
+                    site.contains(".rs::"),
+                    "{:?}'s call_sites entry {site:?} is not \"file.rs::Symbol\" form. Raw \
+                     \"file.rs:line\" citations drift silently (NR3-08: they drifted ~145 \
+                     lines across one fix pass, and 15 of 15 sampled pointed at unrelated \
+                     code); the symbol form is line-drift-immune and is what \
+                     registry_call_sites_exist resolves by file CONTENT.",
                     entry.id
                 );
+                checked += 1;
             }
         }
+        assert!(
+            checked >= 20,
+            "WR-05: only {checked} call site(s) checked — the loop went vacuous. Two rows \
+             legitimately carry `call_sites: &[]` (DaclSessionSidGrant, MinifilterAbsence); a \
+             count this low means the other rows lost their citations, which is the drift \
+             this test exists to catch."
+        );
     }
 }
