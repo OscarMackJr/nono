@@ -920,6 +920,30 @@ const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
         // the right process: `nono-shell-broker` re-reads its own
         // AppContainer grandchild's token RID and requires it to be
         // <= SECURITY_MANDATORY_LOW_RID before resuming it (CR-03).
+        //
+        // ⚠ WR-10 OPEN (NOT FIXED — grep `WR-10 OPEN`; recorded in the SPEC's
+        // D-15 "Contract vs. code discrepancies" ledger): that broker
+        // observation is filed under THIS `LayerId`, so one name covers two
+        // different kernel objects. On `(DirectCli, ..)` the row means the
+        // mandatory-label ACE on the compiled filesystem-policy paths (what
+        // this row's own doc defines, and what `ConfiguredOnly` describes);
+        // on `(Broker, None)` it means the grandchild's TOKEN integrity RID,
+        // which says nothing about whether any file carries the contracted
+        // ACE. RF-01 removed exactly this substitution from the CLI core on
+        // the grounds that it "would not attest what this row claims", and
+        // the broker arm reinstated it under the same name. So
+        // `required_layers_for_broker` and `BROKER_ATTESTABLE_LAYERS` agree
+        // on a NAME while disagreeing on the CLAIM, and a broker-arm
+        // `MandatoryIntegrityLabel: Confirmed` does not mean what this row
+        // says it means.
+        //
+        // The clean fix is a split (`LayerId::ChildTokenIntegrityLevel` with
+        // its own `(Broker, None)` expectancy and `LiveTokenOrJobQuery`
+        // probe; drop this row's `(Broker, None)` cell). Deferred because
+        // `NONO_BROKER_REQUIRED_LAYERS` is a cross-binary wire contract and
+        // the broker refuses to resume on any name it does not recognise
+        // (RF-02) — renaming it is a lockstep two-binary change, not a
+        // registry edit, and a mixed-version pair fails closed (no launch).
         probe: ProbeKind::ConfiguredOnly,
     },
     LayerRegistryEntry {
