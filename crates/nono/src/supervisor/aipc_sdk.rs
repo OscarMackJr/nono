@@ -697,22 +697,58 @@ mod tests {
         };
         use std::thread;
 
+        /// Serializes every test that mutates the session-token env vars.
+        ///
+        /// Save/restore alone is NOT sufficient under `cargo test`'s default
+        /// parallelism: nine tests in this module call
+        /// [`with_test_session_token`] with overlapping values
+        /// (`testtoken12345678` vs `testtoken12345678abc`,
+        /// `smokesdktoken1234`), so without a lock one test reads another's
+        /// token. Observed as
+        /// `left: "testtoken12345678" / right: "testtoken12345678abc"` in
+        /// `helper_stamps_session_token_from_env`.
+        ///
+        /// Mirrors `nono-cli`'s `lock_log_target_is_private_test()` idiom.
+        static SESSION_TOKEN_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
         /// Save/restore env per CLAUDE.md "Environment variables in tests"
-        /// guidance — keep the mutated window as short as possible.
+        /// guidance — keep the mutated window as short as possible, and
+        /// serialize it so the window cannot overlap another test's.
         pub(super) fn with_test_session_token<F: FnOnce()>(token: &str, f: F) {
-            let prev_token = std::env::var("NONO_SESSION_TOKEN").ok();
-            let prev_session = std::env::var("NONO_SESSION_ID").ok();
+            // Poison-tolerant: a panicking test must not cascade into
+            // unrelated failures in every test that takes this lock afterwards.
+            let _guard = SESSION_TOKEN_ENV_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+            /// Restores both vars on unwind as well as on the normal path. The
+            /// previous code restored only on the normal path, so a panic
+            /// inside `f()` leaked the test token to any later reader.
+            struct RestoreEnv {
+                token: Option<String>,
+                session: Option<String>,
+            }
+            impl Drop for RestoreEnv {
+                fn drop(&mut self) {
+                    match &self.token {
+                        Some(v) => std::env::set_var("NONO_SESSION_TOKEN", v),
+                        None => std::env::remove_var("NONO_SESSION_TOKEN"),
+                    }
+                    match &self.session {
+                        Some(v) => std::env::set_var("NONO_SESSION_ID", v),
+                        None => std::env::remove_var("NONO_SESSION_ID"),
+                    }
+                }
+            }
+
+            let _restore = RestoreEnv {
+                token: std::env::var("NONO_SESSION_TOKEN").ok(),
+                session: std::env::var("NONO_SESSION_ID").ok(),
+            };
+
             std::env::set_var("NONO_SESSION_TOKEN", token);
             std::env::set_var("NONO_SESSION_ID", "sdk-test-session");
             f();
-            match prev_token {
-                Some(v) => std::env::set_var("NONO_SESSION_TOKEN", v),
-                None => std::env::remove_var("NONO_SESSION_TOKEN"),
-            }
-            match prev_session {
-                Some(v) => std::env::set_var("NONO_SESSION_ID", v),
-                None => std::env::remove_var("NONO_SESSION_ID"),
-            }
         }
 
         #[test]

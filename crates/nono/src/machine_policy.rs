@@ -1331,6 +1331,24 @@ mod tests {
 
     // ── Windows-only integration tests ────────────────────────────────────────
 
+    /// Serializes every test that creates or deletes keys beneath the shared
+    /// `nono-test` parent under `HKCU\SOFTWARE`.
+    ///
+    /// The four tests below use DISJOINT child subkeys, so they do not collide
+    /// there — but each one also deletes the shared PARENT on teardown
+    /// (`delete_subkey` on `SOFTWARE\nono-test`). Under `cargo test`'s default
+    /// parallelism one test's teardown marks that parent for deletion while
+    /// another is still operating beneath it, yielding
+    /// `Os { code: 1018, "Illegal operation attempted on a registry key that
+    /// has been marked for deletion." }` — observed in the round-4 regression
+    /// run, see `.planning/.../117-REGRESSION-ROUND4.md`.
+    ///
+    /// Poison-tolerant, mirroring `nono-cli`'s
+    /// `lock_log_target_is_private_test()` idiom: a panicking test must not
+    /// cascade into unrelated failures for every later lock taker.
+    #[cfg(target_os = "windows")]
+    static NONO_TEST_REGKEY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// Seed a temp key under HKCU (writable without elevation) and verify
     /// the list-subkey enumerator returns the seeded REG_SZ values.
     ///
@@ -1338,6 +1356,9 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_list_subkey_reads_reg_sz_values() {
+        let _regkey_guard = NONO_TEST_REGKEY_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         use winreg::enums::{HKEY_CURRENT_USER, KEY_ALL_ACCESS, KEY_WOW64_64KEY};
         use winreg::RegKey;
 
@@ -1387,6 +1408,9 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_wrong_reg_type_returns_policy_load_failed() {
+        let _regkey_guard = NONO_TEST_REGKEY_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         use winreg::enums::{HKEY_CURRENT_USER, KEY_ALL_ACCESS, KEY_WOW64_64KEY};
         use winreg::{RegKey, RegValue};
 
@@ -1467,6 +1491,9 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_sentinel_only_key_is_unconfigured() {
+        let _regkey_guard = NONO_TEST_REGKEY_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         use winreg::enums::{HKEY_CURRENT_USER, KEY_ALL_ACCESS, KEY_WOW64_64KEY};
         use winreg::RegKey;
 
@@ -1505,6 +1532,9 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_configured_key_is_not_unconfigured() {
+        let _regkey_guard = NONO_TEST_REGKEY_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         use winreg::enums::{HKEY_CURRENT_USER, KEY_ALL_ACCESS, KEY_WOW64_64KEY};
         use winreg::RegKey;
 
