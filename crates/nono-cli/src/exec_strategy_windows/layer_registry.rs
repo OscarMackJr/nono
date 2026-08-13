@@ -467,7 +467,22 @@ pub(crate) struct AppliedLayers {
     /// install; `None` when a different backend (or none) was selected, so
     /// the row is not part of this launch's composition.
     pub firewall_rules_egress: Option<bool>,
-    /// Same tri-state shape for the WFP backend.
+    /// The WFP backend's COMPOSITION report — `Some(true)` when it was the
+    /// backend this launch selected, `None` when it was not.
+    ///
+    /// WR-13: this field is **two-valued in practice, not tri-state**, and
+    /// the doc used to claim otherwise ("same tri-state shape"). Its producer
+    /// `mod.rs::wfp_composition_report` cannot return `Some(false)`, so
+    /// `status(WfpEgressFilters)` never yields `LayerApplication::NotApplied`
+    /// and `from_tristate`'s `Some(false)` arm is dead for this row. That is
+    /// deliberate — see `wfp_composition_report`'s doc for why re-folding the
+    /// filter count in here would undo NR-04's split — and the row's deny
+    /// direction is carried by `AttestationInput::wfp_preconfirmed`
+    /// (`launch.rs::derive_wfp_preconfirmed`), not by this field.
+    ///
+    /// Advertising a negative the type cannot express is the NR-04/NR-05
+    /// defect class, which is why it is spelled out here rather than left to
+    /// be rediscovered.
     pub wfp_egress_filters: Option<bool>,
     /// `Some(true)` when the Authenticode comparison ran and passed;
     /// `Some(false)` when it should have run and did not; `None` on a

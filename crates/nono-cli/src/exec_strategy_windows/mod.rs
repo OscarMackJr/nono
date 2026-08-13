@@ -475,6 +475,24 @@ fn firewall_rules_report(guard: Option<&NetworkEnforcementGuard>) -> Option<bool
 /// discriminant, so `(applied = Some(_), preconfirmed = false)` — "the
 /// backend WAS selected and did not confirm", the row's whole deny direction
 /// — was unreachable outside a hand-written test value.
+///
+/// # WR-13: this report is two-valued, and that is deliberate
+///
+/// It returns only `Some(true)` (the WFP backend IS this launch's
+/// composition) and `None` (it is not). It CANNOT return `Some(false)`, so
+/// `AppliedLayers::status(WfpEgressFilters)` never yields
+/// `LayerApplication::NotApplied` and `from_tristate`'s `Some(false)` arm is
+/// unreachable for this row. That is not an oversight: "was this backend
+/// selected" is a genuinely binary question, and folding
+/// `installed_filter_count > 0` back in here would re-collapse composition
+/// and evidence into one signal — precisely the single-source-of-evidence
+/// defect NR-04 split apart, and the reason the deny direction was
+/// unreachable in the first place.
+///
+/// The row's deny direction lives entirely in `derive_wfp_preconfirmed` and
+/// is exercised end-to-end against a real guard value by
+/// `launch.rs::wfp_row_can_be_selected_and_unconfirmed_from_a_real_guard_value`
+/// (composition `Some(true)`, evidence `false`, gate aborts).
 fn wfp_composition_report(guard: Option<&NetworkEnforcementGuard>) -> Option<bool> {
     match guard {
         Some(NetworkEnforcementGuard::WfpServiceManaged { .. }) => Some(true),
