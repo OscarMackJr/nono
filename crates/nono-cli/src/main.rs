@@ -415,11 +415,35 @@ mod tests {
             lines[1]
         );
         // WR-27: the event log must not be named as the place to look.
+        //
+        // WR-06: assert the CLASS, not one verb. The previous predicate was
+        // `!contains("see the Windows Application event log")`, which any
+        // other verb ("check the ...", "in the ...") evaded — a guard that
+        // could relabel but never deny. The legitimate mention here is an
+        // explicit NEGATION, so require the negation rather than narrowing
+        // the needle. Kept in the same shape as `output.rs`'s source-text
+        // mirror of this rule, so the two cannot state contradictory rules
+        // for one condition.
+        const EVENT_LOG: &str = "Windows Application event log";
+        let normalised = lines[1].split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(
-            !lines[1].contains("see the Windows Application event log"),
-            "no event-log record exists on the abort path (WR-27): {}",
+            normalised.contains(EVENT_LOG),
+            "WR-06 non-vacuity: the remediation no longer mentions the event log at all, so \
+             the negation check below verifies nothing. The `_` arm is expected to tell the \
+             operator explicitly NOT to look there; restore it, or retire this guard \
+             deliberately: {}",
             lines[1]
         );
+        for (pos, _) in normalised.match_indices(EVENT_LOG) {
+            let preceding = &normalised[..pos];
+            assert!(
+                preceding.ends_with("No ") || preceding.ends_with("no "),
+                "WR-27/WR-06: the remediation mentions the Windows Application event log \
+                 other than as an explicit negation, but no record is written there on the \
+                 abort path: {}",
+                lines[1]
+            );
+        }
     }
 
     /// Any other error variant renders unchanged from today — only the

@@ -1686,31 +1686,63 @@ mod tests {
 
         const NEEDLE: &str = "Windows Application event log";
 
+        /// Is `t` (an already-trimmed line) a `cfg`-test attribute?
+        ///
+        /// Covers `#[cfg(test)]` and `#[cfg(all(test, target_os = "..."))]`,
+        /// both of which gate test modules in the scanned files.
+        fn is_cfg_test_attr(t: &str) -> bool {
+            t.starts_with("#[cfg(") && (t.contains("test)") || t.contains("test,"))
+        }
+
         /// Production half of `src` as `(first_line_index, normalised_text)`.
         ///
-        /// Ends at the first *top-level* `#[cfg(test)]` — test modules
-        /// legitimately assert ON these strings (117-39's
-        /// `render_error_for_operator` tests do exactly that). Panics when no
-        /// such marker exists rather than degrading to "scan everything",
-        /// which is the fail-secure direction for a drift gate: a missing
-        /// structural marker is a defect in the gate, not a licence to guess.
-        fn production(label: &str, src: &str) -> Vec<(usize, String)> {
+        /// Excludes `#[cfg(test)]`-gated INLINE modules by brace region — test
+        /// modules legitimately assert ON these strings (117-39's
+        /// `render_error_for_operator` tests do exactly that).
+        ///
+        /// The obvious "truncate at the first `#[cfg(test)]`" shortcut is
+        /// wrong twice over, and both ways were live in this file:
+        /// `main.rs:155` is `#[cfg(test)] mod test_env;` — a bare *declaration*
+        /// 130 lines above the code this gate must see, so truncating there
+        /// silently reduced the `main.rs` scan to nothing; and `output.rs`'s
+        /// first test module is gated on `#[cfg(all(test, target_os =
+        /// "windows"))]`, which an exact `#[cfg(test)]` match does not see at
+        /// all. A brace-delimited skip has neither failure mode.
+        ///
+        /// The caller asserts non-vacuity per file; that is what caught the
+        /// truncation above, and it is the only thing that can.
+        fn production(_label: &str, src: &str) -> Vec<(usize, String)> {
             let lines: Vec<&str> = src.lines().collect();
-            let end = lines
-                .iter()
-                .position(|l| *l == "#[cfg(test)]")
-                .unwrap_or_else(|| {
-                    panic!(
-                        "CR-01: {label} has no top-level `#[cfg(test)]` line, so this gate cannot \
-                     tell production text from test assertions. Add one, or teach `production` \
-                     a marker that does exist in {label} — do NOT let it fall back to scanning \
-                     the whole file (that is the exact defect CR-01 recorded)."
-                    )
-                });
 
             let mut out: Vec<(usize, String)> = Vec::new();
             let mut idx = 0usize;
-            while idx < end {
+            let mut pending_test_attr = false;
+            while idx < lines.len() {
+                let t = lines[idx].trim();
+
+                if is_cfg_test_attr(t) {
+                    pending_test_attr = true;
+                    idx += 1;
+                    continue;
+                }
+                if pending_test_attr {
+                    pending_test_attr = false;
+                    // An INLINE `mod foo {` opens a test region; a bare
+                    // `mod foo;` declaration (main.rs:155) opens nothing.
+                    if (lines[idx].starts_with("mod ") || lines[idx].starts_with("pub mod "))
+                        && lines[idx].trim_end().ends_with('{')
+                    {
+                        idx += 1;
+                        // Every test module in the scanned files is top level,
+                        // so its closing brace is a lone `}` at column 0.
+                        while idx < lines.len() && lines[idx] != "}" {
+                            idx += 1;
+                        }
+                        idx += 1;
+                        continue;
+                    }
+                }
+
                 if lines[idx].trim_start().starts_with("//") {
                     // Prose ABOUT the rule is not an instance of it.
                     idx += 1;
@@ -1720,7 +1752,7 @@ mod tests {
                 // across source lines is still seen.
                 let start = idx;
                 let mut merged = lines[idx].to_string();
-                while merged.trim_end().ends_with('\\') && idx + 1 < end {
+                while merged.trim_end().ends_with('\\') && idx + 1 < lines.len() {
                     merged.truncate(merged.trim_end().len() - 1);
                     idx += 1;
                     merged.push_str(lines[idx]);
@@ -1782,16 +1814,37 @@ line: {}",
 
         // WR-27: on the abort path no record is ever written to the event log,
         // so main.rs must not name it as a destination at all.
+        //
+        // WR-06: the predicate is the CLASS — "mentions the event log" — not
+        // one verb. The previous needle was the literal `see the Windows
+        // Application event log`, which `check the ...`, `in the ...`, `look
+        // in the ...` or any other phrasing evaded, so the guard could
+        // relabel but never deny. `main.rs`'s one legitimate mention is a
+        // NEGATION ("No Windows Application event log record is written on
+        // this path"); that is excluded by requiring the negation, not by
+        // narrowing the needle.
+        let mut main_mentions = 0usize;
         for (idx, line) in production("main.rs", MAIN_SRC) {
-            assert!(
-                !line.contains("see the Windows Application event log"),
-                "WR-27: main.rs:{} points the operator at the Windows Application event log, \
-                 but no record is written there on the abort path — every \
-                 LayerAttestationFailed construction site is a plain `return Err(..)`.
-line: {}",
-                idx + 1,
-                line.trim()
-            );
+            for (pos, _) in line.match_indices(NEEDLE) {
+                main_mentions += 1;
+                let preceding = &line[..pos];
+                assert!(
+                    preceding.ends_with("No ") || preceding.ends_with("no "),
+                    "WR-27/WR-06: main.rs:{} mentions the Windows Application event log \
+                     other than as an explicit negation. No record is written there on the \
+                     abort path — every LayerAttestationFailed construction site is a plain \
+                     `return Err(..)` — so it must never be named as a place to look.
+line: {line}",
+                    idx + 1,
+                );
+            }
         }
+        assert!(
+            main_mentions >= 1,
+            "WR-06 non-vacuity: main.rs no longer mentions the Windows Application event log \
+             at all, so this guard now checks nothing. `render_error_for_operator`'s `_` arm \
+             is expected to carry the explicit negation that tells the operator NOT to look \
+             there; restore it, or retire this guard deliberately."
+        );
     }
 }
