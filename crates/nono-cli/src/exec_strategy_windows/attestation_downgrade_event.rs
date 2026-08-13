@@ -284,7 +284,8 @@ mod tests {
         assert_eq!(
             channel,
             DowngradeDetailChannel::None,
-            "WR-26: with telemetry disabled nothing is written to any channel, so the operator              must not be pointed at the Application event log"
+            "WR-26: with telemetry disabled nothing is written to any channel, so the operator \
+             must not be pointed at the Application event log"
         );
     }
 
@@ -322,7 +323,8 @@ mod tests {
                 channel,
                 DowngradeDetailChannel::EventLog | DowngradeDetailChannel::Stderr
             ),
-            "an enabled emission lands either in the Application Event Log or, when the source              is unregistered, in the redacted stderr fallback — got {channel:?}"
+            "an enabled emission lands either in the Application Event Log or, when the source \
+             is unregistered, in the redacted stderr fallback — got {channel:?}"
         );
     }
 

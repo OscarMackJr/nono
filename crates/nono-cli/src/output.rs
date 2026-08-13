@@ -1526,6 +1526,123 @@ mod tests {
         );
     }
 
+    /// Every `.rs` file on the D-27 downgrade surface, as
+    /// `(label, source)` — the files whose string literals reach an operator
+    /// (or assert on text that does).
+    const DOWNGRADE_SURFACE: &[(&str, &str)] = &[
+        ("output.rs", include_str!("output.rs")),
+        (
+            "exec_strategy_windows/launch.rs",
+            include_str!("exec_strategy_windows/launch.rs"),
+        ),
+        (
+            "exec_strategy_windows/attestation.rs",
+            include_str!("exec_strategy_windows/attestation.rs"),
+        ),
+        (
+            "exec_strategy_windows/attestation_downgrade_event.rs",
+            include_str!("exec_strategy_windows/attestation_downgrade_event.rs"),
+        ),
+        ("main.rs", include_str!("main.rs")),
+    ];
+
+    /// Extract the *contents* of every double-quoted string literal on `line`.
+    ///
+    /// Deliberately naive (no raw-string or char-literal handling): the files
+    /// it is pointed at contain neither on the lines that matter, and a
+    /// false positive here fails the build loudly rather than silently
+    /// passing — the correct direction for a gate whose whole purpose is to
+    /// stop a silent corruption.
+    fn string_literals(line: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut cur = String::new();
+        let mut in_string = false;
+        let mut escaped = false;
+        for c in line.chars() {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                    cur.push(c);
+                } else if c == '\\' {
+                    escaped = true;
+                } else if c == '"' {
+                    in_string = false;
+                    out.push(std::mem::take(&mut cur));
+                } else {
+                    cur.push(c);
+                }
+            } else if c == '"' {
+                in_string = true;
+            }
+        }
+        out
+    }
+
+    /// WR-01 class gate: no string literal on the D-27 downgrade surface may
+    /// carry a *collapsed line continuation*.
+    ///
+    /// A bad automated edit replaced `\`-continuations with the literal
+    /// newline plus its indentation, embedding runs of 14-22 spaces
+    /// mid-sentence in operator-facing text. That is not cosmetic: it is the
+    /// mechanism that made `every_operator_detail_pointer_is_conditional`
+    /// (CR-01) cover zero sites in `launch.rs`, because the needle it
+    /// searches for had been split by such a run. Fixing the twelve literals
+    /// without this gate would leave the next automated edit free to
+    /// reintroduce them — and the class gate above silently vacuous again.
+    ///
+    /// The predicate is "a run of 4+ spaces with a non-space character before
+    /// it", which admits leading-indentation literals (`"       {}"`, of
+    /// which `output.rs` has several by design) and rejects mid-sentence
+    /// runs.
+    #[test]
+    fn no_downgrade_surface_literal_has_a_collapsed_continuation() {
+        let mut checked = 0usize;
+        let mut offenders: Vec<String> = Vec::new();
+        for (label, src) in DOWNGRADE_SURFACE {
+            for (idx, line) in src.lines().enumerate() {
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                for lit in string_literals(line) {
+                    checked += 1;
+                    let bytes: Vec<char> = lit.chars().collect();
+                    let mut i = 0usize;
+                    while i < bytes.len() {
+                        if bytes[i] == ' ' {
+                            let start = i;
+                            while i < bytes.len() && bytes[i] == ' ' {
+                                i += 1;
+                            }
+                            if i - start >= 4 && start > 0 && bytes[start - 1] != ' ' {
+                                offenders.push(format!(
+                                    "{label}:{}: {} consecutive spaces mid-literal",
+                                    idx + 1,
+                                    i - start
+                                ));
+                                break;
+                            }
+                        } else {
+                            i += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "WR-01: {} string literal(s) on the D-27 downgrade surface carry a collapsed \
+             line continuation (a `\\`-continuation replaced by literal spaces). These render \
+             verbatim to the operator and can split a class gate's needle:\n  {}",
+            offenders.len(),
+            offenders.join("\n  ")
+        );
+        assert!(
+            checked >= 500,
+            "WR-01: only {checked} string literal(s) scanned — the extractor went vacuous \
+             (a gate that scans nothing is the defect this phase exists to eliminate)"
+        );
+    }
+
     /// WR-26 class gate (Phase 117-44): no operator-facing string may name a
     /// detail destination unconditionally.
     ///
@@ -1584,7 +1701,9 @@ mod tests {
                     .unwrap_or_default();
                 assert!(
                     arm.starts_with("EventLog"),
-                    "WR-26: {label}:{} names the Windows Application event log but is not inside                      a `DowngradeDetailChannel::EventLog` arm, so it can be rendered when that                      channel received nothing. Nearest arm found: {arm:?}
+                    "WR-26: {label}:{} names the Windows Application event log but is not \
+                     inside a `DowngradeDetailChannel::EventLog` arm, so it can be rendered \
+                     when that channel received nothing. Nearest arm found: {arm:?}
 line: {}",
                     idx + 1,
                     line.trim()
@@ -1597,7 +1716,9 @@ line: {}",
         for (idx, line) in production(MAIN_SRC) {
             assert!(
                 !line.contains("see the Windows Application event log"),
-                "WR-27: main.rs:{} points the operator at the Windows Application event log, but                  no record is written there on the abort path — every LayerAttestationFailed                  construction site is a plain `return Err(..)`.
+                "WR-27: main.rs:{} points the operator at the Windows Application event log, \
+                 but no record is written there on the abort path — every \
+                 LayerAttestationFailed construction site is a plain `return Err(..)`.
 line: {}",
                 idx + 1,
                 line.trim()

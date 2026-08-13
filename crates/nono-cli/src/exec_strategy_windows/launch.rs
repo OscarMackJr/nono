@@ -1451,7 +1451,9 @@ fn emit_downgrade_diagnostics(
         // Site 1: no layer initialised, so no audit record is emitted at all.
         None => {
             tracing::warn!(
-                "attestation downgrade audit emission unavailable                  (AUD-04: SecurityEventLayer not initialized) —                  proceeding per AUD-04's non-fatal contract{layer_detail}"
+                "attestation downgrade audit emission unavailable \
+                 (AUD-04: SecurityEventLayer not initialized) — \
+                 proceeding per AUD-04's non-fatal contract{layer_detail}"
             );
             if private {
                 DowngradeDetailChannel::PrivateLogFile
@@ -1463,7 +1465,8 @@ fn emit_downgrade_diagnostics(
             // Site 2: the audit record was NOT committed.
             Err(e) => {
                 tracing::warn!(
-                    "attestation downgrade audit emission failed (AUD-04) —                      proceeding per AUD-04's non-fatal contract: {e}{layer_detail}"
+                    "attestation downgrade audit emission failed (AUD-04) — \
+                     proceeding per AUD-04's non-fatal contract: {e}{layer_detail}"
                 );
                 if private {
                     DowngradeDetailChannel::PrivateLogFile
@@ -1493,16 +1496,31 @@ fn downgrade_detail_pointer(
 ) -> String {
     use attestation_downgrade_event::DowngradeDetailChannel;
     match channel {
-        DowngradeDetailChannel::EventLog => " (layer detail is in the Windows Application event              log, source `nono`, event id 10011; re-run with --log-file <path> to capture it              locally)"
-            .to_string(),
+        // CR-01/WR-01: the needle `Windows Application event log` MUST stay
+        // intact on a single source line — `every_operator_detail_pointer_is_conditional`
+        // scans line by line, so breaking the continuation mid-phrase would
+        // make that class gate cover this arm vacuously (which is exactly the
+        // defect CR-01 recorded).
+        DowngradeDetailChannel::EventLog => {
+            " (layer detail is in the Windows Application event log, source `nono`, \
+             event id 10011; re-run with --log-file <path> to capture it locally)"
+                .to_string()
+        }
         // The names are already in the operator's own private log, so no
         // destination sentence is needed — and naming one here would be the
         // only place a LayerId could reach a shared channel.
         DowngradeDetailChannel::PrivateLogFile => String::new(),
-        DowngradeDetailChannel::Stderr => " (the `nono` event source is not registered, so the              attestation record went to this console in redacted form — layer names are withheld;              run `nono setup` to register the source, or re-run with --log-file <path>)"
-            .to_string(),
-        DowngradeDetailChannel::None => " (layer detail could not be recorded on any channel —              re-run with --log-file <path> to capture it locally)"
-            .to_string(),
+        DowngradeDetailChannel::Stderr => {
+            " (the `nono` event source is not registered, so the attestation record went to \
+             this console in redacted form — layer names are withheld; run `nono setup` to \
+             register the source, or re-run with --log-file <path>)"
+                .to_string()
+        }
+        DowngradeDetailChannel::None => {
+            " (layer detail could not be recorded on any channel — re-run with \
+             --log-file <path> to capture it locally)"
+                .to_string()
+        }
     }
 }
 
@@ -1620,7 +1638,8 @@ fn apply_startup_attestation_gate(
             };
             tracing::warn!(
                 downgraded_count = downgraded.len(),
-                "startup self-attestation: {} confinement layer(s) could not be fully                  confirmed at startup — proceeding with a downgraded confinement claim{}",
+                "startup self-attestation: {} confinement layer(s) could not be fully \
+                 confirmed at startup — proceeding with a downgraded confinement claim{}",
                 downgraded.len(),
                 operator_suffix
             );
@@ -3907,7 +3926,8 @@ mod attestation_gate_tests {
         assert_eq!(
             channel,
             attestation_downgrade_event::DowngradeDetailChannel::None,
-            "site 2: a failed audit emission on a shared console means NO channel holds the              layer detail — the operator must not be pointed at the event log"
+            "site 2: a failed audit emission on a shared console means NO channel holds the \
+             layer detail — the operator must not be pointed at the event log"
         );
 
         // Private log active: the names are in the operator's own log even
@@ -3951,7 +3971,8 @@ mod attestation_gate_tests {
                 channel,
                 DowngradeDetailChannel::EventLog | DowngradeDetailChannel::Stderr
             ),
-            "site 3: a successful emission lands in the Application Event Log, or in the              redacted stderr fallback when the source is unregistered — got {channel:?}"
+            "site 3: a successful emission lands in the Application Event Log, or in the \
+             redacted stderr fallback when the source is unregistered — got {channel:?}"
         );
 
         // The private log takes precedence: it is the channel the operator

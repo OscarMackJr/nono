@@ -1416,7 +1416,8 @@ mod registry_tests {
         assert_eq!(
             classify_row(row, &input).status,
             LayerAttestationStatus::Unconfirmed,
-            "the test runner's own unrestricted token does not carry this launch's session              SID and must not confirm RestrictedToken"
+            "the test runner's own unrestricted token does not carry this launch's session \
+             SID and must not confirm RestrictedToken"
         );
         // No expected value at all is also fail-closed.
         input.expected_session_sid = None;
@@ -1461,7 +1462,8 @@ mod registry_tests {
         assert_ne!(
             classify_row(row, &input).status,
             LayerAttestationStatus::Confirmed,
-            "an unconfined Medium-IL process must never confirm MandatoryIntegrityLabel —              the pre-CR-01 token-integrity-level probe did exactly that"
+            "an unconfined Medium-IL process must never confirm MandatoryIntegrityLabel — \
+             the pre-CR-01 token-integrity-level probe did exactly that"
         );
     }
 
