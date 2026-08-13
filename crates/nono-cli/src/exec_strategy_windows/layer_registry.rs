@@ -1340,6 +1340,162 @@ mod tests {
         }
     }
 
+    /// Phase 117 review CR-02: every registry row expected at
+    /// `(EntryPath::Daemon, expected: true)` with an attestable probe must be
+    /// NAMED by `agent_daemon/launch.rs`'s hand-written attestation mirror.
+    ///
+    /// This is the daemon analog of `broker_expected_rows_are_abort_only`,
+    /// which exists because a broker-expected row silently excluded from a
+    /// filter "would go completely unattested on the broker arm — the exact
+    /// green-by-absence failure mode this phase exists to close, re-armed for
+    /// the next added row." That same hole was open one entry path over: a
+    /// 14th `LayerId` declared `expected: true` at `(Daemon, None)` compiles,
+    /// satisfies `all_entries_covers_every_layer_id`,
+    /// `every_registry_row_has_a_test` (via a `MANUALLY_VERIFIED`/
+    /// `ALSO_AUTOMATED` entry) and `spec_matches_registry` (name-only), and
+    /// goes completely unattested on `nono agent launch`.
+    ///
+    /// # Why source text rather than a call
+    ///
+    /// `nono-agentd` is a separate binary that `#[path]`-includes only
+    /// `agent_daemon/`, `telemetry/` and `agent_daemon/telemetry_init.rs`; it
+    /// never declares `exec_strategy_windows`, so it CANNOT link this
+    /// registry. `daemon_attest_and_decide` is therefore a hand-written
+    /// mirror, and until this test nothing at all related the two.
+    ///
+    /// Names no `LayerId` (D-32 discovery rule): a future `(Daemon, ..)` row
+    /// fails this without the test being touched.
+    ///
+    /// # SCOPE — what this deliberately does NOT prove
+    ///
+    /// That the daemon's decision for a named row MATCHES that row's declared
+    /// `outcome`. It cannot, without the daemon consuming the registry.
+    /// `DaclAncestorTraverse` is a live divergence: the row declares
+    /// `ContractOutcome::Abort` at `(Daemon, None)` and the daemon
+    /// deliberately warns and proceeds (WR-06: an absent ancestor traverse
+    /// under-grants reach, it never widens confinement). That divergence is
+    /// recorded in the SPEC's "Contract vs. code discrepancies" ledger per
+    /// D-15. Whether the daemon arm should consume the registry at all — and
+    /// so whether `(Daemon, ..)` cells should drive decisions rather than
+    /// document them — is an open operator decision, NOT something this test
+    /// pretends to have settled. Read this gate as "no daemon-expected row is
+    /// unmentioned", not as "the registry drives the daemon".
+    #[test]
+    fn daemon_expected_rows_are_all_named_by_the_daemon_gate() {
+        const DAEMON_GATE_SRC: &str = include_str!("../agent_daemon/launch.rs");
+
+        /// Production lines of the daemon source, plus the number of lines
+        /// dropped as `#[cfg(test)]` module bodies.
+        ///
+        /// BOTH exclusions are load-bearing, and both were established by
+        /// perturbation rather than by inspection:
+        ///
+        /// - Comments: `daemon_attest_and_decide`'s doc comment lists every
+        ///   row it models, so scanning comments makes this gate satisfiable
+        ///   by prose alone — the "documented, not wired" shape CR-02 reports.
+        /// - Test modules: the first version of this gate excluded comments
+        ///   only, and renaming the production `layer = "DaclAncestorTraverse"`
+        ///   left it GREEN, because `agent_daemon/launch.rs`'s own
+        ///   `attestation_gate_tests` asserts on that same string. A gate that
+        ///   a test assertion can satisfy is the defect one step over.
+        fn production_lines(src: &str) -> (Vec<&str>, usize) {
+            let lines: Vec<&str> = src.lines().collect();
+            let mut out = Vec::new();
+            let mut skipped = 0usize;
+            let mut idx = 0usize;
+            let mut pending_test_attr = false;
+            while idx < lines.len() {
+                let t = lines[idx].trim();
+
+                if t.starts_with("#[cfg(") && (t.contains("test)") || t.contains("test,")) {
+                    pending_test_attr = true;
+                    idx += 1;
+                    continue;
+                }
+                if pending_test_attr {
+                    // Other attributes and doc comments may sit between the
+                    // cfg attribute and the item it gates.
+                    if t.starts_with("#[") || t.starts_with("///") {
+                        idx += 1;
+                        continue;
+                    }
+                    pending_test_attr = false;
+                    // An INLINE `mod foo {` opens a test region (possibly
+                    // nested inside `mod windows_impl`, hence the indent-aware
+                    // closer); a bare `mod foo;` declaration opens nothing.
+                    if (t.starts_with("mod ") || t.starts_with("pub mod ")) && t.ends_with('{') {
+                        let indent = lines[idx].len() - lines[idx].trim_start().len();
+                        let closer = format!("{}}}", " ".repeat(indent));
+                        idx += 1;
+                        while idx < lines.len() && lines[idx] != closer {
+                            idx += 1;
+                            skipped += 1;
+                        }
+                        idx += 1;
+                        continue;
+                    }
+                }
+
+                if t.starts_with("//") {
+                    idx += 1;
+                    continue;
+                }
+                out.push(lines[idx]);
+                idx += 1;
+            }
+            (out, skipped)
+        }
+
+        let (code, skipped_test_lines) = production_lines(DAEMON_GATE_SRC);
+        assert!(
+            skipped_test_lines > 0,
+            "CR-02 non-vacuity: no `#[cfg(test)]` module body was excluded from the daemon \
+             source scan, so a test assertion naming a LayerId would satisfy this gate \
+             without any production arm existing. Either the daemon file lost its test \
+             modules, or `production_lines` no longer recognises them."
+        );
+
+        let mut checked = 0usize;
+        for entry in all_entries() {
+            if entry.probe == ProbeKind::NotApplicable {
+                continue;
+            }
+            let expected_at_daemon = entry.expectancy.iter().any(|arm| {
+                matches!(
+                    arm,
+                    ArmExpectancy {
+                        entry_path: EntryPath::Daemon,
+                        expected: true,
+                        ..
+                    }
+                )
+            });
+            if !expected_at_daemon {
+                continue;
+            }
+            checked += 1;
+            let quoted = format!("\"{:?}\"", entry.id);
+            assert!(
+                code.iter().any(|l| l.contains(&quoted)),
+                "{:?} is expected at (EntryPath::Daemon, None) with an attestable probe \
+                 ({:?}), but daemon_attest_and_decide's source never names {quoted} outside a \
+                 comment — the row goes completely unattested on `nono agent launch` (CR-02). \
+                 The daemon cannot link this registry, so a hand-written arm naming the layer \
+                 is the binding; add one, or drop the row's (Daemon, None) cell.",
+                entry.id,
+                entry.probe
+            );
+        }
+
+        assert!(
+            checked >= 5,
+            "CR-02 non-vacuity: only {checked} daemon-expected row(s) were checked. The \
+             registry declares AppContainerProfile, JobObjectContainment, WfpEgressFilters, \
+             DaclPackageSidGrant and DaclAncestorTraverse at (Daemon, None); a lower count \
+             means the expectancies were narrowed and this gate now covers almost nothing."
+        );
+    }
+
     /// Sanity check that the registry actually has broker-expected rows to
     /// exercise the invariant above (a vacuously-true loop over zero
     /// matching rows would be a weaker test than it appears).
