@@ -81,13 +81,31 @@ jobs:
                 # — and every SPEC defect this phase found was a SPEC-only
                 # edit, so the gates built to catch them would not execute.
                 #
+                # Round-6 WR-05 widened this from `proj/` alone. The gate at the
+                # other end stopped enumerating five files and started walking
+                # the crate, which surfaced three more Markdown files the test
+                # tree reads and asserts on:
+                #
+                #   crates/nono-cli/data/profile-authoring-guide.md
+                #     include_str!'d into the shipped binary (config/embedded.rs)
+                #     and asserted on by profile_cmd.rs
+                #   docs/architecture/aipc-unix-futures.md
+                #   .planning/PROJECT.md
+                #     both read and asserted on by tests/adr_aipc_unix_futures.rs
+                #
+                # `.planning/PROJECT.md` is force-included as an EXACT PATH and
+                # not as a `^\.planning/` tree: that tree is written by every
+                # planning command, and running the full matrix on each of those
+                # commits would be a large recurring cost for one guarded file.
+                #
                 # MUST STAY IN SYNC with every Markdown file the test tree
                 # reads. `layer_registry_selfcheck.rs::
                 # every_markdown_file_gated_by_a_test_runs_the_code_jobs`
                 # enforces that from the other end — it discovers the reads and
                 # fails the build if one is not covered here.
                 if [[ ! "${file}" =~ (^docs/)|(\.md$)|(\.mdx$)|(^LICENSE$)|(^\.github/ISSUE_TEMPLATE/) ]] \
-                   || [[ "${file}" =~ ^proj/ ]]; then
+                   || [[ "${file}" =~ (^proj/)|(^crates/nono-cli/data/)|(^docs/architecture/) ]] \
+                   || [[ "${file}" == ".planning/PROJECT.md" ]]; then
                   run_code_jobs=true
                 fi
 

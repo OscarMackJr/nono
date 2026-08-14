@@ -29,7 +29,7 @@
 
 mod common;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// `crates/nono-cli` — the crate this integration test belongs to.
 fn manifest_dir() -> PathBuf {
@@ -1591,126 +1591,318 @@ fn extract_backtick_symbol_citations(line: &str) -> Vec<String> {
 /// would not have executed.
 ///
 /// This is the sync gate the fix needs at the other end. It is
-/// DISCOVERY-based: it finds the Markdown reads in the test tree rather than
-/// naming the SPEC, so a second contract document added later is covered
+/// DISCOVERY-based: it finds the Markdown reads in the crate's own tree rather
+/// than naming the SPEC, so a second contract document added later is covered
 /// without this test being touched.
+///
+/// # Round-6 WR-05: the discovery was an enumeration
+///
+/// The first version of this gate scanned FIVE hardcoded files out of ~170 in
+/// the crate, under a doc comment claiming it covered "the Markdown reads in
+/// the crate's source and test tree". It had a live counterexample outside that
+/// list on the day it shipped: `crates/nono-cli/data/profile-authoring-guide.md`
+/// is `include_str!`'d into the shipped binary via `config/embedded.rs` and
+/// asserted on by `profile_cmd.rs`, and a pull request editing only it ran zero
+/// jobs. Making the discovery real surfaced two more (`docs/architecture/
+/// aipc-unix-futures.md` and `.planning/PROJECT.md`, both read and asserted on
+/// by `tests/adr_aipc_unix_futures.rs`) — which is the point: a gate whose
+/// scope is a list finds exactly the things already on the list.
+///
+/// The scan now walks every `.rs` file under the crate's `src/` and `tests/`,
+/// fails CLOSED if any directory or entry cannot be enumerated (a narrowed walk
+/// is a silently narrowed claim), and resolves each discovered basename by
+/// walking the workspace rather than trying three guessed trees.
 #[test]
 fn every_markdown_file_gated_by_a_test_runs_the_code_jobs() {
     let ci = std::fs::read_to_string(workspace_root().join(".github/workflows/ci.yml"))
         .expect("read .github/workflows/ci.yml");
+    let classifier = ci_force_include_region(&ci);
 
-    // Discovery: Markdown paths the crate's source and test tree read, in
-    // either of the two house idioms (`include_str!` and a `.join("....md")`
-    // off `manifest_dir()`/`workspace_root()`).
-    let mut sources: Vec<(String, String)> = Vec::new();
-    for rel in [
-        "src/main.rs",
-        "src/output.rs",
-        "tests/layer_registry_selfcheck.rs",
-        "tests/layer_registry_meta_test.rs",
-        "tests/layer_force_unavailable.rs",
-    ] {
-        let path = manifest_dir().join(rel);
-        if let Ok(src) = std::fs::read_to_string(&path) {
-            sources.push((rel.to_string(), src));
-        }
+    // Discovery, step 1: every `.rs` file in the crate's own tree.
+    let mut rust_sources: Vec<PathBuf> = Vec::new();
+    for sub in ["src", "tests"] {
+        collect_by_extension(&manifest_dir().join(sub), "rs", &mut rust_sources);
     }
     assert!(
-        sources.len() >= 4,
-        "non-vacuity: only {} of the scanned sources could be read, so this gate is looking \
-         at almost nothing",
-        sources.len()
+        rust_sources.len() >= 100,
+        "non-vacuity: the crate walk found only {} `.rs` file(s). This gate's coverage IS the \
+         walk, so a walk that has gone quiet is a silently narrowed claim, not a pass.",
+        rust_sources.len()
     );
 
-    // Discovery works on BASENAMES and then locates the real file, rather than
-    // parsing the path expression. The two house idioms spell the path
-    // differently — `include_str!("../../../proj/SPEC-….md")` carries the
-    // directory, `workspace_root().join("proj").join("SPEC-….md")` does not —
-    // and only a resolved file has a workspace-relative path to classify.
+    // Discovery, step 2: Markdown basenames those files READ from the repo.
+    //
+    // A `"….md"` fragment counts only when a REPO-ROOT marker appears within
+    // `ROOT_LOOKBACK` lines above it. That is what separates a repo read from
+    // the far more common `tempdir.path().join("CLAUDE.md")` fixture WRITE,
+    // and the look-back (rather than same-line) window is what reaches the
+    // house idiom where the root is bound a few lines earlier:
+    //
+    //     let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    //     PathBuf::from(manifest_dir).join("..").join("..")
+    //         .join("docs").join("architecture").join("aipc-unix-futures.md")
     //
     // Comment lines are excluded: prose ABOUT this rule (including this test's
-    // own doc, which names the SPEC and quotes a `.md` fragment) is not an
+    // own doc, which names the SPEC and quotes `.md` fragments) is not an
     // instance of it.
+    const ROOT_MARKERS: &[&str] = &[
+        "include_str!",
+        "manifest_dir()",
+        "workspace_root()",
+        "CARGO_MANIFEST_DIR",
+    ];
+    const ROOT_LOOKBACK: usize = 8;
+
     let mut read_markdown: Vec<(String, String)> = Vec::new();
-    for (label, src) in &sources {
-        for line in src.lines() {
-            let t = line.trim_start();
-            if t.starts_with("//") {
-                continue;
-            }
-            if !(line.contains("include_str!") || line.contains(".join(")) {
-                continue;
-            }
-            for frag in line.split('"').skip(1).step_by(2) {
-                if !frag.ends_with(".md") {
-                    continue;
+    for path in &rust_sources {
+        let src = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("WR-05: failed to read {}: {e}", path.display()));
+        let label = path
+            .strip_prefix(manifest_dir())
+            .unwrap_or(path)
+            .display()
+            .to_string()
+            .replace('\\', "/");
+        // Blank out comment lines rather than dropping them, so the look-back
+        // window keeps counting source lines.
+        let code: Vec<&str> = src
+            .lines()
+            .map(|l| {
+                if l.trim_start().starts_with("//") {
+                    ""
+                } else {
+                    l
                 }
+            })
+            .collect();
+        for (idx, line) in code.iter().enumerate() {
+            let fragments: Vec<&str> = line
+                .split('"')
+                .skip(1)
+                .step_by(2)
+                .filter(|f| f.ends_with(".md") && f.len() > ".md".len())
+                .collect();
+            if fragments.is_empty() {
+                continue;
+            }
+            let window_start = idx.saturating_sub(ROOT_LOOKBACK);
+            let window = code
+                .get(window_start..=idx)
+                .map(|w| w.join("\n"))
+                .unwrap_or_default();
+            if !ROOT_MARKERS.iter().any(|m| window.contains(m)) {
+                continue;
+            }
+            for frag in fragments {
                 let base = frag.rsplit('/').next().unwrap_or(frag).to_string();
                 if !read_markdown.iter().any(|(b, _)| b == &base) {
-                    read_markdown.push((base, label.clone()));
+                    read_markdown.push((base, format!("{label}:{}", idx + 1)));
                 }
             }
         }
     }
     assert!(
         !read_markdown.is_empty(),
-        "non-vacuity: no Markdown file read was discovered in the test tree. Either the house \
+        "non-vacuity: no Markdown file read was discovered in the crate tree. Either the house \
          idiom changed (this scan is now blind and the CI classifier is unguarded) or the \
          contract documents are no longer gated by tests, in which case retire this gate \
          deliberately."
     );
 
-    // Candidate trees to resolve a basename in. Explicit rather than a walk: a
-    // walk would reach `.planning/` and `target/`, and the question being
-    // asked is only "which top-level tree does this contract document live
-    // in".
-    let candidate_trees = ["proj", "docs", "."];
+    // Resolution: locate each basename by WALKING the workspace, pruning only
+    // build outputs. The previous three-tree guess (`proj`, `docs`, `.`) could
+    // not see `docs/architecture/` or `.planning/`, so it would have reported
+    // two of the real reads as merely "unresolved" — a narrower claim wearing
+    // a different message.
+    let mut repo_markdown_paths: Vec<PathBuf> = Vec::new();
+    collect_by_extension(&workspace_root(), "md", &mut repo_markdown_paths);
+    let repo_markdown: Vec<String> = repo_markdown_paths
+        .iter()
+        .map(|p| {
+            p.strip_prefix(workspace_root())
+                .unwrap_or(p)
+                .display()
+                .to_string()
+                .replace('\\', "/")
+        })
+        .collect();
 
     let mut unguarded: Vec<String> = Vec::new();
     let mut unresolved: Vec<String> = Vec::new();
-    for (base, label) in &read_markdown {
-        let Some(tree) = candidate_trees
+    for (base, site) in &read_markdown {
+        let matches: Vec<&String> = repo_markdown
             .iter()
-            .find(|t| workspace_root().join(t).join(base).is_file())
-        else {
-            unresolved.push(format!("{base} (read by {label})"));
+            .filter(|rel| rel.rsplit('/').next() == Some(base.as_str()))
+            .collect();
+        if matches.is_empty() {
+            unresolved.push(format!("{base} (read at {site})"));
             continue;
-        };
-        let rel = if *tree == "." {
-            base.clone()
-        } else {
-            format!("{tree}/{base}")
-        };
-        // Does the classifier's docs-only skip list even apply? A `.md` file
-        // always matches `\.md$`, so it always needs a force-include clause.
-        //
-        // The clause is checked as a substring of the workflow text rather
-        // than by re-implementing bash regex semantics: the claim being pinned
-        // is "the tree this file lives in is force-included", and a
-        // re-implementation would be a third mirror of the rule.
-        let clause = format!("=~ ^{tree}/ ]]");
-        if !ci.contains(&clause) {
-            unguarded.push(format!(
-                "{rel} (read by {label}) — no `{clause}` clause in ci.yml"
-            ));
+        }
+        // Ambiguity is resolved fail-CLOSED: EVERY location the basename could
+        // denote must be force-included, because this scan cannot tell which
+        // one the read meant.
+        for rel in matches {
+            if !force_include_covers(&classifier, rel) {
+                unguarded.push(format!("{rel} (read at {site})"));
+            }
         }
     }
 
     assert!(
         unresolved.is_empty(),
-        "WR-07: {} Markdown file(s) read by the test tree could not be located under {:?}, so \
-         this gate cannot classify them and is silently covering less than it claims:\n  {}",
+        "WR-05: {} Markdown file(s) read by the crate tree could not be located anywhere in \
+         the workspace, so this gate cannot classify them and is silently covering less than \
+         it claims:\n  {}",
         unresolved.len(),
-        candidate_trees,
         unresolved.join("\n  ")
     );
     assert!(
         unguarded.is_empty(),
-        "WR-07: {} Markdown file(s) are read and asserted on by the test tree but are NOT \
-         force-included by `.github/workflows/ci.yml`'s `changes` classifier, so a pull \
-         request that edits only them runs ZERO jobs and every gate built on them is skipped:\
-         \n  {}\nAdd `|| [[ \"${{file}}\" =~ ^<tree>/ ]]` to the `run_code_jobs` clause.",
+        "WR-05/WR-07: {} Markdown file(s) are read and asserted on by the crate tree but are \
+         NOT force-included by `.github/workflows/ci.yml`'s `changes` classifier, so a pull \
+         request that edits only them runs ZERO jobs and every gate built on them is \
+         skipped:\n  {}\nAdd `(^<dir>/)` to the force-include alternation, or — for a single \
+         file in an otherwise expensive tree — an exact `[[ \"${{file}}\" == \"<path>\" ]]` \
+         clause.",
         unguarded.len(),
         unguarded.join("\n  ")
     );
+}
+
+/// Every file under `dir` whose extension is `ext`, recursively.
+///
+/// FAILS CLOSED on any enumeration error. A discovery-based gate's coverage IS
+/// its walk, so an unreadable directory silently narrows the claim to whatever
+/// happened to be reachable — the same fail-open shape round 6 found in the
+/// D-28 filesystem gate's `collect_files`.
+fn collect_by_extension(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
+    let entries = std::fs::read_dir(dir).unwrap_or_else(|e| {
+        panic!(
+            "WR-05: cannot enumerate {} ({e}) — this gate's coverage is exactly its walk, so \
+             an unreadable directory must FAIL rather than silently narrow the scan",
+            dir.display()
+        )
+    });
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|e| {
+            panic!(
+                "WR-05: unreadable directory entry under {} ({e}) — see above; a skipped entry \
+                 is a skipped claim",
+                dir.display()
+            )
+        });
+        let path = entry.path();
+        if path.is_dir() {
+            // Build outputs and VCS internals are not source.
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if matches!(name.as_str(), "target" | "node_modules" | "dist" | ".git") {
+                continue;
+            }
+            collect_by_extension(&path, ext, out);
+        } else if path.extension().and_then(|e| e.to_str()) == Some(ext) {
+            out.push(path);
+        }
+    }
+}
+
+/// The FORCE-INCLUDE clauses of `ci.yml`'s `run_code_jobs` classifier, with
+/// comment lines removed — and with the negated docs-only EXCLUSION list
+/// deliberately cut off.
+///
+/// # Why the needle is scoped this tightly (round-6 WR-05)
+///
+/// The clause used to be checked as a raw substring of the WHOLE workflow text,
+/// comments included, so a YAML comment mentioning the clause satisfied the
+/// gate while the clause itself was deleted. That is the mirror image of the
+/// care taken on the Rust side, where comment lines are excluded from the read
+/// scan for exactly this reason.
+///
+/// Scoping to the loop BODY is still not enough, and I only learned that by
+/// running the perturbation: with the two new tree clauses deleted, a loop-body
+/// scope still PASSED. The body also contains the exclusion list
+/// (`(^docs/)|(\.md$)|…`) and the `run_docs_checks` test
+/// (`(^crates/nono-cli/src/cli\.rs$)`), so `^docs/` and `^crates/nono-cli/`
+/// were both findable as substrings of clauses that force-include NOTHING.
+/// A gate satisfied by the very list it is meant to override is the defect one
+/// step over.
+///
+/// The region therefore starts AFTER the negated exclusion test's `]]` and ends
+/// at `run_code_jobs=true`. Every delimiter must be present; a missing one
+/// panics rather than silently widening the search, which is the fail-OPEN
+/// direction.
+fn ci_force_include_region(ci: &str) -> String {
+    const IF_OPEN: &str = "if [[ ! \"${file}\" =~ ";
+    const THEN: &str = "run_code_jobs=true";
+    let start = ci.find(IF_OPEN).unwrap_or_else(|| {
+        panic!(
+            "WR-05: `ci.yml` no longer contains the `run_code_jobs` classifier opener \
+             {IF_OPEN:?}. Either the classifier was restructured (re-scope this gate \
+             deliberately) or it was deleted, in which case every Markdown gate in this phase \
+             is unguarded."
+        )
+    });
+    let statement = ci
+        .get(start..)
+        .and_then(|rest| rest.get(..rest.find(THEN)?))
+        .unwrap_or_else(|| {
+            panic!(
+                "WR-05: `ci.yml`'s `run_code_jobs` classifier has no {THEN:?} after its \
+                 opener, so this gate cannot scope its needle and would silently search the \
+                 whole file."
+            )
+        });
+    // Cut the negated docs-only exclusion test; only what follows it can
+    // force-include anything.
+    let region = statement
+        .find("]]")
+        .and_then(|i| statement.get(i.saturating_add(2)..))
+        .unwrap_or_else(|| {
+            panic!(
+                "WR-05: `ci.yml`'s `run_code_jobs` classifier has no `]]` closing its \
+                 exclusion test, so the force-include region cannot be isolated from it."
+            )
+        });
+    assert!(
+        (20..statement.len()).contains(&region.len()),
+        "WR-05: the extracted force-include region is {} bytes out of a {} byte statement, \
+         which is not a plausible clause list — the extraction is broken and this gate is \
+         searching the wrong text",
+        region.len(),
+        statement.len()
+    );
+    region
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Does the classifier force-include the workspace-relative path `rel`?
+///
+/// The rule, stated once: a Markdown file is force-included when the classifier
+/// names either one of its ANCESTOR DIRECTORIES as a `^dir/` prefix, or the
+/// file's own quoted path. Bash regex semantics are deliberately not
+/// re-implemented — that would be a third mirror of the rule — so this asks the
+/// weaker, checkable question "is this path's tree, or this path itself,
+/// mentioned in the force-include region at all".
+///
+/// The two granularities exist because the trees differ enormously in edit
+/// rate: `^proj/` and `^crates/nono-cli/data/` are cheap to force-include
+/// wholesale, while `.planning/` is written by every planning command and only
+/// ONE file in it is read by a test.
+fn force_include_covers(classifier: &str, rel: &str) -> bool {
+    if classifier.contains(&format!("\"{rel}\"")) {
+        return true;
+    }
+    let mut dir = rel;
+    while let Some((parent, _)) = dir.rsplit_once('/') {
+        if classifier.contains(&format!("^{parent}/")) {
+            return true;
+        }
+        dir = parent;
+    }
+    false
 }
