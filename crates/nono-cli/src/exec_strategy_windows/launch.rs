@@ -4656,25 +4656,47 @@ mod attestation_gate_tests {
         // Non-vacuity FIRST: if the banner wrote nothing, the scan below is
         // trivially satisfied and would hide a restored plaintext write the
         // moment the marker path resolved again.
-        assert!(
-            !files.is_empty(),
-            "D-28 non-vacuity: the downgrade banner wrote no file under {}, so this scan \
-             proves nothing. The dedup marker is expected to exist after a first \
-             announcement; if the marker path stopped resolving, fix that before trusting \
-             this guard.",
+        //
+        // ROUND-4 (requirement 1 sweep): `!files.is_empty()` is monotone in
+        // the WRONG direction — it is more satisfied the more files exist, so
+        // it could not distinguish "the one expected marker" from "one of two
+        // expected files still being written". This announcement writes
+        // EXACTLY one file (the dedup marker), so assert that, not a floor. A
+        // second file appearing here is a D-28 event that must be reviewed,
+        // not absorbed.
+        assert_eq!(
+            files.len(),
+            1,
+            "D-28 non-vacuity: the downgrade banner wrote {} file(s) under {}, expected \
+             exactly 1 (the dedup marker). Zero means this scan proves nothing — the marker \
+             path stopped resolving, fix that before trusting this guard. More than one means \
+             a NEW artefact is being written to a child-readable path and needs its own D-28 \
+             review, not a silently widened floor. Files: {files:?}",
+            files.len(),
             session_dir.display()
         );
 
         let mut violations: Vec<String> = Vec::new();
         for file in &files {
-            let Ok(bytes) = std::fs::read(file) else {
-                continue;
-            };
-            let text = String::from_utf8_lossy(&bytes).to_ascii_lowercase();
-            for name in &names {
-                if text.contains(&name.to_ascii_lowercase()) {
-                    violations.push(format!("{}: contains {name:?}", file.display()));
+            // FAIL SECURE: an unreadable file is precisely the one that could
+            // be hiding the plaintext, so it is a violation of this guard's
+            // premise, not something to skip. The previous `else { continue }`
+            // was silently fail-open in the phase's most security-relevant
+            // gate.
+            match std::fs::read(file) {
+                Ok(bytes) => {
+                    let text = String::from_utf8_lossy(&bytes).to_ascii_lowercase();
+                    for name in &names {
+                        if text.contains(&name.to_ascii_lowercase()) {
+                            violations.push(format!("{}: contains {name:?}", file.display()));
+                        }
+                    }
                 }
+                Err(e) => violations.push(format!(
+                    "{}: UNREADABLE ({e}) — this guard cannot prove the file does not name a \
+                     layer, and an unscannable file is the one most likely to be hiding one",
+                    file.display()
+                )),
             }
         }
 
