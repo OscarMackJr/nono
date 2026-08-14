@@ -268,9 +268,18 @@ pub fn print_attestation_downgrade_banner(
 /// The comparison is against `attestation_downgrade_marker_content(key)`,
 /// not against `key` itself, so no `LayerId` name is ever written to this
 /// child-readable path (D-28). The set of `(session, key)` pairs that
-/// suppress is IDENTICAL either way — the digest is injective for every
-/// input this code can produce, up to a 128-bit collision — so this closes
-/// the disclosure direction without giving back any of WR-04's authority.
+/// suppress is IDENTICAL either way, so this closes the disclosure direction
+/// without giving back any of WR-04's authority.
+///
+/// # WR-06: what the injectivity claim actually rests on
+///
+/// `marker_content_never_names_a_layer_and_stays_injective` enumerates the
+/// WHOLE reachable key space — all 2^13 subsets of a 13-name vocabulary,
+/// sorted and comma-joined as production builds the key — and asserts every
+/// one maps to a distinct content. That is a checked property of this key
+/// space, not an extrapolation from a sample; the earlier wording ("injective
+/// for every input this code can produce, up to a 128-bit collision") claimed
+/// it over an assertion covering six hand-written keys.
 ///
 /// See [`print_attestation_downgrade_banner`]'s doc for what this does NOT
 /// close (a same-user process can still pre-plant a correct marker, and on
@@ -286,10 +295,21 @@ fn marker_says_already_announced(path: &std::path::Path, dedup_key: &str) -> boo
 
 /// The bytes stored INSIDE the dedup marker for `dedup_key` (CR-01, D-28).
 ///
-/// A 128-bit domain-separated `DefaultHasher` digest, rendered as 32 lowercase
-/// hex characters. Two independent 64-bit passes, each seeded with a distinct
-/// constant, are concatenated: `DefaultHasher` is fixed-key, so hashing the
-/// same key twice without domain separation would just repeat one value.
+/// A 128-bit-wide domain-separated `DefaultHasher` digest, rendered as 32
+/// lowercase hex characters. Two 64-bit passes, each seeded with a distinct
+/// constant prefix, are concatenated: `DefaultHasher` is fixed-key, so hashing
+/// the same key twice without domain separation would just repeat one value.
+///
+/// # WR-06: "128-bit" is the WIDTH, not a security level
+///
+/// Both passes run the same fixed-key SipHash-1-3 permutation and differ only
+/// by a domain prefix, so this is 128 bits of *output width* against
+/// ACCIDENTAL collision — which is all WR-04 ever needed — and is emphatically
+/// not 128 bits of resistance against a chosen-input adversary. The record
+/// used to read as the latter. What the property actually rests on is the
+/// exhaustive enumeration in
+/// `marker_content_never_names_a_layer_and_stays_injective`: every one of the
+/// 2^13 reachable keys is checked to map to a distinct content.
 ///
 /// # Why a digest and not the key
 ///
@@ -1571,7 +1591,21 @@ mod attestation_marker_path_tests {
     ///    exists.
     /// 2. *Injectivity* — distinct keys must still produce distinct content,
     ///    or the digest would silently re-open the collision hole WR-04
-    ///    closed. Checked exhaustively over a spanning sample of key shapes.
+    ///    closed. Checked **exhaustively over the whole reachable key space**:
+    ///    every one of the 2^13 subsets of a 13-name vocabulary, sorted and
+    ///    comma-joined exactly as production builds the key.
+    ///
+    /// # Round-4 WR-06: the claim used to exceed the mechanism
+    ///
+    /// This test asserted injectivity over **6 hand-written keys** while its
+    /// own doc said "checked exhaustively over a spanning sample" — which is
+    /// self-contradictory — and two other records ("pinned by an explicit
+    /// injectivity assertion", "injective for every input this code can
+    /// produce") read as a guarantee over the whole space. That is the same
+    /// "the record claims what the mechanism does not establish" class as
+    /// round 2's WR-01 and round 3's WR-05, reproduced inside round 3's own
+    /// new gate. Exhaustive enumeration is cheap and needs no `LayerId`
+    /// import, so the claim is now made true rather than reworded away.
     #[test]
     fn marker_content_never_names_a_layer_and_stays_injective() {
         // Deliberately built from key TEXT, not from an imported enum:
@@ -1628,6 +1662,48 @@ mod attestation_marker_path_tests {
                 );
             }
         }
+
+        // WR-06: injectivity over the WHOLE reachable key space, not a sample.
+        //
+        // Production builds `dedup_key` as the sorted comma-join of a SUBSET
+        // of a 13-element `LayerId` enum, so there are at most 2^13 = 8192
+        // distinct inputs and all of them are cheaply enumerable. The
+        // vocabulary here is synthetic and fixed-width on purpose: `output.rs`
+        // must not learn the layer identity type (D-28's structural half), and
+        // a same-length same-shape vocabulary exercises the digest's input
+        // space identically. The launch-side sibling
+        // `downgrade_marker_files_never_contain_a_layer_name` is what binds
+        // the REAL vocabulary end to end.
+        const VOCAB_LEN: usize = 13;
+        let vocab: Vec<String> = (0..VOCAB_LEN).map(|i| format!("Layer{i:02}")).collect();
+        let mut seen: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        for mask in 0u32..(1u32 << VOCAB_LEN) {
+            let key = vocab
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| mask & (1u32 << i) != 0)
+                .map(|(_, n)| n.as_str())
+                .collect::<Vec<_>>()
+                .join(",");
+            let content = attestation_downgrade_marker_content(&key);
+            if let Some(prev) = seen.insert(content.clone(), key.clone()) {
+                panic!(
+                    "WR-06: marker-content collision between {prev:?} and {key:?} -> \
+                     {content}. Two DIFFERENT downgraded-layer sets would share one marker, \
+                     silently suppressing the second announcement — the exact collision hole \
+                     WR-04's content check exists to close."
+                );
+            }
+        }
+        assert_eq!(
+            seen.len(),
+            1usize << VOCAB_LEN,
+            "WR-06 non-vacuity: the exhaustive sweep produced {} distinct contents for {} \
+             enumerated keys — the enumeration itself is broken, so the injectivity claim \
+             rests on nothing.",
+            seen.len(),
+            1usize << VOCAB_LEN
+        );
     }
 
     #[test]
