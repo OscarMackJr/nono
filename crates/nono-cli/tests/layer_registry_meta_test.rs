@@ -172,7 +172,7 @@ const MANUALLY_VERIFIED: &[(&str, &str)] = &[
     ),
     (
         "BrokerAuthenticodeTrustGate",
-        "The gate is skipped entirely under `is_dev_build_layout()` (`launch.rs:2190`,2194`) — \
+        "The gate is skipped entirely under `launch.rs::is_dev_build_layout` — \
          active only in a signed, production (non-dev-layout) install. An ordinary dev/CI host \
          building from `cargo build` cannot exercise it. Manual steps: from a signed release \
          install outside `target/...`, stage a `nono-shell-broker.exe` signed by a different \

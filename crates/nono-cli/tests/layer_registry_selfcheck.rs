@@ -1250,3 +1250,226 @@ fn the_wr14_open_record_matches_the_actual_swallow_sites() {
          this call site"
     );
 }
+
+/// The `.rs` files that make up the registry's authoritative surface — the
+/// ones this phase declares are the record of what is enforced where.
+///
+/// Deliberately a fixed list rather than a glob: a glob would silently start
+/// scanning generated or vendored trees, and would make the two gates below
+/// change coverage without anyone editing them.
+fn registry_surface_sources() -> Vec<(&'static str, String)> {
+    let files = [
+        (
+            "layer_registry.rs",
+            manifest_dir().join("src/exec_strategy_windows/layer_registry.rs"),
+        ),
+        (
+            "tests/layer_registry_meta_test.rs",
+            manifest_dir().join("tests/layer_registry_meta_test.rs"),
+        ),
+        (
+            "tests/layer_force_unavailable.rs",
+            manifest_dir().join("tests/layer_force_unavailable.rs"),
+        ),
+    ];
+    files
+        .into_iter()
+        .map(|(label, path)| {
+            let content = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+            (label, content)
+        })
+        .collect()
+}
+
+/// Phase 117 review WR-05: no raw `file.rs:<line>` citation may survive
+/// anywhere on the registry surface.
+///
+/// NR3-08 converted every `call_sites` array entry to line-drift-immune
+/// `"file.rs::Symbol"` form, and WR-19 swept the SPEC for the same class.
+/// Neither sweep reached `layer_registry.rs`'s own module doc (25 raw
+/// citations, none inside a `call_sites` array) or the reason strings in
+/// `layer_registry_meta_test.rs`'s `MANUALLY_VERIFIED` list. Six of those 25
+/// were sampled by the reviewer and all six pointed at unrelated code — a
+/// `CreateProcessW` block, an `InitializeProcThreadAttributeList` teardown, a
+/// bare `)));`.
+///
+/// Nothing could have caught it: `registry_call_sites_exist` scans ONLY
+/// `call_sites: &[` regions (deliberately narrowed in commit 7a8fcd36), and
+/// `every_spec_symbol_citation_resolves_to_a_real_definition` scans only the
+/// SPEC. Narrowing is the fail-OPEN direction, so this gate is the compensating
+/// widening: it rejects the raw form outright, everywhere on the surface,
+/// rather than trying to validate line numbers that drift by construction.
+#[test]
+fn no_line_number_citations_remain_in_the_registry_surface() {
+    // `file.rs:123` or `file.rs:123-456`. Hand-rolled rather than regex: this
+    // crate's test surface has no regex dependency, and the shape is fixed.
+    fn line_citations(line: &str) -> Vec<String> {
+        let bytes: Vec<char> = line.chars().collect();
+        let mut out = Vec::new();
+        let mut i = 0usize;
+        while i + 3 < bytes.len() {
+            // Find ".rs:" and require a DIGIT after it — `.rs::` (symbol form)
+            // is the shape we are migrating TO and must not be flagged.
+            if bytes[i] == '.'
+                && bytes[i + 1] == 'r'
+                && bytes[i + 2] == 's'
+                && bytes[i + 3] == ':'
+                && bytes.get(i + 4).is_some_and(char::is_ascii_digit)
+            {
+                // Walk back over the file stem.
+                let mut start = i;
+                while start > 0 {
+                    let c = bytes[start - 1];
+                    if c.is_ascii_alphanumeric() || c == '_' || c == '/' || c == '.' || c == '-' {
+                        start -= 1;
+                    } else {
+                        break;
+                    }
+                }
+                let mut end = i + 4;
+                while end < bytes.len() && (bytes[end].is_ascii_digit() || bytes[end] == '-') {
+                    end += 1;
+                }
+                out.push(bytes[start..end].iter().collect::<String>());
+                i = end;
+                continue;
+            }
+            i += 1;
+        }
+        out
+    }
+
+    // Self-test first, so a broken matcher cannot report a clean surface.
+    // This is the anti-vacuity half: the gate below can only be trusted if the
+    // detector demonstrably fires on the shape it hunts and stays silent on
+    // the shape it is migrating to.
+    assert_eq!(
+        line_citations("see `launch.rs:2190` and `mod.rs:462-486` for detail"),
+        vec!["launch.rs:2190".to_string(), "mod.rs:462-486".to_string()],
+        "the raw-citation detector must find both the single-line and range forms"
+    );
+    assert!(
+        line_citations("see `launch.rs::verify_broker_authenticode` for detail").is_empty(),
+        "symbol-form citations must NOT be flagged — they are the target shape"
+    );
+    assert!(
+        line_citations("crates/nono/src/sandbox/windows.rs::validate_launch_paths").is_empty(),
+        "a path-qualified symbol citation must not be flagged"
+    );
+
+    let mut offenders = Vec::new();
+    for (label, src) in registry_surface_sources() {
+        for (n, line) in src.lines().enumerate() {
+            for citation in line_citations(line) {
+                offenders.push(format!("{label}:{}: {citation}", n + 1));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "WR-05: {} raw \"file.rs:<line>\" citation(s) on the registry surface. These drift \
+         silently — every one of the six the reviewer sampled pointed at unrelated code — and \
+         no gate validates them, because the citation checkers are scoped to `call_sites` \
+         regions and to the SPEC. Use \"file.rs::Symbol\" form (NR3-08/WR-19):\n  {}",
+        offenders.len(),
+        offenders.join("\n  ")
+    );
+}
+
+/// Phase 117 review WR-05: every `file.rs::Symbol` citation ANYWHERE on the
+/// registry surface must resolve to a real definition.
+///
+/// `registry_call_sites_exist` content-verifies only the citations inside
+/// `call_sites: &[` regions. That narrowing was correct for its own reason
+/// (7a8fcd36: assertion messages legitimately name symbols in prose), but
+/// narrowing is the fail-OPEN direction, and the prose citations WR-05 found
+/// were exactly the ones outside those regions. The SPEC already gets this
+/// treatment via `every_spec_symbol_citation_resolves_to_a_real_definition`;
+/// this is the same rule for the source files.
+#[test]
+fn every_registry_surface_symbol_citation_resolves() {
+    let mut checked = 0usize;
+    let mut missing = Vec::new();
+
+    for (label, src) in registry_surface_sources() {
+        for (n, line) in src.lines().enumerate() {
+            for citation in extract_backtick_symbol_citations(line) {
+                // The documented FORMAT EXAMPLE, not a citation. The
+                // call-sites extractor already carves this out
+                // (`illustrative_format_example_is_not_treated_as_a_citation`);
+                // the same carve-out is needed here or the gate fails on the
+                // documentation of its own rule.
+                if citation.trim_matches('"') == "file.rs::Symbol" {
+                    continue;
+                }
+                checked += 1;
+                let (file_part, symbol) = split_symbol_citation(&citation);
+                // `resolve_file_part` maps a bare `foo.rs` to
+                // `exec_strategy_windows/foo.rs`. Citations on this surface
+                // also legitimately name INTEGRATION TEST files, which live in
+                // `tests/`; fall back there rather than reporting a real
+                // citation as unresolvable.
+                let mut resolved = resolve_file_part(file_part);
+                if !resolved.exists() {
+                    let in_tests = manifest_dir().join("tests").join(file_part);
+                    if in_tests.exists() {
+                        resolved = in_tests;
+                    }
+                }
+                match std::fs::read_to_string(&resolved) {
+                    Ok(content) if content_defines_symbol(&content, symbol) => {}
+                    Ok(_) => missing.push(format!(
+                        "{label}:{}: {citation:?} -> {} does not define {symbol:?} at a real \
+                         definition site",
+                        n + 1,
+                        resolved.display()
+                    )),
+                    Err(e) => missing.push(format!(
+                        "{label}:{}: {citation:?} -> {} (unreadable: {e})",
+                        n + 1,
+                        resolved.display()
+                    )),
+                }
+            }
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "WR-05: {} symbol citation(s) on the registry surface do not resolve:\n  {}",
+        missing.len(),
+        missing.join("\n  ")
+    );
+    // Non-vacuity: WR-05's own conversion produced ~20 of these. A collapse to
+    // near-zero means the extractor stopped seeing them, which is
+    // indistinguishable from "the surface is clean" without this floor.
+    assert!(
+        checked >= 20,
+        "WR-05 non-vacuity: only {checked} symbol citation(s) extracted from the registry \
+         surface; the extractor has gone quiet"
+    );
+}
+
+/// Backtick-delimited `` `file.rs::Symbol` `` citations on one line.
+///
+/// Backtick-delimited by design: `layer_registry.rs`'s prose writes every
+/// citation inside backticks, and requiring them keeps ordinary prose (and
+/// Rust paths that merely contain `::`) out of the extraction.
+fn extract_backtick_symbol_citations(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = line;
+    while let Some(open) = rest.find('`') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('`') else {
+            break;
+        };
+        let inner = &after[..close];
+        if inner.contains(".rs::") && !inner.contains(' ') {
+            out.push(inner.to_string());
+        }
+        rest = &after[close + 1..];
+    }
+    out
+}

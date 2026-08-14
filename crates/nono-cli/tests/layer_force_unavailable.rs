@@ -72,10 +72,10 @@
 //! aborts the launch at the FIRST DACL guard, so the ancestor guards' own
 //! short-circuits can never be independently observed by a black-box
 //! subprocess test under the current shared-flag design (verified by reading
-//! `prepare_live_windows_launch`'s guard construction order: `applied_dacls`
-//! at `mod.rs:449` unconditionally precedes
-//! `applied_ancestor_traverse`/`applied_ancestor_read_attrs` at
-//! `mod.rs:462`/`mod.rs:486`, and the `?` on `applied_dacls` returns before
+//! `mod.rs::prepare_live_windows_launch`'s guard construction order:
+//! `applied_dacls` unconditionally precedes
+//! `applied_ancestor_traverse`/`applied_ancestor_read_attrs`,
+//! and the `?` on `applied_dacls` returns before
 //! either of the later `let` bindings is ever reached) — and, discovered
 //! live during this plan's own execution, `RestrictedToken` and
 //! `JobObjectContainment`.
@@ -84,7 +84,9 @@
 //! reliably automatable from THIS harness
 //!
 //! Both seams are checked LATE — inside `spawn_windows_child`
-//! (`launch.rs:1620` and `launch.rs:404-422` respectively), AFTER
+//! (`restricted_token.rs::create_restricted_token_with_sid`, reached from
+//! `launch.rs::spawn_windows_child`, and
+//! `launch.rs::apply_process_handle_to_containment` respectively), AFTER
 //! `prepare_live_windows_launch` has already brought the Windows
 //! `Supervised`-strategy session file + capability-pipe event loop up —
 //! unlike the three rows automated below, which all abort during

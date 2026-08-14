@@ -15,31 +15,31 @@
 //! directly (not re-grepped — this citation reuses the line numbers already
 //! confirmed in 117-01-PLAN.md's `<interfaces>` block):
 //!
-//! - `network.rs:1500` (`select_network_backend`, the dispatch function) —
+//! - `network.rs::select_network_backend` (the dispatch function) —
 //!   `FirewallRulesNetworkBackend` is selected at the match arm
 //!   `(WindowsNetworkPolicyMode::Blocked, WindowsNetworkBackendKind::FirewallRules)`.
 //!   This is a live, reachable dispatch arm keyed on the policy's
 //!   `active_backend`, not dead code: a policy compiled with
 //!   `active_backend: FirewallRules` reaches this arm on every launch, and
 //!   `WfpNetworkBackend` is a structurally distinct arm
-//!   (`(Blocked, Wfp)`, `network.rs:1513-1516`) — the two backends are
+//!   (the sibling `(Blocked, Wfp)` arm of the same dispatch) — the two backends are
 //!   alternatives the policy compiler chooses between, not a fallback chain
 //!   where one supersedes the other.
-//! - `network.rs:1535` (`impl WindowsNetworkBackend for FirewallRulesNetworkBackend`,
-//!   the `install()` method) — mechanism: per-program `netsh advfirewall
+//! - `network.rs::FirewallRulesNetworkBackend::install` (the
+//!   `impl WindowsNetworkBackend for FirewallRulesNetworkBackend` method) — mechanism: per-program `netsh advfirewall
 //!   firewall add rule` block rules (`dir=out`/`dir=in`, `action=block`,
 //!   scoped to the staged program path). This is a materially different
 //!   enforcement primitive from WFP's session/package-SID-scoped `FWP_MATCH_RANGE`
-//!   allow filters (`network.rs:1602-1610` dispatches to
-//!   `install_wfp_network_backend`) — program-path identity vs. SID identity,
+//!   allow filters (`network.rs::install_wfp_network_backend` is the WFP
+//!   dispatch) — program-path identity vs. SID identity,
 //!   block-list vs. allow-list — so it earns its own registry row
 //!   (`LayerId::FirewallRulesEgress`) rather than being folded into
 //!   `WfpEgressFilters` as a variant.
-//! - Fail-closed confirmed: `install()` (`network.rs:1540-1594`) propagates
-//!   any `run_netsh_firewall` `Err` immediately (`network.rs:1567-1569` for the
-//!   outbound rule, `:1583-1586` for the inbound rule), and on inbound-rule
-//!   failure it rolls back the already-added outbound rule
-//!   (`delete_firewall_rule`, `:1583`) before propagating — no partial-rule
+//! - Fail-closed confirmed: `network.rs::FirewallRulesNetworkBackend::install`
+//!   propagates any `network.rs::run_netsh_firewall` `Err` immediately, for the
+//!   outbound rule and the inbound rule alike, and on inbound-rule
+//!   failure it rolls back the already-added outbound rule via
+//!   `network.rs::delete_firewall_rule` before propagating — no partial-rule
 //!   state is left installed while reporting success.
 //!
 //! **Verdict: `FirewallRulesEgress` is IN as its own row, `outcome:
@@ -75,10 +75,9 @@
 //!    covered by CINT-01's six named layers
 //!
 //! - **Job Object containment — IN, full row (`LayerId::JobObjectContainment`).**
-//!   `crates/nono-cli/src/exec_strategy_windows/launch.rs:375`
-//!   (`apply_process_handle_to_containment`) assigns the suspended child to
+//!   `launch.rs::apply_process_handle_to_containment` assigns the suspended child to
 //!   the containment Job Object via `AssignProcessToJobObject` and fails
-//!   closed: its caller (`launch.rs:2134-2137`) terminates the suspended
+//!   closed: its caller (`launch.rs::spawn_windows_child`) terminates the suspended
 //!   process and propagates `Err` on any assignment failure, before
 //!   `ResumeThread` ever runs. This is a genuine confinement guarantee
 //!   (process-tree lifetime + resource limits enforced by the kernel via the
@@ -98,15 +97,17 @@
 //! - **`validate_windows_launch_paths` interpreter coverage gate — IN, but as
 //!   a pre-flight row, not a post-spawn attestation row
 //!   (`LayerId::InterpreterCoverageGate`).**
-//!   `crates/nono/src/sandbox/windows.rs:2247` (`validate_launch_paths`, the
-//!   implementation `crates/nono/src/sandbox/mod.rs:925`'s
-//!   `Sandbox::validate_windows_launch_paths` delegates to) already
+//!   `crates/nono/src/sandbox/windows.rs::validate_launch_paths` (the
+//!   implementation
+//!   `crates/nono/src/sandbox/mod.rs::Sandbox::validate_windows_launch_paths`
+//!   delegates to) already
 //!   fail-secure-refuses: an interpreter the wrapper program will spawn that
 //!   is NOT covered by the compiled filesystem policy causes the gate to
 //!   return `Err` naming both the uncovered interpreter and the wrapper
 //!   program (confirmed by the `validate_launch_paths_refuses_uncovered_interpreter`
-//!   unit test, `crates/nono/src/sandbox/windows.rs:3903`). This check runs
-//!   BEFORE spawn (`mod.rs:357-362`, inside `prepare_live_windows_launch`,
+//!   unit test,
+//!   `crates/nono/src/sandbox/windows.rs::validate_launch_paths_refuses_uncovered_interpreter`).
+//!   This check runs BEFORE spawn (inside `mod.rs::prepare_live_windows_launch`,
 //!   ahead of the label/DACL/network guards), so there is nothing to
 //!   re-attest against a live child afterward — the row's `probe` is
 //!   `ProbeKind::NotApplicable` with a doc-comment note "validated pre-spawn,
@@ -114,12 +115,11 @@
 //!   D-21 post-spawn attestation probe.
 //! - **Broker Authenticode trust gate — IN, scoped to the `Broker`/
 //!   `BrokerLaunchNoPty` entry paths only (`LayerId::BrokerAuthenticodeTrustGate`).**
-//!   `crates/nono-cli/src/exec_strategy_windows/launch.rs:2236`
-//!   (`verify_broker_authenticode`), called at `launch.rs:1505-1506` and
-//!   `:1828-1829` guarded by `is_dev_build_layout` (`launch.rs:2190`) — the
+//!   `launch.rs::verify_broker_authenticode`, called from both broker spawn
+//!   arms and guarded by `launch.rs::is_dev_build_layout` — the
 //!   gate is fail-closed in production install layouts and is skipped ONLY
-//!   under a compile-time-baked dev-layout detector (`launch.rs:2194`'s
-//!   parameterized core decision), never a runtime toggle. This only applies
+//!   under that compile-time-baked dev-layout detector's
+//!   parameterized core decision, never a runtime toggle. This only applies
 //!   on the arms that actually spawn `nono-shell-broker.exe`
 //!   (`BrokerLaunch`/`BrokerLaunchNoPty`), so it is IN as a row scoped to
 //!   those entry paths, not a universal row.
@@ -141,8 +141,8 @@
 //! **`nono-shell-broker.exe`** itself — Medium-IL and deliberately
 //! unconfined. The real AppContainer-confined grandchild is spawned later,
 //! inside the broker's own separate **`CREATE_SUSPENDED`** window
-//! (`nono-shell-broker/src/main.rs:537-661`, package-SID registration at
-//! `:322-336`). Probing `AppContainerProfile` from `EntryPath::DirectCli`
+//! (`nono-shell-broker/src/main.rs::run`, which also performs the package-SID
+//! registration). Probing `AppContainerProfile` from `EntryPath::DirectCli`
 //! would inspect the wrong process before the real target process even
 //! exists — reproducing CINT-02's own failure mode inside its own fix.
 //!
@@ -256,7 +256,7 @@ pub(crate) enum LayerId {
 /// `select_windows_token_arm`) — the daemon path bypasses that cascade
 /// entirely (RESEARCH §B: "N/A — daemon path does not go through
 /// `select_windows_token_arm` at all"), and the broker's own suspended
-/// spawn of the real confined child (`nono-shell-broker/src/main.rs:537-661`)
+/// spawn of the real confined child (`nono-shell-broker/src/main.rs::run`)
 /// is a second, independent `CREATE_SUSPENDED` window that `WindowsTokenArm`
 /// does not model either — hence `Broker` is its own `EntryPath` variant,
 /// not folded into `DirectCli`'s `BrokerLaunch`/`BrokerLaunchNoPty` arms.
@@ -270,7 +270,7 @@ pub(crate) enum EntryPath {
     DirectCli,
     /// `nono-shell-broker.exe` spawning the real confined grandchild inside
     /// its own separate `CREATE_SUSPENDED` window
-    /// (`nono-shell-broker/src/main.rs:537-661`). This is the process
+    /// (`nono-shell-broker/src/main.rs::run`). This is the process
     /// Blocker-1 (above) exists to correctly attribute layers to.
     Broker,
     /// `nono-agentd.exe`'s daemon-side launch path
@@ -643,7 +643,7 @@ const MANDATORY_INTEGRITY_LABEL_EXPECTANCY: [ArmExpectancy; 6] = [
         expected: true,
     },
     // The broker applies its own Low-IL mandatory label to the real
-    // grandchild's primary token (`nono-shell-broker/src/main.rs:615-644`,
+    // grandchild's primary token (`nono-shell-broker/src/main.rs::run`,
     // between CREATE_SUSPENDED and ResumeThread) — a second, independent
     // application of this same layer, per RESEARCH §D point 2.
     ArmExpectancy {
@@ -791,7 +791,7 @@ const WFP_EGRESS_FILTERS_EXPECTANCY: [ArmExpectancy; 6] = DACL_PACKAGE_SID_SCOPE
 
 /// `netsh advfirewall` block rules are program-path-scoped, not
 /// session-scoped, and network enforcement is prepared inside
-/// `prepare_live_windows_launch` (`mod.rs:484`) regardless of which
+/// `mod.rs::prepare_live_windows_launch` regardless of which
 /// `WindowsTokenArm` is ultimately selected — so this row's expectancy
 /// mirrors `MandatoryIntegrityLabel`'s "all `DirectCli` arms" shape rather
 /// than being package-SID-scoped like the DACL/WFP rows above. Shares
@@ -821,7 +821,8 @@ const MINIFILTER_ABSENCE_EXPECTANCY: [ArmExpectancy; 3] = [
 /// Job Object containment applies to whatever process `nono-cli` directly
 /// spawns (any `DirectCli` arm — including `BrokerLaunch`/`BrokerLaunchNoPty`,
 /// which job-contains `nono-shell-broker.exe` itself) and to the daemon's
-/// own independently-created job (`agent_daemon/launch.rs:959`/`:1049`).
+/// own independently-created job (`agent_daemon/launch.rs::create_agent_job`
+/// plus `agent_daemon/launch.rs::assign_process_to_agent_job`).
 const JOB_OBJECT_CONTAINMENT_EXPECTANCY: [ArmExpectancy; 6] = [
     ArmExpectancy {
         entry_path: EntryPath::DirectCli,
@@ -1027,7 +1028,8 @@ const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
         // pre-spawn `installed_filter_count` IPC check already fails
         // closed, so the code's own behavior IS Abort — this matches the
         // code rather than the "normally downgrades" framing CONTEXT.md's
-        // D-18 discussion assumed (see network.rs:1698-1800).
+        // D-18 discussion assumed (see
+        // `network.rs::assert_wfp_activation_installed_filters`).
         outcome: ContractOutcome::Abort,
         probe: ProbeKind::ConfirmedByEnforcingComponentReport,
     },
@@ -1098,8 +1100,8 @@ const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
 /// Every `LayerId` variant, in declaration order. D-01/D-11: platform-
 /// neutral (no `#[cfg]`) so drift tests and Phase 118's receipt type can
 /// iterate it on any host. Mirrors the `NetworkAuditDenialCategory::ALL` +
-/// `assert_all_variants_covered` idiom (`crates/nono/src/undo/types.rs:333-345`,
-/// `:363-377`) exactly: this is the mechanism that fails the build when a
+/// `assert_all_variants_covered` idiom
+/// (`crates/nono/src/undo/types.rs::assert_all_variants_covered`) exactly: this is the mechanism that fails the build when a
 /// `LayerId` variant is added without a corresponding `ALL` entry and match
 /// arm below.
 pub(crate) const ALL: &[LayerId] = &[
@@ -1154,7 +1156,7 @@ pub(crate) fn all_entries() -> &'static [LayerRegistryEntry] {
 }
 
 /// Non-Windows stub: matches the `read_machine_egress_policy` split
-/// (`crates/nono/src/machine_policy.rs:150-183`, `:696-705`) this plan's
+/// (`crates/nono/src/machine_policy.rs::read_machine_egress_policy`) this plan's
 /// `<interfaces>` block cites as the pattern to copy for any Windows-only
 /// *population* function this file adds.
 #[cfg(not(target_os = "windows"))]
