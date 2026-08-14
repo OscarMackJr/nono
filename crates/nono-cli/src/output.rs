@@ -2212,13 +2212,67 @@ mod tests {
         // going quiet — the char-literal bug dropped whole lines inside a
         // 1417-literal scan and nothing moved. Each file on the surface must
         // contribute its own non-trivial share.
-        const PER_FILE_FLOOR: usize = 25;
+        //
+        // ROUND-4 WR-08: a FLAT floor of 25 gave the smallest file
+        // (`attestation_downgrade_event.rs`, 26 literals) exactly one literal
+        // of headroom. Deleting two string literals from it — an ordinary
+        // refactor — tripped a gate whose message reads "the extractor has
+        // gone quiet for this file", pointing the next maintainer at the
+        // extractor rather than at their own edit. The failure direction is
+        // loud rather than silent, so that is a calibration and diagnosability
+        // problem, not a coverage hole; but a floor a two-line edit crosses is
+        // not measuring what it claims.
+        //
+        // The floor is now PROPORTIONAL to a recorded baseline: half of the
+        // count measured on 2026-08-14, with an absolute minimum of 10. For
+        // `attestation_downgrade_event.rs` that is max(10, 26/2) = 13, so the
+        // two-literal refactor clears it by 11 instead of crossing it by 1 —
+        // while a genuine collapse (the extractor going quiet, which is what
+        // the char-literal bug did) still trips it. What this gate can detect
+        // for a small file is "went to (near) zero", not "went below 25", and
+        // the numbers now say so. The measured counts are printed on every run
+        // so drift in either direction is legible without a failure.
+        const MIN_FLOOR: usize = 10;
+        // (label, literals measured 2026-08-14). Deliberately explicit, not
+        // derived: a baseline recomputed from the current source would make
+        // the floor unconditionally satisfiable, which is the whole failure
+        // mode this gate exists to catch.
+        const BASELINE: &[(&str, usize)] = &[
+            ("output.rs", 429),
+            ("exec_strategy_windows/launch.rs", 757),
+            ("exec_strategy_windows/attestation.rs", 66),
+            ("exec_strategy_windows/attestation_downgrade_event.rs", 26),
+            ("main.rs", 204),
+        ];
+        assert_eq!(
+            BASELINE.len(),
+            per_file.len(),
+            "WR-08: the recorded baseline covers {} file(s) but {} were scanned — the surface \
+             list and the baseline list have diverged, so at least one file has no floor at \
+             all. Per-file counts: {per_file:?}",
+            BASELINE.len(),
+            per_file.len()
+        );
+        eprintln!("WR-08 measured per-file counts: {per_file:?}");
         for (label, n) in &per_file {
+            let baseline = BASELINE
+                .iter()
+                .find(|(l, _)| l == label)
+                .map(|(_, c)| *c)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "WR-08: {label} is on the downgrade surface but has no recorded \
+                         literal baseline, so it has no per-file floor. Add one."
+                    )
+                });
+            let floor = (baseline / 2).max(MIN_FLOOR);
             assert!(
-                *n >= PER_FILE_FLOOR,
-                "WR-06: only {n} string literal(s) scanned in {label} (floor \
-                 {PER_FILE_FLOOR}); the extractor has gone quiet for this file. Per-file \
-                 counts: {per_file:?}"
+                *n >= floor,
+                "WR-06/WR-08: only {n} string literal(s) scanned in {label} (floor {floor} = \
+                 max({MIN_FLOOR}, baseline {baseline} / 2)). Either the extractor has gone \
+                 quiet for this file, or the file genuinely shrank by more than half — in \
+                 which case update its baseline in BASELINE deliberately. Per-file counts: \
+                 {per_file:?}"
             );
         }
     }
