@@ -26,18 +26,53 @@
 //!
 //! # The rule
 //!
-//! A region is skipped when a `#[cfg(...)]` attribute that gates on `test`
-//! (but NOT `not(test)`) is followed — possibly across **anything that is not
-//! the gated item** — by an INLINE `mod foo {`. The region ends at the closing
-//! brace at the module's own indentation, so test modules nested inside
-//! another module (`agent_daemon/launch.rs`'s live inside `mod windows_impl`)
-//! close correctly. A bare `mod foo;` *declaration* opens no region — that is
-//! `main.rs:155`'s `#[cfg(test)] mod test_env;`, and treating it as a region
-//! start silently truncated the `main.rs` half of a gate to nothing.
+//! A region is skipped when a `#[cfg(...)]` attribute that gates **test-only**
+//! code (see [`is_cfg_test_attr`]) is followed — possibly across
+//! **anything that is not the gated item** — by an INLINE `mod foo {`. The
+//! region ends at the closing brace at the module's own indentation, so test
+//! modules nested inside another module (`agent_daemon/launch.rs`'s live inside
+//! `mod windows_impl`) close correctly. A bare `mod foo;` *declaration* opens
+//! no region — that is `main.rs:155`'s `#[cfg(test)] mod test_env;`, and
+//! treating it as a region start silently truncated the `main.rs` half of a
+//! gate to nothing.
 //!
-//! Line comments are dropped as well: prose ABOUT a rule is not an instance of
-//! it, and a comment naming the thing a gate hunts for would otherwise satisfy
-//! the gate.
+//! Comments are dropped as well: prose ABOUT a rule is not an instance of it,
+//! and a comment naming the thing a gate hunts for would otherwise satisfy the
+//! gate.
+//!
+//! # Round-6 WR-02: one rule for "is this line code", stated once
+//!
+//! There used to be TWO comment rules in this module, both enumerations:
+//! the whole-scan rule dropped lines whose trimmed text started with `//`
+//! (block comments were kept, so a `/* … */` naming a gate's needle satisfied
+//! that gate), and the pending-attribute window admitted the four shapes
+//! `""` / `//` / `/*` / `*`. A block comment whose body lines are not
+//! `*`-aligned fell outside the second one:
+//!
+//! ```text
+//! #[cfg(test)]
+//! /* hello
+//!    world */
+//! mod t { #[test] fn x() {} }
+//! ```
+//!
+//! `world */` is none of those four shapes, so the pending flag cleared, the
+//! module opened no region, and its whole body was classified as production —
+//! WR-01's failure mode reopened by a third intervening token.
+//!
+//! Both rules are now the same one, [`line_has_code`], defined **positively**:
+//! a line contributes code unless everything on it is whitespace or comment.
+//! Rust's block comments nest, so the state carried between lines is a depth
+//! counter rather than a flag, and it is carried through region bodies too (so
+//! a `}` inside a block comment cannot close a region). The pending window no
+//! longer has a shape list at all: between an attribute and the item it gates,
+//! Rust permits attributes, comments and blank lines and nothing else, so
+//! "not a code line" IS the window.
+//!
+//! A block comment left open at EOF would silently swallow every line after it
+//! — the over-claim direction again — so it is recorded in
+//! [`ProductionScan::unterminated_block_comment`] and asserted alongside
+//! [`ProductionScan::unclosed_regions`].
 //!
 //! # Round-4 WR-01: the window was narrower than the class it documented
 //!
@@ -79,46 +114,394 @@
 //! the module line's ORIGINAL leading whitespace (so tabs match) and admits a
 //! trailing comment.
 
-/// Is `trimmed` (an already-trimmed line) a `cfg` attribute that gates on
-/// `test`?
+/// Three-valued truth for a `cfg` predicate evaluated with `test` pinned to a
+/// known value and **every other atom left unknown**.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Tri {
+    True,
+    False,
+    Unknown,
+}
+
+/// `all(..)`: false if any operand is false, true only if every one is true.
+/// `all()` with no operands is true, as in Rust.
+fn tri_all(operands: &[Tri]) -> Tri {
+    if operands.contains(&Tri::False) {
+        Tri::False
+    } else if operands.iter().all(|t| *t == Tri::True) {
+        Tri::True
+    } else {
+        Tri::Unknown
+    }
+}
+
+/// `any(..)`: true if any operand is true, false only if every one is false.
+/// `any()` with no operands is false, as in Rust.
+fn tri_any(operands: &[Tri]) -> Tri {
+    if operands.contains(&Tri::True) {
+        Tri::True
+    } else if operands.iter().all(|t| *t == Tri::False) {
+        Tri::False
+    } else {
+        Tri::Unknown
+    }
+}
+
+fn tri_not(operand: Tri) -> Tri {
+    match operand {
+        Tri::True => Tri::False,
+        Tri::False => Tri::True,
+        Tri::Unknown => Tri::Unknown,
+    }
+}
+
+/// A byte cursor over a whitespace-compacted `cfg` predicate.
+struct Cursor<'a> {
+    bytes: &'a [u8],
+    idx: usize,
+}
+
+impl<'a> Cursor<'a> {
+    fn peek(&self) -> Option<u8> {
+        self.bytes.get(self.idx).copied()
+    }
+
+    fn bump(&mut self) {
+        self.idx = self.idx.saturating_add(1);
+    }
+
+    /// A `cfg` atom or combinator name: ASCII word characters plus `:` so
+    /// path-shaped atoms do not silently truncate.
+    fn ident(&mut self) -> Option<&'a str> {
+        let start = self.idx;
+        while matches!(self.peek(), Some(c) if c.is_ascii_alphanumeric() || c == b'_' || c == b':')
+        {
+            self.bump();
+        }
+        if self.idx == start {
+            return None;
+        }
+        std::str::from_utf8(self.bytes.get(start..self.idx)?).ok()
+    }
+
+    /// Consume a `"…"` literal, honouring backslash escapes. Its CONTENT is
+    /// never inspected: `feature = "test"` is a feature named `test`, not the
+    /// `test` cfg, and must evaluate to [`Tri::Unknown`].
+    fn skip_string(&mut self) -> Option<()> {
+        if self.peek() != Some(b'"') {
+            return None;
+        }
+        self.bump();
+        loop {
+            match self.peek() {
+                None => return None,
+                Some(b'\\') => {
+                    self.bump();
+                    self.bump();
+                }
+                Some(b'"') => {
+                    self.bump();
+                    return Some(());
+                }
+                Some(_) => self.bump(),
+            }
+        }
+    }
+}
+
+/// Guard against a pathological nesting depth; real `cfg` predicates are 1-3
+/// deep.
+const MAX_CFG_DEPTH: u32 = 32;
+
+/// Evaluate one `cfg` predicate at the cursor with `test` bound to
+/// `test_is_on` and every other atom [`Tri::Unknown`].
 ///
-/// Covers `#[cfg(test)]` and `#[cfg(all(test, target_os = "..."))]`, both of
-/// which gate test modules in this crate.
+/// `None` means "this evaluator could not parse it", which callers must treat
+/// as *not* a test gate — see [`is_cfg_test_attr`]'s fail direction.
+fn eval_cfg_predicate(cursor: &mut Cursor, test_is_on: bool, depth: u32) -> Option<Tri> {
+    if depth > MAX_CFG_DEPTH {
+        return None;
+    }
+    let name = cursor.ident()?;
+    match cursor.peek() {
+        // A combinator: `all(..)`, `any(..)`, `not(..)`.
+        Some(b'(') => {
+            cursor.bump();
+            let mut operands: Vec<Tri> = Vec::new();
+            if cursor.peek() == Some(b')') {
+                cursor.bump();
+            } else {
+                loop {
+                    operands.push(eval_cfg_predicate(
+                        cursor,
+                        test_is_on,
+                        depth.saturating_add(1),
+                    )?);
+                    match cursor.peek() {
+                        Some(b',') => {
+                            cursor.bump();
+                            // A trailing comma before the closer.
+                            if cursor.peek() == Some(b')') {
+                                cursor.bump();
+                                break;
+                            }
+                        }
+                        Some(b')') => {
+                            cursor.bump();
+                            break;
+                        }
+                        _ => return None,
+                    }
+                }
+            }
+            match name {
+                "all" => Some(tri_all(&operands)),
+                "any" => Some(tri_any(&operands)),
+                "not" if operands.len() == 1 => Some(tri_not(operands[0])),
+                // An unrecognised combinator, or a `not` of the wrong arity,
+                // is something this evaluator cannot reason about.
+                _ => None,
+            }
+        }
+        // A key/value atom: `target_os = "windows"`, `feature = "x"`.
+        Some(b'=') => {
+            cursor.bump();
+            cursor.skip_string()?;
+            Some(Tri::Unknown)
+        }
+        // A bare atom: `test`, `unix`, `windows`, `doc`.
+        _ => Some(if name == "test" {
+            if test_is_on {
+                Tri::True
+            } else {
+                Tri::False
+            }
+        } else {
+            Tri::Unknown
+        }),
+    }
+}
+
+/// The text inside `#[cfg( … )]`, or `None` if `compact` is not a `cfg`
+/// attribute. Parenthesis matching skips string literals, so
+/// `feature = "a)b"` cannot terminate the attribute early.
+fn cfg_attribute_body(compact: &str) -> Option<&str> {
+    let rest = compact.strip_prefix("#[cfg(")?;
+    let bytes = rest.as_bytes();
+    let mut depth: usize = 1;
+    let mut idx: usize = 0;
+    let mut in_string = false;
+    while idx < bytes.len() {
+        let c = bytes[idx];
+        if in_string {
+            match c {
+                b'\\' => idx = idx.saturating_add(1),
+                b'"' => in_string = false,
+                _ => {}
+            }
+        } else {
+            match c {
+                b'"' => in_string = true,
+                b'(' => depth = depth.saturating_add(1),
+                b')' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        // The attribute must close immediately after the
+                        // predicate. Anything further along the line (an
+                        // inline `mod foo {`) is not part of it.
+                        return if bytes.get(idx.saturating_add(1)) == Some(&b']') {
+                            rest.get(..idx)
+                        } else {
+                            None
+                        };
+                    }
+                }
+                _ => {}
+            }
+        }
+        idx = idx.saturating_add(1);
+    }
+    None
+}
+
+/// Is `trimmed` (an already-trimmed, possibly multi-line-joined line) a `cfg`
+/// attribute that gates **test-only** code?
 ///
-/// # Why `not(test` is excluded
+/// # The rule, stated once
 ///
-/// `#[cfg(not(test))]` contains the substring `test)` and so was classified as
-/// a test gate by both pre-WR-01 mirrors. A `#[cfg(not(test))] mod foo {` is
-/// *production* code — it exists only in non-test builds — and would have been
-/// skipped in its entirety. No such attribute exists in this crate today, so
-/// that was latent rather than live; it is excluded here so it stays that way.
+/// An attribute gates test-only code exactly when its predicate is FALSE in
+/// every build where `test` is off. This is evaluated rather than
+/// pattern-matched: the predicate is parsed, `test` is bound to `false`, every
+/// other atom is left UNKNOWN, and the attribute is a test gate iff the
+/// three-valued result is definitely `False`. That one rule settles `all`,
+/// `any`, `not` and every nesting of them without a case per shape:
 ///
-/// # Whitespace is removed before matching (round-4 WR-01, shape 3)
+/// | Attribute | With `test = false` | Test gate? |
+/// |---|---|---|
+/// | `#[cfg(test)]` | `False` | yes |
+/// | `#[cfg(all(test, target_os = "windows"))]` | `all(False, ?)` = `False` | yes |
+/// | `#[cfg(any(all(test, unix), all(test, windows)))]` | `any(False, False)` = `False` | yes |
+/// | `#[cfg(any(test, feature = "x"))]` | `any(False, ?)` = `?` | **no** |
+/// | `#[cfg(not(test))]` | `not(False)` = `True` | no |
+/// | `#[cfg(all(not(test), unix))]` | `all(True, ?)` = `?` | no |
+/// | `#[cfg(target_os = "windows")]` | `?` | no |
+///
+/// # Round-6 WR-01: why `any(test, …)` is the direction that matters
+///
+/// The predicate this replaced was three substring tests
+/// (`starts_with("#[cfg(")`, `!contains("not(test")`,
+/// `contains("test)") || contains("test,")`). `#[cfg(any(test, feature = "x"))]`
+/// contains `test,` and not `not(test`, so it classified as a **test gate** —
+/// and a module gated that way is compiled into production builds whenever the
+/// other disjunct holds, so the classifier deleted a *production* module's
+/// entire body from the scan.
+///
+/// That is the OVER-claim direction, and it is invisible to all three checks in
+/// [`ProductionScan::assert_split_is_correct`]: the region closes fine, a
+/// production module carries no test attribute to leak, and `skipped_regions`
+/// is *more* non-empty rather than less. A gate whose production needle lived in
+/// that module would go green by absence with no signal at all. The shape is
+/// written in this crate today, at
+/// `session_commands.rs`'s `#[cfg(any(test, target_os = "macos", target_os = "windows"))] fn format_bytes_human`.
+///
+/// # Fail direction on a predicate this cannot parse
+///
+/// `None` from the evaluator (an unknown combinator, malformed nesting,
+/// runaway depth) yields `false` — NOT a test gate. The gated body then stays
+/// in the production half, where a leaked `#[test]` is reported loudly by
+/// [`ProductionScan::assert_split_is_correct`]. The opposite default would
+/// delete source silently.
+///
+/// # Whitespace is removed before parsing (round-4 WR-01, shape 3)
 ///
 /// A `cfg` attribute may be written across several source lines. Callers join
-/// it back together before calling this (see [`scan_production`]), and the
-/// join leaves interior spaces (`#[cfg(all( test ))]`), which no substring
-/// needle written for the single-line form would match. Compacting first makes
-/// the predicate independent of how the attribute was formatted.
+/// it back together before calling this (see [`scan_production`]), and the join
+/// leaves interior spaces (`#[cfg(all( test ))]`). Compacting first makes the
+/// predicate independent of how the attribute was formatted.
 #[must_use]
 pub fn is_cfg_test_attr(trimmed: &str) -> bool {
     let compact: String = trimmed.chars().filter(|c| !c.is_whitespace()).collect();
-    compact.starts_with("#[cfg(")
-        && !compact.contains("not(test")
-        && (compact.contains("test)") || compact.contains("test,"))
+    let Some(body) = cfg_attribute_body(&compact) else {
+        return false;
+    };
+    let mut cursor = Cursor {
+        bytes: body.as_bytes(),
+        idx: 0,
+    };
+    let Some(without_test) = eval_cfg_predicate(&mut cursor, false, 0) else {
+        return false;
+    };
+    // Trailing text the grammar above did not account for means this is not a
+    // predicate we understand. Fail toward "not a test gate".
+    if cursor.idx != body.len() {
+        return false;
+    }
+    without_test == Tri::False
 }
 
 /// Is `trimmed` a test-function attribute — the thing that must NEVER survive
 /// into a production half?
 ///
-/// Matches `#[test]` and the path-qualified forms (`#[tokio::test]`,
-/// `#[rstest::test]`). Deliberately a class, not the one literal: a leaked
-/// module brings whatever test attribute its functions use, and pinning only
-/// `#[test]` would make the leak check itself the narrow needle this review
-/// round keeps finding.
+/// # The rule, stated once
+///
+/// An attribute is a test attribute when the **last path segment of its name,
+/// with any argument list stripped**, is `test`. That covers `#[test]`,
+/// `#[tokio::test]`, `#[async_std::test]`, and — the round-6 WR-03 gap — every
+/// PARENTHESISED form: `#[tokio::test(flavor = "multi_thread")]`,
+/// `#[rstest::test(case(1))]`, `#[test(harness)]`.
+///
+/// Two bare-ident harness attributes are matched by NAME as well, because no
+/// shape rule can reach them: `#[rstest]` and `#[test_case(…)]` mark test
+/// functions while looking like any other attribute. That part of the coverage
+/// is an enumeration and is stated as one rather than dressed up as a rule.
+///
+/// # Why the width of this predicate decides what the whole module can see
+///
+/// [`ProductionScan::leaked_test_attributes`] is the ONLY check in
+/// [`ProductionScan::assert_split_is_correct`] that fires in the under-claim
+/// direction, so this is the width that decides whether a classifier gap — like
+/// the block-comment window WR-02 closed — is caught or silent. The predicate
+/// this replaced was two exact forms (`== "#[test]"` and a `"::test]"` suffix),
+/// which no parenthesised attribute matches, under a doc comment that already
+/// called itself a class. The crate has 92 plain `#[tokio::test]` and zero
+/// parenthesised forms today, so the gap was latent — the same standard under
+/// which `not(test)` was closed pre-emptively.
 #[must_use]
 pub fn is_test_attr(trimmed: &str) -> bool {
-    trimmed == "#[test]" || (trimmed.starts_with("#[") && trimmed.ends_with("::test]"))
+    let Some(body) = trimmed.strip_prefix("#[").and_then(|b| b.strip_suffix(']')) else {
+        return false;
+    };
+    // `tokio::test(flavor = "multi_thread")` -> `tokio::test` -> `test`.
+    let head = body.split('(').next().unwrap_or(body).trim();
+    let last_segment = head.rsplit("::").next().unwrap_or(head);
+    last_segment == "test" || matches!(head, "rstest" | "test_case")
+}
+
+/// Does `line` contribute any CODE, given the block-comment nesting `depth`
+/// carried in from the line above? `depth` is updated for the next line.
+///
+/// This is the module's ONE comment rule (round-6 WR-02). It is defined
+/// positively — a line contributes code unless everything on it is whitespace
+/// or comment — so both callers that need it (the whole-file scan and the
+/// pending-attribute window) ask the same question instead of each carrying a
+/// list of comment renderings.
+///
+/// Rust's block comments NEST, so the carried state is a depth counter and not
+/// a flag.
+///
+/// # Deliberate limit
+///
+/// Block-comment state is only ENTERED from a line whose trimmed text starts
+/// with `/*`, never mid-line. That keeps this free of string- and
+/// char-literal lexing (`let s = "/* not a comment */";` cannot open a
+/// comment), at the cost of one accepted false drop: a comment-shaped line
+/// inside a multi-line raw string literal is treated as a comment. The
+/// pre-existing `//` rule has always had exactly that limit; this extends it
+/// symmetrically rather than adding a new class.
+fn line_has_code(line: &str, depth: &mut usize) -> bool {
+    let trimmed = line.trim();
+    if *depth == 0 {
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            return false;
+        }
+        if !trimmed.starts_with("/*") {
+            return true;
+        }
+    }
+    let bytes = trimmed.as_bytes();
+    let mut idx: usize = 0;
+    while idx < bytes.len() {
+        if *depth > 0 {
+            // Inside a block comment: only `*/` and a nested `/*` matter.
+            if bytes[idx] == b'*' && bytes.get(idx.saturating_add(1)) == Some(&b'/') {
+                *depth = depth.saturating_sub(1);
+                idx = idx.saturating_add(2);
+            } else if bytes[idx] == b'/' && bytes.get(idx.saturating_add(1)) == Some(&b'*') {
+                *depth = depth.saturating_add(1);
+                idx = idx.saturating_add(2);
+            } else {
+                idx = idx.saturating_add(1);
+            }
+            continue;
+        }
+        // Depth just returned to zero, so `idx` sits on a char boundary
+        // (immediately after a `*/`). Whatever follows decides the line.
+        let Some(tail) = trimmed.get(idx..) else {
+            return false;
+        };
+        let rest = tail.trim_start();
+        if rest.is_empty() || rest.starts_with("//") {
+            return false;
+        }
+        if !rest.starts_with("/*") {
+            return true;
+        }
+        *depth = 1;
+        idx = idx
+            .saturating_add(tail.len().saturating_sub(rest.len()))
+            .saturating_add(2);
+    }
+    false
 }
 
 /// The production half of a source file, plus the evidence a caller needs to
@@ -139,6 +522,14 @@ pub struct ProductionScan<'a> {
     /// `!skipped_regions.is_empty()`) and is invisible to the `#[test]`-leak
     /// check, which only fires in the under-claim direction (WR-03).
     pub unclosed_regions: Vec<usize>,
+    /// Zero-based line at which a block comment was opened and never closed
+    /// before end of file. Every line after it was dropped as comment text.
+    ///
+    /// Same over-claim direction as [`Self::unclosed_regions`] and the same
+    /// obligation: callers MUST assert it is `None`. Round-6 WR-02 made block
+    /// comments a tracked, nesting-aware state; this is the failure mode that
+    /// state introduces, surfaced rather than left silent.
+    pub unterminated_block_comment: Option<usize>,
 }
 
 impl ProductionScan<'_> {
@@ -184,18 +575,27 @@ impl ProductionScan<'_> {
     /// *correctness assertion* to only one; this exists so a third consumer
     /// cannot repeat that.
     ///
-    /// The three checks are deliberately ordered worst-direction-first:
+    /// The four checks are deliberately ordered worst-direction-first:
     ///
-    /// 1. `unclosed_regions` — over-claim, production text silently unscanned.
-    /// 2. `leaked_test_attributes` — under-claim, test assertions able to
+    /// 1. `unterminated_block_comment` — over-claim, everything after the
+    ///    unclosed `/*` dropped as comment text.
+    /// 2. `unclosed_regions` — over-claim, production text silently unscanned.
+    /// 3. `leaked_test_attributes` — under-claim, test assertions able to
     ///    satisfy the caller's gate.
-    /// 3. `skipped_regions` non-empty — the zero-region case neither of the
+    /// 4. `skipped_regions` non-empty — the zero-region case none of the
     ///    above can see.
     ///
     /// # Panics
     ///
     /// If the production/test split of the scanned file is not correct.
     pub fn assert_split_is_correct(&self, label: &str) {
+        assert!(
+            self.unterminated_block_comment.is_none(),
+            "WR-02: a block comment opened at {label}:{:?} was never closed, so every line \
+             after it was dropped as comment text and is silently absent from this gate. \
+             Over-claiming satisfies every line-count floor, so nothing else can see it.",
+            self.unterminated_block_comment.map(|i| i + 1)
+        );
         assert!(
             self.unclosed_regions.is_empty(),
             "WR-03: {} `#[cfg(test)]` module region(s) in {label} were never closed (first at \
@@ -284,6 +684,28 @@ fn is_region_closer(line: &str, indent: &str) -> bool {
     after.is_empty() || after.starts_with("//") || after.starts_with("/*")
 }
 
+/// Block-comment nesting carried across lines, plus where the outermost open
+/// comment began (for [`ProductionScan::unterminated_block_comment`]).
+#[derive(Default)]
+struct CommentState {
+    depth: usize,
+    opened_at: Option<usize>,
+}
+
+impl CommentState {
+    /// Feed the zero-based line `idx`; returns whether it contributes code.
+    fn feed(&mut self, line: &str, idx: usize) -> bool {
+        let was_open = self.depth > 0;
+        let has_code = line_has_code(line, &mut self.depth);
+        if self.depth == 0 {
+            self.opened_at = None;
+        } else if !was_open {
+            self.opened_at = Some(idx);
+        }
+        has_code
+    }
+}
+
 /// Split `src` into its production half per the rule in this module's doc.
 #[must_use]
 pub fn scan_production(src: &str) -> ProductionScan<'_> {
@@ -293,8 +715,19 @@ pub fn scan_production(src: &str) -> ProductionScan<'_> {
     let mut unclosed_regions: Vec<usize> = Vec::new();
     let mut idx = 0usize;
     let mut pending_test_attr = false;
+    let mut comments = CommentState::default();
 
     while idx < lines.len() {
+        // The ONE comment rule, applied before anything else (round-6 WR-02).
+        // Inside a comment nothing is an attribute, an item, or production
+        // text — and a non-code line never ENDS a pending attribute window,
+        // because between an attribute and the item it gates Rust permits
+        // attributes, comments and blank lines and nothing else.
+        if !comments.feed(lines[idx], idx) {
+            idx += 1;
+            continue;
+        }
+
         let t = lines[idx].trim();
 
         // Attributes are handled first and as a unit, because a `cfg`
@@ -318,15 +751,10 @@ pub fn scan_production(src: &str) -> ProductionScan<'_> {
         }
 
         if pending_test_attr {
-            // WR-01: the window is the CLASS — "anything that is not the gated
-            // item". Blank lines, plain `//` comments and block-comment bodies
-            // may all sit between a `cfg` attribute and the item it gates;
-            // admitting only `#[`/`///`/`//!` is what let one blank line move
-            // 387 lines of test code into the production half.
-            if t.is_empty() || t.starts_with("//") || t.starts_with("/*") || t.starts_with('*') {
-                idx += 1;
-                continue;
-            }
+            // WR-01/WR-02: the window needs no shape list. Every non-code line
+            // was already consumed by `comments.feed` above, and attributes by
+            // the branch above that, so reaching here means this line IS the
+            // gated item.
             pending_test_attr = false;
             // An INLINE `mod foo {` opens a test region; a bare `mod foo;`
             // declaration opens nothing.
@@ -337,7 +765,11 @@ pub fn scan_production(src: &str) -> ProductionScan<'_> {
                 idx += 1;
                 let mut closed_at = None;
                 while idx < lines.len() {
-                    if is_region_closer(lines[idx], indent) {
+                    // Comment state is carried THROUGH the region body too, so
+                    // it stays coherent afterwards and so a `}` sitting inside
+                    // a block comment cannot close the region early.
+                    let has_code = comments.feed(lines[idx], idx);
+                    if has_code && is_region_closer(lines[idx], indent) {
                         closed_at = Some(idx);
                         break;
                     }
@@ -364,10 +796,6 @@ pub fn scan_production(src: &str) -> ProductionScan<'_> {
             // production text either way, but it opens no region.
         }
 
-        if t.starts_with("//") {
-            idx += 1;
-            continue;
-        }
         out.push((idx, lines[idx]));
         idx += 1;
     }
@@ -376,6 +804,7 @@ pub fn scan_production(src: &str) -> ProductionScan<'_> {
         lines: out,
         skipped_regions,
         unclosed_regions,
+        unterminated_block_comment: comments.opened_at,
     }
 }
 
@@ -404,14 +833,102 @@ mod tests {
             "#[cfg(target_os = \"windows\")]",
             "#[allow(clippy::unwrap_used)]",
             "mod tests {",
+            // Round-6 WR-01. `any(test, ..)` is satisfied by its OTHER
+            // disjuncts, so the gated item is compiled into production builds
+            // and must never be skipped. The second is the real occurrence:
+            // `session_commands.rs`'s `fn format_bytes_human`.
+            "#[cfg(any(test, feature = \"x\"))]",
+            "#[cfg(any(test, target_os = \"macos\", target_os = \"windows\"))]",
+            // `not(any(test, ..))` is TRUE in a non-test build where the other
+            // disjuncts are also off.
+            "#[cfg(not(any(test, feature = \"x\")))]",
+            // An `any(test, ..)` nested under `all(..)` is still reachable in
+            // production; the rule composes rather than pattern-matching.
+            "#[cfg(all(any(test, feature = \"x\"), unix))]",
+            // A FEATURE named `test` is not the `test` cfg.
+            "#[cfg(feature = \"test\")]",
+            // Not `cfg` at all.
+            "#[cfg_attr(test, derive(Debug))]",
         ] {
             assert!(
                 !is_cfg_test_attr(no),
-                "{no:?} must NOT classify as a test gate — `#[cfg(not(test))]` gates \
-                 PRODUCTION code, and treating it as a test gate skips a whole production \
-                 module"
+                "{no:?} must NOT classify as a test gate — it gates code that IS compiled \
+                 into production builds, and skipping it deletes real source from every gate \
+                 built on this helper. That is the over-claim direction, which \
+                 `assert_split_is_correct` cannot see."
             );
         }
+    }
+
+    /// Round-6 WR-01: the rule is EVALUATED, so nesting composes rather than
+    /// needing a case per shape. `any(all(test, ..), all(test, ..))` is false
+    /// in every non-test build and so IS test-only, even though its head is
+    /// the `any` that the same round excluded.
+    #[test]
+    fn nested_cfg_predicates_compose() {
+        assert!(
+            is_cfg_test_attr("#[cfg(any(all(test, unix), all(test, windows)))]"),
+            "every disjunct requires `test`, so this is unreachable in a production build"
+        );
+        assert!(
+            !is_cfg_test_attr("#[cfg(any(all(test, unix), windows))]"),
+            "the second disjunct does NOT require `test`, so this IS reachable in a \
+             production build"
+        );
+        assert!(is_cfg_test_attr("#[cfg(all(test, not(miri)))]"));
+        assert!(!is_cfg_test_attr("#[cfg(all(not(test), not(miri)))]"));
+    }
+
+    /// Round-6 WR-01: an unparseable predicate must fail toward NOT a test
+    /// gate, so the gated body stays in the production half where a leaked
+    /// `#[test]` is reported loudly. The opposite default deletes source
+    /// silently.
+    #[test]
+    fn an_unparseable_cfg_predicate_is_not_a_test_gate() {
+        for malformed in [
+            "#[cfg(mystery(test))]",
+            "#[cfg(all(test)",
+            "#[cfg(not(test, unix))]",
+            "#[cfg()]",
+        ] {
+            assert!(
+                !is_cfg_test_attr(malformed),
+                "{malformed:?} cannot be evaluated, so it must fail toward the LOUD \
+                 direction (kept as production), not the silent one"
+            );
+        }
+    }
+
+    /// Round-6 WR-01 end to end: a module gated by `any(test, ..)` is
+    /// PRODUCTION and its body must survive the scan whole.
+    ///
+    /// This is the direction no check in `assert_split_is_correct` can see —
+    /// the region closes fine, a production module carries no test attribute
+    /// to leak, and `skipped_regions` grows rather than shrinks — so it has to
+    /// be asserted here.
+    #[test]
+    fn an_any_test_module_is_production_and_is_kept_whole() {
+        let src = "\
+#[cfg(any(test, target_os = \"macos\", target_os = \"windows\"))]
+mod platform_helpers {
+    fn format_bytes_human() {}
+}
+fn production_after() {}
+";
+        let scan = scan_production(src);
+        assert!(
+            scan.skipped_regions.is_empty(),
+            "`#[cfg(any(test, ..))]` gates code compiled into production builds whenever \
+             another disjunct holds; skipping it hides real source from every gate"
+        );
+        assert!(scan
+            .lines
+            .iter()
+            .any(|(_, l)| l.contains("fn format_bytes_human")));
+        assert!(scan
+            .lines
+            .iter()
+            .any(|(_, l)| l.contains("production_after")));
     }
 
     /// The exact shape WR-01 found live in `launch.rs`: an intervening
@@ -636,22 +1153,153 @@ fn a_leaked_test() {}
     /// keeps finding.
     #[test]
     fn test_attribute_classification_rule() {
-        for yes in ["#[test]", "#[tokio::test]", "#[rstest::test]"] {
+        for yes in [
+            "#[test]",
+            "#[tokio::test]",
+            "#[rstest::test]",
+            // Round-6 WR-03: the PARENTHESISED forms. `leaked_test_attributes`
+            // is the only under-claim check there is, so a leaked module whose
+            // functions use these was invisible to it.
+            "#[tokio::test(flavor = \"multi_thread\")]",
+            "#[tokio::test(flavor = \"multi_thread\", worker_threads = 2)]",
+            "#[rstest::test(case(1))]",
+            "#[async_std::test]",
+            "#[test(harness)]",
+            // Bare-ident harness attributes, matched by name.
+            "#[rstest]",
+            "#[test_case(1, 2)]",
+        ] {
             assert!(
                 is_test_attr(yes),
-                "{yes:?} must classify as a test attribute"
+                "{yes:?} must classify as a test attribute — this predicate's width is what \
+                 decides whether a classifier gap is caught or silent"
             );
         }
         for no in [
             "#[cfg(test)]",
+            "#[cfg(all(test, target_os = \"windows\"))]",
             "#[allow(clippy::unwrap_used)]",
+            "#[should_panic(expected = \"WR-03\")]",
+            "#[derive(Debug)]",
             "fn test() {}",
+            "// #[test]",
         ] {
             assert!(
                 !is_test_attr(no),
                 "{no:?} must NOT classify as a test attribute"
             );
         }
+    }
+
+    /// Round-6 WR-02: the pending window is defined POSITIVELY, so a block
+    /// comment whose body lines are not `*`-aligned no longer un-skips the
+    /// module.
+    ///
+    /// The enumeration this replaced admitted `""`, `//`, `/*` and `*`; the
+    /// line `   world */` is none of them, so the pending flag cleared, `mod t
+    /// {` opened no region, and the whole body — including the `#[test]` —
+    /// was classified as production.
+    #[test]
+    fn a_non_aligned_block_comment_before_the_mod_does_not_break_the_region() {
+        let src = "\
+fn production_a() {}
+#[cfg(test)]
+/* hello
+   world */
+mod t {
+    #[test]
+    fn x() {}
+}
+fn production_b() {}
+";
+        let scan = scan_production(src);
+        assert_eq!(
+            scan.skipped_regions.len(),
+            1,
+            "a block comment between the cfg attribute and the `mod` line must not \
+             re-classify the module body as production, whatever its body lines look like"
+        );
+        assert!(scan.leaked_test_attributes().is_empty());
+        assert!(scan.lines.iter().any(|(_, l)| l.contains("production_b")));
+        // The comment BODY must not reach the production half either: a
+        // `/* … */` naming a gate's needle would otherwise satisfy that gate.
+        assert!(
+            !scan.lines.iter().any(|(_, l)| l.contains("world")),
+            "block-comment text is comment text, exactly as `//` text is"
+        );
+    }
+
+    /// Round-6 WR-02: block comments NEST in Rust, so the carried state is a
+    /// depth counter. A flag would close on the inner `*/` and treat the
+    /// remaining comment body as code.
+    #[test]
+    fn nested_block_comments_are_tracked_by_depth() {
+        let src = "\
+/* outer
+   /* inner */
+   still comment */
+fn production() {}
+";
+        let scan = scan_production(src);
+        assert_eq!(
+            scan.lines.iter().map(|(_, l)| *l).collect::<Vec<_>>(),
+            vec!["fn production() {}"]
+        );
+        assert!(scan.unterminated_block_comment.is_none());
+    }
+
+    /// Round-6 WR-02: an inline `/* label */ value` annotation is CODE. The
+    /// shape is written in `exec_strategy_windows/launch.rs` today.
+    #[test]
+    fn a_line_with_an_inline_block_comment_is_still_code() {
+        let src = "\
+#[cfg(test)]
+mod t {
+    fn helper() {}
+}
+call(/* is_detached */ false, /* has_pty */ true);
+";
+        let scan = scan_production(src);
+        assert!(
+            scan.lines.iter().any(|(_, l)| l.contains("call(")),
+            "a balanced inline block comment leaves code on the line, so the line is kept"
+        );
+    }
+
+    /// Round-6 WR-02: a block comment left open at EOF swallows everything
+    /// after it. That is the over-claim direction, so it must be REPORTED.
+    #[test]
+    fn an_unterminated_block_comment_is_reported() {
+        let src = "\
+#[cfg(test)]
+mod t {
+    fn helper() {}
+}
+/* opened and never closed
+fn production_that_is_now_invisible() {}
+";
+        let scan = scan_production(src);
+        assert_eq!(scan.unterminated_block_comment, Some(4));
+        assert!(!scan
+            .lines
+            .iter()
+            .any(|(_, l)| l.contains("production_that_is_now_invisible")));
+    }
+
+    /// `assert_split_is_correct` must FAIL on an unterminated block comment —
+    /// the same reason it fails on an unclosed region.
+    #[test]
+    #[should_panic(expected = "WR-02")]
+    fn assert_split_is_correct_rejects_an_unterminated_block_comment() {
+        let src = "\
+#[cfg(test)]
+mod t {
+    fn helper() {}
+}
+/* opened and never closed
+fn production_that_is_now_invisible() {}
+";
+        scan_production(src).assert_split_is_correct("fixture.rs");
     }
 
     /// Round-4 WR-03: a closer carrying a trailing comment still closes.
