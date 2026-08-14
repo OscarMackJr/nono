@@ -2198,9 +2198,17 @@ mod tests {
     /// the floor happened to be tight — but nothing stopped `launch.rs` going
     /// to 0 while `output.rs` drifted to 2, and the record told the next
     /// maintainer that case was covered. The floor is now per file, and each
-    /// file must also have contributed at least one SKIPPED test region, so a
-    /// marker change cannot silently turn "production half only" into a
-    /// whole-file scan.
+    /// file's production/test split is checked for CORRECTNESS — not merely
+    /// for being non-empty — by
+    /// [`crate::cfg_test_regions::ProductionScan::assert_split_is_correct`].
+    ///
+    /// # Round-4 WR-02: the property, not the helper
+    ///
+    /// Round 3 shared the classifier with `layer_registry.rs`'s daemon gate
+    /// but not the correctness check, and that gate's `skipped_lines() > 0`
+    /// floor is monotone in the WRONG direction — a partial split makes it
+    /// smaller while keeping it above zero. Both consumers now call one shared
+    /// assertion, so the property travels with the helper.
     #[test]
     fn every_operator_detail_pointer_is_conditional() {
         use crate::cfg_test_regions::scan_production;
@@ -2254,33 +2262,23 @@ mod tests {
             ("exec_strategy_windows/launch.rs", LAUNCH_SRC, 1usize),
         ] {
             let (entries, scan) = production(src);
-            assert!(
-                !scan.skipped_regions.is_empty(),
-                "WR-01: no `#[cfg(test)]` module region was excluded from {label}, so this \
-                 gate is scanning the whole file including test assertions that legitimately \
-                 name the event log. Either the file lost its test modules, or \
-                 cfg_test_regions no longer recognises them."
-            );
-            // The split must be CORRECT, not merely non-empty. `!scan
-            // .skipped_regions.is_empty()` would have stayed green through
-            // WR-01's actual defect, where 6 of launch.rs's 12 test modules
-            // leaked into the production half because an `#[allow(...)]` sat
-            // between the cfg attribute and the `mod` line. A leaked module
-            // brings its `#[test]` attributes with it, so this catches the
-            // class directly and without restating the classifier's own rule.
-            let leaked: Vec<usize> = entries
-                .iter()
-                .filter(|(_, l)| l.trim() == "#[test]")
-                .map(|(i, _)| i + 1)
-                .collect();
-            assert!(
-                leaked.is_empty(),
-                "WR-01: {} `#[test]` attribute(s) appear in the PRODUCTION half of {label} \
-                 (first at line {:?}), so at least one `#[cfg(test)]` module leaked into the \
-                 scan and its assertions can satisfy this gate.",
-                leaked.len(),
-                leaked.first()
-            );
+            // The split must be CORRECT, not merely non-empty.
+            // `!scan.skipped_regions.is_empty()` would have stayed green
+            // through WR-01's actual defect, where 6 of launch.rs's 12 test
+            // modules leaked into the production half because an
+            // `#[allow(...)]` sat between the cfg attribute and the `mod`
+            // line. A leaked module brings its test attributes with it, so
+            // that catches the class directly and without restating the
+            // classifier's own rule.
+            //
+            // ROUND-4 WR-02/WR-03: this check used to be written out here,
+            // which is how `layer_registry.rs`'s mirror came to keep a
+            // wrong-direction floor instead. It now lives in the shared module
+            // as `assert_split_is_correct`, which additionally rejects a
+            // region that ran UNCLOSED to EOF — the over-claim direction, in
+            // which production text is silently unscanned and every
+            // line-count floor is more satisfied, not less.
+            scan.assert_split_is_correct(label);
 
             let mut hits = 0usize;
             for (idx, line) in &entries {
@@ -2341,12 +2339,11 @@ line: {}",
         // narrowing the needle.
         let mut main_mentions = 0usize;
         let (main_entries, main_scan) = production(MAIN_SRC);
-        assert!(
-            !main_scan.skipped_regions.is_empty(),
-            "WR-01: no `#[cfg(test)]` module region was excluded from main.rs — its test \
-             modules assert ON the rendered remediation text, so scanning them would let a \
-             test satisfy this gate"
-        );
+        // ROUND-4 WR-02: this half had only `!skipped_regions.is_empty()` —
+        // the same wrong-direction predicate, on the file whose test module
+        // asserts directly ON the rendered remediation text. Same shared
+        // correctness assertion as the two files above.
+        main_scan.assert_split_is_correct("main.rs");
         for (idx, line) in main_entries {
             for (pos, _) in line.match_indices(NEEDLE) {
                 main_mentions += 1;

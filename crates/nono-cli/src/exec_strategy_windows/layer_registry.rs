@@ -1446,16 +1446,28 @@ mod tests {
         // of test code as production. Both now call the one implementation in
         // `crate::cfg_test_regions`, which also fixes the `#[cfg(not(test))]`
         // misclassification both copies shared.
+        //
+        // ROUND-4 WR-02: round 3 propagated the shared CLASSIFIER to both
+        // consumers but the CORRECTNESS ASSERTION to only one. This site kept
+        // `scan.skipped_lines() > 0`, which is monotone in the WRONG
+        // direction: mis-classifying test code as production makes `skipped`
+        // smaller but keeps it above zero, so the floor stays green precisely
+        // as coverage degrades. Demonstrated mechanically — one blank line
+        // before `agent_daemon/launch.rs`'s `mod attestation_gate_tests {`
+        // moved 387 lines of test code into the production half, the floor
+        // stayed satisfied, and renaming the real production
+        // `layer = "DaclAncestorTraverse"` site then left this gate GREEN,
+        // satisfied by `attestation_gate_tests`'s own assertion. That is
+        // verbatim the failure this gate's own comment above records as the
+        // reason the test-module exclusion exists.
+        //
+        // The property now asserted is the one `output.rs`'s mirror already
+        // had, lifted into the shared module so a third consumer cannot skip
+        // it: no test attribute may survive into the production half, and no
+        // region may have run unclosed to EOF.
         let scan = crate::cfg_test_regions::scan_production(DAEMON_GATE_SRC);
+        scan.assert_split_is_correct("agent_daemon/launch.rs");
         let code: Vec<&str> = scan.lines.iter().map(|(_, l)| *l).collect();
-        let skipped_test_lines = scan.skipped_lines();
-        assert!(
-            skipped_test_lines > 0,
-            "CR-02 non-vacuity: no `#[cfg(test)]` module body was excluded from the daemon \
-             source scan, so a test assertion naming a LayerId would satisfy this gate \
-             without any production arm existing. Either the daemon file lost its test \
-             modules, or `production_lines` no longer recognises them."
-        );
 
         let mut checked = 0usize;
         for entry in all_entries() {
