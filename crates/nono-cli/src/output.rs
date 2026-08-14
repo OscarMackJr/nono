@@ -271,15 +271,30 @@ pub fn print_attestation_downgrade_banner(
 /// suppress is IDENTICAL either way, so this closes the disclosure direction
 /// without giving back any of WR-04's authority.
 ///
-/// # WR-06: what the injectivity claim actually rests on
+/// # WR-06/WR-07: what the injectivity claim actually rests on
 ///
-/// `marker_content_never_names_a_layer_and_stays_injective` enumerates the
-/// WHOLE reachable key space — all 2^13 subsets of a 13-name vocabulary,
-/// sorted and comma-joined as production builds the key — and asserts every
-/// one maps to a distinct content. That is a checked property of this key
-/// space, not an extrapolation from a sample; the earlier wording ("injective
-/// for every input this code can produce, up to a 128-bit collision") claimed
-/// it over an assertion covering six hand-written keys.
+/// Two sweeps, in two places, because this file must not learn the layer
+/// identity type (D-28's structural half):
+///
+/// - `marker_content_never_names_a_layer_and_stays_injective`, HERE, enumerates
+///   all 2^13 subsets of a **synthetic** 13-name vocabulary (`Layer00`…
+///   `Layer12`), sorted and comma-joined as production builds the key, and
+///   asserts each maps to a distinct content. That is a checked property of a
+///   STAND-IN key space, not of the reachable one.
+/// - `exec_strategy_windows::launch::attestation_gate_tests::
+///   marker_content_is_injective_over_the_real_layer_vocabulary` runs the same
+///   2^13 sweep over the REAL `layer_registry::ALL` `Debug` names, on the side
+///   of the boundary where that import is legal. That is the reachable key
+///   space, exactly.
+///
+/// Round-6 WR-07: the wording this replaced said the sweep here covered "the
+/// WHOLE reachable key space" and "every one of the 2^13 reachable keys". It
+/// did not — `Layer00` and `DaclAncestorTraverse` are different inputs, and
+/// injectivity of a hash over one input set does not transfer to another. That
+/// is the same "the record claims a guarantee the mechanism does not provide"
+/// defect WR-06 raised, reappearing in the fix that closed it. The claim is
+/// made TRUE rather than merely narrowed: the sweep over the real vocabulary
+/// now exists.
 ///
 /// See [`print_attestation_downgrade_banner`]'s doc for what this does NOT
 /// close (a same-user process can still pre-plant a correct marker, and on
@@ -306,10 +321,12 @@ fn marker_says_already_announced(path: &std::path::Path, dedup_key: &str) -> boo
 /// by a domain prefix, so this is 128 bits of *output width* against
 /// ACCIDENTAL collision — which is all WR-04 ever needed — and is emphatically
 /// not 128 bits of resistance against a chosen-input adversary. The record
-/// used to read as the latter. What the property actually rests on is the
-/// exhaustive enumeration in
-/// `marker_content_never_names_a_layer_and_stays_injective`: every one of the
-/// 2^13 reachable keys is checked to map to a distinct content.
+/// used to read as the latter. What the property actually rests on is
+/// exhaustive enumeration — of the SYNTHETIC vocabulary in
+/// `marker_content_never_names_a_layer_and_stays_injective` here, and of the
+/// real one in `exec_strategy_windows::launch::attestation_gate_tests::
+/// marker_content_is_injective_over_the_real_layer_vocabulary`, which is the
+/// sweep that actually covers the 2^13 reachable keys (round-6 WR-07).
 ///
 /// # Why a digest and not the key
 ///
@@ -335,8 +352,13 @@ fn marker_says_already_announced(path: &std::path::Path, dedup_key: &str) -> boo
 /// This is NOT a keyed MAC and is not claimed to be one: see
 /// [`print_attestation_downgrade_banner`]'s doc for why unforgeability is
 /// unreachable on the same-user, same-IL token arms.
+///
+/// `pub(crate)` only so the launch-side sweep over the REAL `LayerId`
+/// vocabulary can call it (round-6 WR-07). `output.rs` still never names the
+/// layer identity type; the vocabulary travels to the digest, not the other
+/// way.
 #[cfg(target_os = "windows")]
-fn attestation_downgrade_marker_content(dedup_key: &str) -> String {
+pub(crate) fn attestation_downgrade_marker_content(dedup_key: &str) -> String {
     use std::hash::{DefaultHasher, Hash, Hasher};
 
     fn digest(domain: &str, key: &str) -> u64 {
@@ -1663,17 +1685,27 @@ mod attestation_marker_path_tests {
             }
         }
 
-        // WR-06: injectivity over the WHOLE reachable key space, not a sample.
+        // WR-06: injectivity over a whole 2^13 key space, not a sample.
         //
         // Production builds `dedup_key` as the sorted comma-join of a SUBSET
         // of a 13-element `LayerId` enum, so there are at most 2^13 = 8192
-        // distinct inputs and all of them are cheaply enumerable. The
-        // vocabulary here is synthetic and fixed-width on purpose: `output.rs`
-        // must not learn the layer identity type (D-28's structural half), and
-        // a same-length same-shape vocabulary exercises the digest's input
-        // space identically. The launch-side sibling
-        // `downgrade_marker_files_never_contain_a_layer_name` is what binds
-        // the REAL vocabulary end to end.
+        // distinct inputs and all of them are cheaply enumerable.
+        //
+        // ROUND-6 WR-07: the vocabulary here is synthetic because `output.rs`
+        // must not learn the layer identity type (D-28's structural half) —
+        // but a synthetic vocabulary is a STAND-IN, not the reachable space,
+        // and the previous comment's claim that "a same-length same-shape
+        // vocabulary exercises the digest's input space identically" is not a
+        // property any hash has (it is not even same-length: `Layer00` is 7
+        // bytes, `DaclAncestorTraverse` is 20). What this sweep establishes is
+        // that the digest is injective over 8192 keys of production SHAPE.
+        //
+        // The claim over the REAL vocabulary is established by
+        // `exec_strategy_windows::launch::attestation_gate_tests::
+        // marker_content_is_injective_over_the_real_layer_vocabulary`, which
+        // runs this same sweep over `layer_registry::ALL` on the side of the
+        // boundary where that import is legal. Both are needed: this one keeps
+        // the D-28 structural rule, that one covers the reachable keys.
         const VOCAB_LEN: usize = 13;
         let vocab: Vec<String> = (0..VOCAB_LEN).map(|i| format!("Layer{i:02}")).collect();
         let mut seen: std::collections::HashMap<String, String> = std::collections::HashMap::new();

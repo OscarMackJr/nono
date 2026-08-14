@@ -4568,6 +4568,82 @@ mod attestation_gate_tests {
         assert!(!derive_wfp_preconfirmed(None));
     }
 
+    /// CR-01/WR-04 injectivity over the **REAL** layer vocabulary — the
+    /// reachable key space, not a stand-in for it (round-6 WR-07).
+    ///
+    /// `output.rs`'s sibling sweep enumerates all 2^13 subsets of a SYNTHETIC
+    /// 13-name vocabulary (`Layer00`…`Layer12`), because that file must not
+    /// learn the layer identity type (D-28's structural half). Its record
+    /// claimed that covered "the WHOLE reachable key space … every one of the
+    /// 2^13 reachable keys" — but the reachable keys are subsets of the real
+    /// `LayerId` `Debug` names, a disjoint input set, and injectivity of a hash
+    /// over one input set says nothing about another.
+    ///
+    /// This test closes that gap on the side of the boundary where importing
+    /// the registry is already legal, so the claim is made TRUE rather than
+    /// narrowed. It builds each key exactly as the production site does —
+    /// sorted, comma-joined — over every subset of `layer_registry::ALL`.
+    ///
+    /// Non-vacuity is asserted three ways: the vocabulary must be the real one
+    /// and at least 13 names long, the enumeration must produce exactly
+    /// `2^len` keys, and the distinct-content count must equal that.
+    #[test]
+    fn marker_content_is_injective_over_the_real_layer_vocabulary() {
+        let mut names: Vec<String> = super::super::layer_registry::ALL
+            .iter()
+            .map(|id| format!("{id:?}"))
+            .collect();
+        names.sort();
+        assert!(
+            names.len() >= 13,
+            "WR-07 non-vacuity: LayerId::ALL yielded only {} name(s); this sweep must run over \
+             the REAL vocabulary, not a stale or empty list",
+            names.len()
+        );
+        // Guard the enumeration against an unreasonably large enum rather than
+        // silently taking minutes; 2^20 keys is already far past anything this
+        // registry will hold.
+        assert!(
+            names.len() <= 20,
+            "WR-07: LayerId::ALL has grown to {} names, so 2^{} subsets is no longer a cheap \
+             exhaustive sweep. Decide deliberately whether to sample instead of enumerating — \
+             and if you sample, say so in the record.",
+            names.len(),
+            names.len()
+        );
+
+        let mut seen: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut enumerated = 0usize;
+        for mask in 0u32..(1u32 << names.len()) {
+            let key = names
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| mask & (1u32 << i) != 0)
+                .map(|(_, n)| n.as_str())
+                .collect::<Vec<_>>()
+                .join(",");
+            enumerated = enumerated.saturating_add(1);
+            let content = crate::output::attestation_downgrade_marker_content(&key);
+            if let Some(prev) = seen.insert(content.clone(), key.clone()) {
+                panic!(
+                    "WR-07: marker-content collision between {prev:?} and {key:?} -> {content}. \
+                     Two DIFFERENT downgraded-layer sets would share one marker, silently \
+                     suppressing the second announcement — the collision hole WR-04's content \
+                     check exists to close, here over the REAL reachable key space."
+                );
+            }
+        }
+        assert_eq!(
+            enumerated,
+            1usize << names.len(),
+            "WR-07 non-vacuity: the enumeration produced {} key(s) for a {}-name vocabulary, \
+             so the sweep itself is broken and the injectivity claim rests on nothing",
+            enumerated,
+            names.len()
+        );
+        assert_eq!(seen.len(), enumerated);
+    }
+
     /// CR-01/D-28 end to end: nothing the downgrade banner leaves under the
     /// sessions tree may name a layer.
     ///
