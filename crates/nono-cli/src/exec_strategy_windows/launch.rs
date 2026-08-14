@@ -4600,16 +4600,49 @@ mod attestation_gate_tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 
-        fn collect_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-            let Ok(entries) = std::fs::read_dir(dir) else {
-                return;
+        // FAIL SECURE, in the ENUMERATION as well as in the read.
+        //
+        // Round 5 closed `let Ok(bytes) = fs::read(..) else { continue }`
+        // below and left the identical shape in the function that PRODUCES
+        // `files`. An unreadable file hides one file; an unreadable
+        // DIRECTORY hides a whole subtree, and `entries.flatten()` hides
+        // individual entries — and `assert_eq!(files.len(), 1)` cannot see
+        // either, because a nested unreadable subdirectory still leaves the
+        // one top-level marker in `files`. Both are now reported to the
+        // caller so they land in `violations` with the same "this guard
+        // cannot prove the subtree does not name a layer" wording.
+        fn collect_files(
+            dir: &std::path::Path,
+            out: &mut Vec<std::path::PathBuf>,
+            unreadable: &mut Vec<String>,
+        ) {
+            let entries = match std::fs::read_dir(dir) {
+                Ok(entries) => entries,
+                Err(e) => {
+                    unreadable.push(format!(
+                        "{}: UNREADABLE DIR ({e}) — this guard cannot prove the subtree below \
+                         it does not name a layer, and an unscannable directory hides every \
+                         file under it from the D-28 scan",
+                        dir.display()
+                    ));
+                    return;
+                }
             };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    collect_files(&path, out);
-                } else {
-                    out.push(path);
+            for entry in entries {
+                match entry {
+                    Ok(entry) => {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            collect_files(&path, out, unreadable);
+                        } else {
+                            out.push(path);
+                        }
+                    }
+                    Err(e) => unreadable.push(format!(
+                        "{}: UNREADABLE ENTRY ({e}) — this guard cannot prove the entry it \
+                         could not name does not name a layer",
+                        dir.display()
+                    )),
                 }
             }
         }
@@ -4651,7 +4684,8 @@ mod attestation_gate_tests {
         let session_dir = sessions_root.join(&session_id);
 
         let mut files = Vec::new();
-        collect_files(&session_dir, &mut files);
+        let mut unreadable: Vec<String> = Vec::new();
+        collect_files(&session_dir, &mut files, &mut unreadable);
 
         // Non-vacuity FIRST: if the banner wrote nothing, the scan below is
         // trivially satisfied and would hide a restored plaintext write the
@@ -4671,12 +4705,16 @@ mod attestation_gate_tests {
              exactly 1 (the dedup marker). Zero means this scan proves nothing — the marker \
              path stopped resolving, fix that before trusting this guard. More than one means \
              a NEW artefact is being written to a child-readable path and needs its own D-28 \
-             review, not a silently widened floor. Files: {files:?}",
+             review, not a silently widened floor. Files: {files:?}. Unreadable during \
+             enumeration: {unreadable:?}",
             files.len(),
             session_dir.display()
         );
 
-        let mut violations: Vec<String> = Vec::new();
+        // FAIL SECURE: seed the violations from the enumeration. Anything the
+        // walk could not open is a subtree or an entry this guard did not
+        // scan, which is exactly the place a plaintext layer set could sit.
+        let mut violations: Vec<String> = unreadable;
         for file in &files {
             // FAIL SECURE: an unreadable file is precisely the one that could
             // be hiding the plaintext, so it is a violation of this guard's
@@ -4704,9 +4742,11 @@ mod attestation_gate_tests {
 
         assert!(
             violations.is_empty(),
-            "CR-01/D-28: {} file(s) written by the downgrade banner name a confinement layer \
-             in plaintext, under a sessions path the confined child can read on the Null, \
-             WriteRestricted and Low-IL token arms:\n  {}",
+            "CR-01/D-28: {} violation(s) of this guard's premise — either a file written by \
+             the downgrade banner names a confinement layer in plaintext, or a path under the \
+             session tree could not be enumerated or read and so was never scanned at all. \
+             Both are disqualifying: this tree sits under a sessions path the confined child \
+             can read on the Null, WriteRestricted and Low-IL token arms:\n  {}",
             violations.len(),
             violations.join("\n  ")
         );
