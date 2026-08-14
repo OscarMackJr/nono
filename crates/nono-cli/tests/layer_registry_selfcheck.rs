@@ -1571,3 +1571,146 @@ fn extract_backtick_symbol_citations(line: &str) -> Vec<String> {
     }
     out
 }
+
+/// Phase 117 review WR-07: every Markdown file the test tree READS must be a
+/// file that makes CI run the code jobs.
+///
+/// Round 3's stated closure for WR-02 was structural — "two new gates scan the
+/// SPEC with the same helper the rendered-string assertions use, so the
+/// mirrors are structurally prevented from diverging". Those gates all run
+/// inside `ci.yml`'s `test` job, which is gated on
+/// `needs.changes.outputs.run_code_jobs == 'true'`, and `run_code_jobs` was
+/// set to `false` when every changed file matched
+/// `(^docs/)|(\.md$)|(\.mdx$)|(^LICENSE$)|(^\.github/ISSUE_TEMPLATE/)`. The
+/// contract document is `proj/SPEC-windows-fail-direction-contract.md` — a
+/// `.md` file — so a pull request that edited ONLY the SPEC ran zero jobs.
+///
+/// Every SPEC defect this phase actually found was a SPEC-only edit: restoring
+/// the prescriptive WR-17 remedy, re-inserting the table-terminating blank
+/// line, deleting an `OPEN` ledger row. The gates built to catch exactly those
+/// would not have executed.
+///
+/// This is the sync gate the fix needs at the other end. It is
+/// DISCOVERY-based: it finds the Markdown reads in the test tree rather than
+/// naming the SPEC, so a second contract document added later is covered
+/// without this test being touched.
+#[test]
+fn every_markdown_file_gated_by_a_test_runs_the_code_jobs() {
+    let ci = std::fs::read_to_string(workspace_root().join(".github/workflows/ci.yml"))
+        .expect("read .github/workflows/ci.yml");
+
+    // Discovery: Markdown paths the crate's source and test tree read, in
+    // either of the two house idioms (`include_str!` and a `.join("....md")`
+    // off `manifest_dir()`/`workspace_root()`).
+    let mut sources: Vec<(String, String)> = Vec::new();
+    for rel in [
+        "src/main.rs",
+        "src/output.rs",
+        "tests/layer_registry_selfcheck.rs",
+        "tests/layer_registry_meta_test.rs",
+        "tests/layer_force_unavailable.rs",
+    ] {
+        let path = manifest_dir().join(rel);
+        if let Ok(src) = std::fs::read_to_string(&path) {
+            sources.push((rel.to_string(), src));
+        }
+    }
+    assert!(
+        sources.len() >= 4,
+        "non-vacuity: only {} of the scanned sources could be read, so this gate is looking \
+         at almost nothing",
+        sources.len()
+    );
+
+    // Discovery works on BASENAMES and then locates the real file, rather than
+    // parsing the path expression. The two house idioms spell the path
+    // differently — `include_str!("../../../proj/SPEC-….md")` carries the
+    // directory, `workspace_root().join("proj").join("SPEC-….md")` does not —
+    // and only a resolved file has a workspace-relative path to classify.
+    //
+    // Comment lines are excluded: prose ABOUT this rule (including this test's
+    // own doc, which names the SPEC and quotes a `.md` fragment) is not an
+    // instance of it.
+    let mut read_markdown: Vec<(String, String)> = Vec::new();
+    for (label, src) in &sources {
+        for line in src.lines() {
+            let t = line.trim_start();
+            if t.starts_with("//") {
+                continue;
+            }
+            if !(line.contains("include_str!") || line.contains(".join(")) {
+                continue;
+            }
+            for frag in line.split('"').skip(1).step_by(2) {
+                if !frag.ends_with(".md") {
+                    continue;
+                }
+                let base = frag.rsplit('/').next().unwrap_or(frag).to_string();
+                if !read_markdown.iter().any(|(b, _)| b == &base) {
+                    read_markdown.push((base, label.clone()));
+                }
+            }
+        }
+    }
+    assert!(
+        !read_markdown.is_empty(),
+        "non-vacuity: no Markdown file read was discovered in the test tree. Either the house \
+         idiom changed (this scan is now blind and the CI classifier is unguarded) or the \
+         contract documents are no longer gated by tests, in which case retire this gate \
+         deliberately."
+    );
+
+    // Candidate trees to resolve a basename in. Explicit rather than a walk: a
+    // walk would reach `.planning/` and `target/`, and the question being
+    // asked is only "which top-level tree does this contract document live
+    // in".
+    let candidate_trees = ["proj", "docs", "."];
+
+    let mut unguarded: Vec<String> = Vec::new();
+    let mut unresolved: Vec<String> = Vec::new();
+    for (base, label) in &read_markdown {
+        let Some(tree) = candidate_trees
+            .iter()
+            .find(|t| workspace_root().join(t).join(base).is_file())
+        else {
+            unresolved.push(format!("{base} (read by {label})"));
+            continue;
+        };
+        let rel = if *tree == "." {
+            base.clone()
+        } else {
+            format!("{tree}/{base}")
+        };
+        // Does the classifier's docs-only skip list even apply? A `.md` file
+        // always matches `\.md$`, so it always needs a force-include clause.
+        //
+        // The clause is checked as a substring of the workflow text rather
+        // than by re-implementing bash regex semantics: the claim being pinned
+        // is "the tree this file lives in is force-included", and a
+        // re-implementation would be a third mirror of the rule.
+        let clause = format!("=~ ^{tree}/ ]]");
+        if !ci.contains(&clause) {
+            unguarded.push(format!(
+                "{rel} (read by {label}) — no `{clause}` clause in ci.yml"
+            ));
+        }
+    }
+
+    assert!(
+        unresolved.is_empty(),
+        "WR-07: {} Markdown file(s) read by the test tree could not be located under {:?}, so \
+         this gate cannot classify them and is silently covering less than it claims:\n  {}",
+        unresolved.len(),
+        candidate_trees,
+        unresolved.join("\n  ")
+    );
+    assert!(
+        unguarded.is_empty(),
+        "WR-07: {} Markdown file(s) are read and asserted on by the test tree but are NOT \
+         force-included by `.github/workflows/ci.yml`'s `changes` classifier, so a pull \
+         request that edits only them runs ZERO jobs and every gate built on them is skipped:\
+         \n  {}\nAdd `|| [[ \"${{file}}\" =~ ^<tree>/ ]]` to the `run_code_jobs` clause.",
+        unguarded.len(),
+        unguarded.join("\n  ")
+    );
+}

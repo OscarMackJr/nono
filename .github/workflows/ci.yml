@@ -73,7 +73,21 @@ jobs:
                 [[ -z "${file}" ]] && continue
                 echo "changed: ${file}"
 
-                if [[ ! "${file}" =~ (^docs/)|(\.md$)|(\.mdx$)|(^LICENSE$)|(^\.github/ISSUE_TEMPLATE/) ]]; then
+                # Phase 117 review WR-07: `proj/` is force-included even though
+                # it is Markdown, because the CONTRACT documents there are read
+                # by the test tree (`include_str!`/`read_to_string`) and gated
+                # by it. Without this a pull request that edits ONLY
+                # `proj/SPEC-windows-fail-direction-contract.md` runs zero jobs
+                # — and every SPEC defect this phase found was a SPEC-only
+                # edit, so the gates built to catch them would not execute.
+                #
+                # MUST STAY IN SYNC with every Markdown file the test tree
+                # reads. `layer_registry_selfcheck.rs::
+                # every_markdown_file_gated_by_a_test_runs_the_code_jobs`
+                # enforces that from the other end — it discovers the reads and
+                # fails the build if one is not covered here.
+                if [[ ! "${file}" =~ (^docs/)|(\.md$)|(\.mdx$)|(^LICENSE$)|(^\.github/ISSUE_TEMPLATE/) ]] \
+                   || [[ "${file}" =~ ^proj/ ]]; then
                   run_code_jobs=true
                 fi
 
