@@ -2031,7 +2031,7 @@ mod tests {
     /// there the event log receives NOTHING, so it must never be named as a
     /// place to look at all.
     ///
-    /// # CR-01: why `production` looks like this
+    /// # CR-01: why the production split matters
     ///
     /// The first version of this gate covered **zero** sites in `launch.rs`,
     /// for two independent reasons, and so could relabel but never deny:
@@ -2041,121 +2041,132 @@ mod tests {
     ///    `attestation_gate_tests`, `job_hardening_tests`, ... — so the scan
     ///    silently ran over the whole 5862-line file, the opposite of the
     ///    stated invariant. `output.rs`'s first test module is not named
-    ///    `tests` either. The marker is now a top-level `#[cfg(test)]` line,
-    ///    which is asserted to EXIST in every scanned file.
+    ///    `tests` either.
     /// 2. The needle was matched against raw source lines, so a `\`-continued
     ///    literal that straddles two lines — or, as WR-01 found, one whose
     ///    continuation had collapsed into a run of literal spaces — was
-    ///    invisible. Lines are now continuation-joined and
+    ///    invisible. Lines are still continuation-joined and
     ///    whitespace-normalised before matching.
     ///
-    /// A `hits` counter closes the loop: a gate of this shape must never be
-    /// allowed to pass by covering nothing.
+    /// # WR-01: the split is no longer implemented here
+    ///
+    /// The second version of the split lived in this function as a private
+    /// helper, and it disagreed with the mirror written in the same fix pass
+    /// for `layer_registry.rs`'s daemon gate: it cleared its pending-attribute
+    /// flag on any intervening line, so the six `launch.rs` test modules that
+    /// carry `#[allow(clippy::unwrap_used)]` between `#[cfg(all(test, ...))]`
+    /// and `mod` were scanned as production — **1773 lines of test code**.
+    /// There is now exactly one implementation, in
+    /// `crate::cfg_test_regions`, with its own unit tests for the rule; both
+    /// gates call it. See that module's doc for the rule itself.
+    ///
+    /// # Non-vacuity is asserted PER FILE
+    ///
+    /// The previous floor was `hits >= 2` summed across two files, while the
+    /// doc claimed a per-file guarantee. Each file contributed exactly 1, so
+    /// the floor happened to be tight — but nothing stopped `launch.rs` going
+    /// to 0 while `output.rs` drifted to 2, and the record told the next
+    /// maintainer that case was covered. The floor is now per file, and each
+    /// file must also have contributed at least one SKIPPED test region, so a
+    /// marker change cannot silently turn "production half only" into a
+    /// whole-file scan.
     #[test]
     fn every_operator_detail_pointer_is_conditional() {
+        use crate::cfg_test_regions::scan_production;
+
         const OUTPUT_SRC: &str = include_str!("output.rs");
         const LAUNCH_SRC: &str = include_str!("exec_strategy_windows/launch.rs");
         const MAIN_SRC: &str = include_str!("main.rs");
 
         const NEEDLE: &str = "Windows Application event log";
 
-        /// Is `t` (an already-trimmed line) a `cfg`-test attribute?
+        /// Production entries of `src` as `(first_line_index, normalised_text)`,
+        /// with `\`-continued literals rejoined so a needle split across
+        /// source lines is still seen.
         ///
-        /// Covers `#[cfg(test)]` and `#[cfg(all(test, target_os = "..."))]`,
-        /// both of which gate test modules in the scanned files.
-        fn is_cfg_test_attr(t: &str) -> bool {
-            t.starts_with("#[cfg(") && (t.contains("test)") || t.contains("test,"))
-        }
-
-        /// Production half of `src` as `(first_line_index, normalised_text)`.
-        ///
-        /// Excludes `#[cfg(test)]`-gated INLINE modules by brace region — test
-        /// modules legitimately assert ON these strings (117-39's
-        /// `render_error_for_operator` tests do exactly that).
-        ///
-        /// The obvious "truncate at the first `#[cfg(test)]`" shortcut is
-        /// wrong twice over, and both ways were live in this file:
-        /// `main.rs:155` is `#[cfg(test)] mod test_env;` — a bare *declaration*
-        /// 130 lines above the code this gate must see, so truncating there
-        /// silently reduced the `main.rs` scan to nothing; and `output.rs`'s
-        /// first test module is gated on `#[cfg(all(test, target_os =
-        /// "windows"))]`, which an exact `#[cfg(test)]` match does not see at
-        /// all. A brace-delimited skip has neither failure mode.
-        ///
-        /// The caller asserts non-vacuity per file; that is what caught the
-        /// truncation above, and it is the only thing that can.
-        fn production(_label: &str, src: &str) -> Vec<(usize, String)> {
-            let lines: Vec<&str> = src.lines().collect();
-
+        /// Returns the `ProductionScan` alongside, so the caller can assert
+        /// the test-region split actually happened for this file.
+        fn production(
+            src: &str,
+        ) -> (
+            Vec<(usize, String)>,
+            crate::cfg_test_regions::ProductionScan<'_>,
+        ) {
+            let scan = scan_production(src);
             let mut out: Vec<(usize, String)> = Vec::new();
-            let mut idx = 0usize;
-            let mut pending_test_attr = false;
-            while idx < lines.len() {
-                let t = lines[idx].trim();
-
-                if is_cfg_test_attr(t) {
-                    pending_test_attr = true;
-                    idx += 1;
-                    continue;
-                }
-                if pending_test_attr {
-                    pending_test_attr = false;
-                    // An INLINE `mod foo {` opens a test region; a bare
-                    // `mod foo;` declaration (main.rs:155) opens nothing.
-                    if (lines[idx].starts_with("mod ") || lines[idx].starts_with("pub mod "))
-                        && lines[idx].trim_end().ends_with('{')
-                    {
-                        idx += 1;
-                        // Every test module in the scanned files is top level,
-                        // so its closing brace is a lone `}` at column 0.
-                        while idx < lines.len() && lines[idx] != "}" {
-                            idx += 1;
-                        }
-                        idx += 1;
-                        continue;
-                    }
-                }
-
-                if lines[idx].trim_start().starts_with("//") {
-                    // Prose ABOUT the rule is not an instance of it.
-                    idx += 1;
-                    continue;
-                }
-                // Rejoin `\`-continued string literals so a needle split
-                // across source lines is still seen.
-                let start = idx;
-                let mut merged = lines[idx].to_string();
-                while merged.trim_end().ends_with('\\') && idx + 1 < lines.len() {
+            let mut i = 0usize;
+            while i < scan.lines.len() {
+                let (start, first) = scan.lines[i];
+                let mut merged = first.to_string();
+                // Continuation lines are contiguous in the source AND kept by
+                // the scan (they are neither comments nor cfg attributes), so
+                // requiring index contiguity here cannot re-admit skipped text.
+                while merged.trim_end().ends_with('\\')
+                    && i + 1 < scan.lines.len()
+                    && scan.lines[i + 1].0 == scan.lines[i].0 + 1
+                {
                     merged.truncate(merged.trim_end().len() - 1);
-                    idx += 1;
-                    merged.push_str(lines[idx]);
+                    i += 1;
+                    merged.push_str(scan.lines[i].1);
                 }
                 out.push((
                     start,
                     merged.split_whitespace().collect::<Vec<_>>().join(" "),
                 ));
-                idx += 1;
+                i += 1;
             }
-            out
+            (out, scan)
         }
 
-        let mut hits = 0usize;
-        for (label, src) in [
-            ("output.rs", OUTPUT_SRC),
-            ("exec_strategy_windows/launch.rs", LAUNCH_SRC),
+        for (label, src, floor) in [
+            ("output.rs", OUTPUT_SRC, 1usize),
+            ("exec_strategy_windows/launch.rs", LAUNCH_SRC, 1usize),
         ] {
-            let lines: Vec<&str> = src.lines().collect();
-            for (idx, line) in production(label, src) {
+            let (entries, scan) = production(src);
+            assert!(
+                !scan.skipped_regions.is_empty(),
+                "WR-01: no `#[cfg(test)]` module region was excluded from {label}, so this \
+                 gate is scanning the whole file including test assertions that legitimately \
+                 name the event log. Either the file lost its test modules, or \
+                 cfg_test_regions no longer recognises them."
+            );
+            // The split must be CORRECT, not merely non-empty. `!scan
+            // .skipped_regions.is_empty()` would have stayed green through
+            // WR-01's actual defect, where 6 of launch.rs's 12 test modules
+            // leaked into the production half because an `#[allow(...)]` sat
+            // between the cfg attribute and the `mod` line. A leaked module
+            // brings its `#[test]` attributes with it, so this catches the
+            // class directly and without restating the classifier's own rule.
+            let leaked: Vec<usize> = entries
+                .iter()
+                .filter(|(_, l)| l.trim() == "#[test]")
+                .map(|(i, _)| i + 1)
+                .collect();
+            assert!(
+                leaked.is_empty(),
+                "WR-01: {} `#[test]` attribute(s) appear in the PRODUCTION half of {label} \
+                 (first at line {:?}), so at least one `#[cfg(test)]` module leaked into the \
+                 scan and its assertions can satisfy this gate.",
+                leaked.len(),
+                leaked.first()
+            );
+
+            let mut hits = 0usize;
+            for (idx, line) in &entries {
                 if !line.contains(NEEDLE) {
                     continue;
                 }
                 hits += 1;
-                // Walk back to the nearest DowngradeDetailChannel arm.
-                let arm = lines[..=idx]
+                // Walk back to the nearest DowngradeDetailChannel arm, over
+                // PRODUCTION entries only. Searching raw lines would let a
+                // comment naming the arm within 12 lines above satisfy the
+                // gate — prose about the rule is not an instance of it.
+                let arm = entries
                     .iter()
+                    .filter(|(j, _)| j <= idx)
                     .rev()
                     .take(12)
-                    .find_map(|l| {
+                    .find_map(|(_, l)| {
                         l.find("DowngradeDetailChannel::")
                             .map(|i| l[i + "DowngradeDetailChannel::".len()..].to_string())
                     })
@@ -2170,20 +2181,21 @@ line: {}",
                     line.trim()
                 );
             }
-        }
 
-        // Non-vacuity (CR-01). The gate must cover at least two known sites:
-        // `output.rs`'s downgrade-banner EventLog arm and `launch.rs`'s
-        // `downgrade_detail_pointer` EventLog arm. Anything lower means the
-        // needle has drifted out of the scanned production text again, which
-        // is indistinguishable from "the class is clean" without this check.
-        assert!(
-            hits >= 2,
-            "CR-01: the WR-26 class gate matched {hits} site(s); it must cover at least \
-             output.rs's downgrade-banner EventLog arm and launch.rs's \
-             downgrade_detail_pointer EventLog arm. A low count means the needle no longer \
-             appears in the scanned production text, so the gate can relabel but never deny."
-        );
+            // Non-vacuity (CR-01/WR-01), PER FILE. `output.rs`'s
+            // downgrade-banner EventLog arm and `launch.rs`'s
+            // `downgrade_detail_pointer` EventLog arm are each a known site;
+            // a file dropping to zero means the needle has drifted out of
+            // that file's production text, which is indistinguishable from
+            // "the class is clean" without this check.
+            assert!(
+                hits >= floor,
+                "CR-01/WR-01: the WR-26 class gate matched {hits} site(s) in {label} (floor \
+                 {floor}). Each scanned file must contribute at least one known \
+                 DowngradeDetailChannel::EventLog arm site, or the needle has drifted out of \
+                 that file's production text and the gate can relabel but never deny."
+            );
+        }
 
         // WR-27: on the abort path no record is ever written to the event log,
         // so main.rs must not name it as a destination at all.
@@ -2197,7 +2209,14 @@ line: {}",
         // this path"); that is excluded by requiring the negation, not by
         // narrowing the needle.
         let mut main_mentions = 0usize;
-        for (idx, line) in production("main.rs", MAIN_SRC) {
+        let (main_entries, main_scan) = production(MAIN_SRC);
+        assert!(
+            !main_scan.skipped_regions.is_empty(),
+            "WR-01: no `#[cfg(test)]` module region was excluded from main.rs — its test \
+             modules assert ON the rendered remediation text, so scanning them would let a \
+             test satisfy this gate"
+        );
+        for (idx, line) in main_entries {
             for (pos, _) in line.match_indices(NEEDLE) {
                 main_mentions += 1;
                 let preceding = &line[..pos];

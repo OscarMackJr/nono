@@ -1423,69 +1423,30 @@ mod tests {
     fn daemon_expected_rows_are_all_named_by_the_daemon_gate() {
         const DAEMON_GATE_SRC: &str = include_str!("../agent_daemon/launch.rs");
 
-        /// Production lines of the daemon source, plus the number of lines
-        /// dropped as `#[cfg(test)]` module bodies.
-        ///
-        /// BOTH exclusions are load-bearing, and both were established by
-        /// perturbation rather than by inspection:
-        ///
-        /// - Comments: `daemon_attest_and_decide`'s doc comment lists every
-        ///   row it models, so scanning comments makes this gate satisfiable
-        ///   by prose alone — the "documented, not wired" shape CR-02 reports.
-        /// - Test modules: the first version of this gate excluded comments
-        ///   only, and renaming the production `layer = "DaclAncestorTraverse"`
-        ///   left it GREEN, because `agent_daemon/launch.rs`'s own
-        ///   `attestation_gate_tests` asserts on that same string. A gate that
-        ///   a test assertion can satisfy is the defect one step over.
-        fn production_lines(src: &str) -> (Vec<&str>, usize) {
-            let lines: Vec<&str> = src.lines().collect();
-            let mut out = Vec::new();
-            let mut skipped = 0usize;
-            let mut idx = 0usize;
-            let mut pending_test_attr = false;
-            while idx < lines.len() {
-                let t = lines[idx].trim();
-
-                if t.starts_with("#[cfg(") && (t.contains("test)") || t.contains("test,")) {
-                    pending_test_attr = true;
-                    idx += 1;
-                    continue;
-                }
-                if pending_test_attr {
-                    // Other attributes and doc comments may sit between the
-                    // cfg attribute and the item it gates.
-                    if t.starts_with("#[") || t.starts_with("///") {
-                        idx += 1;
-                        continue;
-                    }
-                    pending_test_attr = false;
-                    // An INLINE `mod foo {` opens a test region (possibly
-                    // nested inside `mod windows_impl`, hence the indent-aware
-                    // closer); a bare `mod foo;` declaration opens nothing.
-                    if (t.starts_with("mod ") || t.starts_with("pub mod ")) && t.ends_with('{') {
-                        let indent = lines[idx].len() - lines[idx].trim_start().len();
-                        let closer = format!("{}}}", " ".repeat(indent));
-                        idx += 1;
-                        while idx < lines.len() && lines[idx] != closer {
-                            idx += 1;
-                            skipped += 1;
-                        }
-                        idx += 1;
-                        continue;
-                    }
-                }
-
-                if t.starts_with("//") {
-                    idx += 1;
-                    continue;
-                }
-                out.push(lines[idx]);
-                idx += 1;
-            }
-            (out, skipped)
-        }
-
-        let (code, skipped_test_lines) = production_lines(DAEMON_GATE_SRC);
+        // Production lines of the daemon source, plus the number of lines
+        // dropped as `#[cfg(test)]` module bodies.
+        //
+        // BOTH exclusions are load-bearing, and both were established by
+        // perturbation rather than by inspection:
+        //
+        // - Comments: `daemon_attest_and_decide`'s doc comment lists every row
+        //   it models, so scanning comments makes this gate satisfiable by
+        //   prose alone — the "documented, not wired" shape CR-02 reports.
+        // - Test modules: the first version of this gate excluded comments
+        //   only, and renaming the production `layer = "DaclAncestorTraverse"`
+        //   left it GREEN, because `agent_daemon/launch.rs`'s own
+        //   `attestation_gate_tests` asserts on that same string. A gate that
+        //   a test assertion can satisfy is the defect one step over.
+        //
+        // WR-01: this classification used to be implemented HERE, and the copy
+        // in `output.rs`'s WR-26 gate — written in the same fix pass —
+        // disagreed with it about intervening attributes, scanning 1773 lines
+        // of test code as production. Both now call the one implementation in
+        // `crate::cfg_test_regions`, which also fixes the `#[cfg(not(test))]`
+        // misclassification both copies shared.
+        let scan = crate::cfg_test_regions::scan_production(DAEMON_GATE_SRC);
+        let code: Vec<&str> = scan.lines.iter().map(|(_, l)| *l).collect();
+        let skipped_test_lines = scan.skipped_lines();
         assert!(
             skipped_test_lines > 0,
             "CR-02 non-vacuity: no `#[cfg(test)]` module body was excluded from the daemon \

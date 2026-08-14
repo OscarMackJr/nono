@@ -155,6 +155,13 @@ mod wiring;
 #[cfg(test)]
 mod test_env;
 
+// Phase 117 review WR-01: the single `#[cfg(test)]`-region classifier shared
+// by every source-text drift gate in this crate. Test-only — it exists to stop
+// those gates growing divergent private copies of the same predicate, which is
+// exactly what WR-01 reports.
+#[cfg(test)]
+mod cfg_test_regions;
+
 use app_runtime::run as run_cli;
 use clap::Parser;
 use cli::Cli;
