@@ -4567,6 +4567,121 @@ mod attestation_gate_tests {
     fn no_network_enforcement_yields_preconfirmed_false() {
         assert!(!derive_wfp_preconfirmed(None));
     }
+
+    /// CR-01/D-28 end to end: nothing the downgrade banner leaves under the
+    /// sessions tree may name a layer.
+    ///
+    /// The banner's per-session dedup marker is an ordinary user file under
+    /// `%LOCALAPPDATA%\nono\sessions\…` — no DACL hardening, no mandatory
+    /// label. The confined child can read it on the `Null` arm (same token),
+    /// the `WriteRestricted` arm (`WRITE_RESTRICTED` restricts WRITE checks
+    /// only) and the Low-IL arms (MIC defaults to `NO_WRITE_UP`; reads up are
+    /// allowed). A round-2 fix wrote the plaintext `dedup_key` there, which
+    /// made the marker the ONLY durable plaintext record of the downgraded
+    /// layer set on exactly the two detail channels (`Stderr`, `None`) where
+    /// every other surface deliberately withholds it.
+    ///
+    /// This drives the REAL writer, over a dedup key built from the REAL
+    /// `LayerId::ALL` vocabulary, and then reads back every byte the call
+    /// left on disk. It is deliberately not a unit test of the digest helper:
+    /// the defect was in what the writer chose to persist, so the assertion
+    /// has to be made against the filesystem.
+    ///
+    /// Non-vacuity is asserted explicitly — a run that wrote nothing would
+    /// otherwise "pass" while proving nothing at all.
+    #[test]
+    fn downgrade_marker_files_never_contain_a_layer_name() {
+        use crate::exec_strategy::attestation_downgrade_event::DowngradeDetailChannel;
+
+        fn collect_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    collect_files(&path, out);
+                } else {
+                    out.push(path);
+                }
+            }
+        }
+
+        // Every layer this code can report as downgraded, in the exact
+        // sorted comma-joined shape the production site builds.
+        let mut names: Vec<String> = super::super::layer_registry::ALL
+            .iter()
+            .map(|id| format!("{id:?}"))
+            .collect();
+        names.sort();
+        assert!(
+            names.len() >= 13,
+            "D-28 non-vacuity: LayerId::ALL yielded only {} name(s); the needle set must be \
+             the real vocabulary, not a stale hand-written list",
+            names.len()
+        );
+        let dedup_key = names.join(",");
+
+        let session_id = format!(
+            "test-d28-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        );
+
+        crate::output::print_attestation_downgrade_banner(
+            names.len(),
+            Some(&session_id),
+            &dedup_key,
+            // The worst case for disclosure: the channel that records
+            // NOTHING anywhere else, so the marker would be the sole record.
+            DowngradeDetailChannel::None,
+        );
+
+        let sessions_root = crate::state_paths::sessions_dir().expect("sessions dir");
+        let session_dir = sessions_root.join(&session_id);
+
+        let mut files = Vec::new();
+        collect_files(&session_dir, &mut files);
+
+        // Non-vacuity FIRST: if the banner wrote nothing, the scan below is
+        // trivially satisfied and would hide a restored plaintext write the
+        // moment the marker path resolved again.
+        assert!(
+            !files.is_empty(),
+            "D-28 non-vacuity: the downgrade banner wrote no file under {}, so this scan \
+             proves nothing. The dedup marker is expected to exist after a first \
+             announcement; if the marker path stopped resolving, fix that before trusting \
+             this guard.",
+            session_dir.display()
+        );
+
+        let mut violations: Vec<String> = Vec::new();
+        for file in &files {
+            let Ok(bytes) = std::fs::read(file) else {
+                continue;
+            };
+            let text = String::from_utf8_lossy(&bytes).to_ascii_lowercase();
+            for name in &names {
+                if text.contains(&name.to_ascii_lowercase()) {
+                    violations.push(format!("{}: contains {name:?}", file.display()));
+                }
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&session_dir);
+
+        assert!(
+            violations.is_empty(),
+            "CR-01/D-28: {} file(s) written by the downgrade banner name a confinement layer \
+             in plaintext, under a sessions path the confined child can read on the Null, \
+             WriteRestricted and Low-IL token arms:\n  {}",
+            violations.len(),
+            violations.join("\n  ")
+        );
+    }
 }
 
 #[cfg(all(test, target_os = "windows"))]

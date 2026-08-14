@@ -77,29 +77,51 @@ pub fn print_banner(silent: bool) {
 /// State this honestly, because "unconditional" above is a strong claim.
 /// The marker lives under the user's own sessions directory, so ANY process
 /// running as this user can write it. Since WR-04 the marker's CONTENT is
-/// authoritative (the stored `dedup_key` must match exactly), which closes
-/// the two failure modes that were not adversarial at all — a 64-bit
-/// `DefaultHasher` collision between two different downgraded-layer-sets
-/// silently suppressing the second, and a zero-byte file of the right name
-/// suppressing everything — and makes a stale, empty or unreadable marker
-/// print rather than suppress.
+/// authoritative — the stored bytes must equal
+/// `attestation_downgrade_marker_content(dedup_key)` — which closes the two
+/// failure modes that were not adversarial at all: a 64-bit `DefaultHasher`
+/// collision between two different downgraded-layer-sets silently
+/// suppressing the second, and a zero-byte file of the right name
+/// suppressing everything. A stale, empty, collided or unreadable marker
+/// prints rather than suppresses.
 ///
-/// It does NOT make suppression impossible for a same-user process: the key
-/// space is a sorted comma-join drawn from a 13-element enum, so an attacker
-/// can enumerate and pre-plant every valid marker. That is accepted, not
-/// overlooked. Such a process already holds strictly greater capability over
-/// this launch (it can edit nono's config, or shadow `nono` on `PATH`), so
-/// the marker is not the weakest link; and the audit event and the
-/// `tracing::warn!` on the same path are independent channels it does not
-/// control. "Unconditional" above means "not gated on `--silent`, and not
-/// suppressed by any nono code path", not "tamper-proof".
+/// It does NOT make suppression impossible for a same-user process, and no
+/// marker scheme reachable from here could. On the `Null` and
+/// `WriteRestricted` token arms the confined child runs under the same user
+/// AND the same integrity level as this supervisor, so there is no on-disk
+/// location this process can read across spawns that that process cannot
+/// also write; an unforgeable marker would need a secret those arms
+/// structurally cannot keep. That is accepted, not overlooked. Such a
+/// process already holds strictly greater capability over this launch (it
+/// can edit nono's config, or shadow `nono` on `PATH`), so the marker is not
+/// the weakest link; and the audit event and the `tracing::warn!` on the
+/// same path are independent channels it does not control. "Unconditional"
+/// above means "not gated on `--silent`, and not suppressed by any nono code
+/// path", not "tamper-proof".
 ///
-/// `dedup_key` is an opaque `&str` this function never parses or displays,
-/// only hashes — the caller (which already has the layer identity type in
-/// scope) computes the sorted, comma-joined dedup key string and passes it
-/// in; this module deliberately never imports that type (mechanically
-/// verifiable — see the acceptance criterion this doc comment must not
-/// itself trip).
+/// # CR-01: content-authority must not become DISCLOSURE (D-28)
+///
+/// The first WR-04 fix bought that authority by writing `dedup_key` — the
+/// plaintext, comma-joined `LayerId` set — verbatim into this same
+/// child-readable file. That was a regression, not a trade worth making: on
+/// the `Stderr` and `None` detail channels every other channel deliberately
+/// WITHHOLDS those names, so the marker became the only durable plaintext
+/// record of exactly which confinement layers failed to confirm, sitting
+/// where the untrusted process can read it — precisely the reconnaissance
+/// signal D-28 exists to deny.
+///
+/// The content is therefore a domain-separated digest of the key, never the
+/// key. This keeps the entire authority gain at ZERO marginal disclosure:
+/// the content is a deterministic function of the same input that already
+/// determines the file's NAME, so it reveals nothing the file's existence
+/// under that name did not already reveal.
+///
+/// `dedup_key` is an opaque `&str` this function never parses, displays or
+/// persists — only hashes. The caller (which already has the layer identity
+/// type in scope) computes the sorted, comma-joined dedup key string and
+/// passes it in; this module deliberately never imports that type
+/// (mechanically verifiable — see the acceptance criterion this doc comment
+/// must not itself trip).
 ///
 /// This wording is identical on every entry path/token arm — deliberately
 /// not special-cased per-arm, because verifying per-arm console-sharing
@@ -184,11 +206,15 @@ pub fn print_attestation_downgrade_banner(
                 return;
             }
         }
-        // WR-04: write the dedup key VERBATIM (the reader compares contents,
-        // not just the hashed filename), and `create_new` so a pre-existing
-        // file is never clobbered — if one is there with different content,
-        // this launch has already announced, and overwriting it would only
-        // hide that fact from the next launch.
+        // WR-04: the reader compares CONTENT, not just the hashed filename,
+        // so a zero-byte or colliding marker announces instead of
+        // suppressing. CR-01: the content written is a digest, never the
+        // plaintext key — this file is readable by the confined child on
+        // three of the four token arms, and the layer names are exactly what
+        // D-28 withholds from every channel that child can observe.
+        // `create_new` so a pre-existing file is never clobbered — if one is
+        // there with different content, this launch has already announced,
+        // and overwriting it would only hide that fact from the next launch.
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -196,7 +222,9 @@ pub fn print_attestation_downgrade_banner(
         {
             Ok(mut f) => {
                 use std::io::Write as _;
-                if let Err(e) = f.write_all(dedup_key.as_bytes()) {
+                if let Err(e) =
+                    f.write_all(attestation_downgrade_marker_content(dedup_key).as_bytes())
+                {
                     tracing::debug!(
                         "attestation-downgrade dedup marker write failed \
                          (non-fatal, banner will re-print next time): {e}"
@@ -229,18 +257,78 @@ pub fn print_attestation_downgrade_banner(
 ///   announcement entirely — for a channel whose own doc calls it
 ///   unconditional.
 ///
-/// Requiring the stored key to match exactly makes an absent, empty,
-/// unreadable, collided or tampered marker ANNOUNCE rather than suppress:
-/// every failure mode resolves toward more visibility, never less. It also
-/// makes a `DefaultHasher` change across a toolchain bump merely re-print
-/// once instead of silently aliasing two different sets.
+/// Requiring the stored CONTENT to match makes an absent, empty, unreadable,
+/// collided or tampered marker ANNOUNCE rather than suppress: every failure
+/// mode resolves toward more visibility, never less. It also makes a
+/// `DefaultHasher` change across a toolchain bump merely re-print once
+/// instead of silently aliasing two different sets.
+///
+/// # CR-01: the compared value is a digest, not the key
+///
+/// The comparison is against `attestation_downgrade_marker_content(key)`,
+/// not against `key` itself, so no `LayerId` name is ever written to this
+/// child-readable path (D-28). The set of `(session, key)` pairs that
+/// suppress is IDENTICAL either way — the digest is injective for every
+/// input this code can produce, up to a 128-bit collision — so this closes
+/// the disclosure direction without giving back any of WR-04's authority.
 ///
 /// See [`print_attestation_downgrade_banner`]'s doc for what this does NOT
-/// close (a same-user process can still pre-plant a correct marker) and why
-/// that is accepted.
+/// close (a same-user process can still pre-plant a correct marker, and on
+/// the same-IL token arms no scheme could prevent that) and why that is
+/// accepted.
 #[cfg(target_os = "windows")]
 fn marker_says_already_announced(path: &std::path::Path, dedup_key: &str) -> bool {
-    matches!(std::fs::read_to_string(path), Ok(existing) if existing == dedup_key)
+    matches!(
+        std::fs::read_to_string(path),
+        Ok(existing) if existing == attestation_downgrade_marker_content(dedup_key)
+    )
+}
+
+/// The bytes stored INSIDE the dedup marker for `dedup_key` (CR-01, D-28).
+///
+/// A 128-bit domain-separated `DefaultHasher` digest, rendered as 32 lowercase
+/// hex characters. Two independent 64-bit passes, each seeded with a distinct
+/// constant, are concatenated: `DefaultHasher` is fixed-key, so hashing the
+/// same key twice without domain separation would just repeat one value.
+///
+/// # Why a digest and not the key
+///
+/// This file sits under `%LOCALAPPDATA%\nono\sessions\…` with an ordinary
+/// DACL and no mandatory label. The confined child can read it on the `Null`
+/// arm (same token), the `WriteRestricted` arm (`WRITE_RESTRICTED` applies
+/// restricting SIDs to WRITE checks only) and the Low-IL arms (MIC's default
+/// policy is `NO_WRITE_UP`; reads up are permitted). Writing the plaintext
+/// `LayerId` set there would hand the untrusted process the exact list of
+/// confinement layers that failed to confirm — the reconnaissance signal
+/// D-28 exists to deny, and one that the `Stderr` and `None` detail channels
+/// deliberately withhold from every other surface.
+///
+/// # Why this discloses nothing the marker did not already disclose
+///
+/// The marker's FILENAME is already a deterministic 64-bit digest of the same
+/// `dedup_key`. Its content here is another deterministic function of that
+/// same input, so any observer that can invert one can invert the other, and
+/// an observer that cannot enumerate the key space learns nothing from
+/// either. The marginal disclosure of this content, relative to the file
+/// merely existing under that name, is exactly zero.
+///
+/// This is NOT a keyed MAC and is not claimed to be one: see
+/// [`print_attestation_downgrade_banner`]'s doc for why unforgeability is
+/// unreachable on the same-user, same-IL token arms.
+#[cfg(target_os = "windows")]
+fn attestation_downgrade_marker_content(dedup_key: &str) -> String {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    fn digest(domain: &str, key: &str) -> u64 {
+        let mut h = DefaultHasher::new();
+        domain.hash(&mut h);
+        key.hash(&mut h);
+        h.finish()
+    }
+
+    let hi = digest("nono/attestation-downgrade/marker-content/v1/hi", dedup_key);
+    let lo = digest("nono/attestation-downgrade/marker-content/v1/lo", dedup_key);
+    format!("{hi:016x}{lo:016x}")
 }
 
 /// Compute the per-session, content-addressed dedup marker path for
@@ -252,6 +340,17 @@ fn marker_says_already_announced(path: &std::path::Path, dedup_key: &str) -> boo
 /// `dedup_key` is hashed via `std::hash::DefaultHasher` (std-only, no new
 /// dependency) rather than stored verbatim — this function, like its
 /// caller, never inspects or displays the key's contents.
+///
+/// # CR-01: the `.v2` filename suffix
+///
+/// Marker CONTENT changed from the plaintext key to a digest
+/// (`attestation_downgrade_marker_content`). A marker left behind by a build
+/// that wrote the plaintext form would never match again, and `create_new`
+/// means it would never be replaced either — so the banner would re-print on
+/// every tool call for the rest of that session. That is the SAFE direction
+/// (more visibility), but it is still a needless regression, and the suffix
+/// removes it: the two formats simply occupy different names. Stale v1
+/// markers are inert leftovers in a directory that is already best-effort.
 ///
 /// # Phase 117 review WR-11: `session_id` is validated before it is joined
 ///
@@ -283,7 +382,7 @@ fn attestation_downgrade_marker_path(
 
     let mut hasher = DefaultHasher::new();
     dedup_key.hash(&mut hasher);
-    let key_hex = format!("{:016x}", hasher.finish());
+    let key_hex = format!("{:016x}.v2", hasher.finish());
 
     match state_paths::sessions_dir() {
         Ok(dir) => Some(
@@ -1371,8 +1470,8 @@ pub fn print_profile_hint(program: &str, profile: &str, silent: bool) {
 #[cfg(all(test, target_os = "windows"))]
 mod attestation_marker_path_tests {
     use super::{
-        attestation_downgrade_marker_path, marker_says_already_announced,
-        session_id_is_safe_path_component,
+        attestation_downgrade_marker_content, attestation_downgrade_marker_path,
+        marker_says_already_announced, session_id_is_safe_path_component,
     };
 
     /// WR-04: the four ways a marker can be present-but-not-an-announcement
@@ -1416,15 +1515,101 @@ mod attestation_marker_path_tests {
              between two different downgraded-layer-sets, not a repeat"
         );
 
+        // 3b. CR-01 control: the PLAINTEXT key is no longer the stored form,
+        //     so a marker holding it must NOT suppress. This is the pin that
+        //     stops the plaintext write being quietly restored — reverting
+        //     the writer alone would leave every other case in this test
+        //     green while re-opening the D-28 disclosure.
+        std::fs::write(&path, key.as_bytes()).expect("write plaintext key");
+        assert!(
+            !marker_says_already_announced(&path, key),
+            "the plaintext dedup key must not be an acceptable marker content (CR-01): the \
+             stored form is a digest, because this file is readable by the confined child"
+        );
+
         // 4. Exact match — the one genuine repeat.
-        std::fs::write(&path, key.as_bytes()).expect("write key");
+        std::fs::write(&path, attestation_downgrade_marker_content(key).as_bytes())
+            .expect("write digest");
         assert!(
             marker_says_already_announced(&path, key),
-            "an exact key match IS a genuine repeat and must suppress, or the dedup does \
+            "an exact content match IS a genuine repeat and must suppress, or the dedup does \
              nothing and the hook path re-prints on every tool call"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// CR-01/D-28: whatever the marker stores, it must not NAME the layers.
+    ///
+    /// The property is stated over the content function directly rather than
+    /// over one sample string, because the defect this pins was introduced by
+    /// changing what the writer passes to `write_all`. Two halves:
+    ///
+    /// 1. *Non-disclosure* — for a key naming every layer this codebase can
+    ///    downgrade, no fragment of any layer name survives into the content.
+    ///    The needles are read from the caller's own vocabulary
+    ///    (`LayerId::ALL`, via the launch-side sibling test) plus the literal
+    ///    key text here, so this cannot pass by testing a name that no longer
+    ///    exists.
+    /// 2. *Injectivity* — distinct keys must still produce distinct content,
+    ///    or the digest would silently re-open the collision hole WR-04
+    ///    closed. Checked exhaustively over a spanning sample of key shapes.
+    #[test]
+    fn marker_content_never_names_a_layer_and_stays_injective() {
+        // Deliberately built from key TEXT, not from an imported enum:
+        // `output.rs` must not learn the layer identity type (D-28's
+        // structural half). The launch-side sibling
+        // `downgrade_marker_files_never_contain_a_layer_name` drives the same
+        // property from the real `LayerId::ALL` vocabulary end to end.
+        let keys = [
+            "",
+            "DaclAncestorTraverse",
+            "WfpEgressFilters",
+            "DaclAncestorTraverse,WfpEgressFilters",
+            "WfpEgressFilters,DaclAncestorTraverse",
+            "JobObjectContainment,MandatoryIntegrityLabel,RestrictedToken",
+        ];
+
+        for key in keys {
+            let content = attestation_downgrade_marker_content(key);
+            assert_eq!(
+                content.len(),
+                32,
+                "marker content must be a fixed-width 128-bit hex digest, got {content:?}"
+            );
+            assert!(
+                content.chars().all(|c| c.is_ascii_hexdigit()),
+                "marker content must be hex only — anything else is a channel for key text: \
+                 {content:?}"
+            );
+            // Non-disclosure: no comma-separated fragment of the key may
+            // appear in the content, in any casing.
+            for fragment in key.split(',').filter(|f| !f.is_empty()) {
+                assert!(
+                    !content
+                        .to_ascii_lowercase()
+                        .contains(&fragment.to_ascii_lowercase()),
+                    "CR-01/D-28: marker content {content:?} contains the layer name \
+                     {fragment:?}. This file is readable by the confined child on the Null, \
+                     WriteRestricted and Low-IL arms; the layer set must never be written \
+                     there in plaintext."
+                );
+            }
+        }
+
+        // Injectivity over the sample, including the order-swapped pair —
+        // production sorts before joining, but the content function must not
+        // be the thing relying on that.
+        for (i, a) in keys.iter().enumerate() {
+            for b in keys.iter().skip(i + 1) {
+                assert_ne!(
+                    attestation_downgrade_marker_content(a),
+                    attestation_downgrade_marker_content(b),
+                    "distinct dedup keys {a:?} and {b:?} collide in marker content — that \
+                     re-opens the WR-04 collision hole the content check exists to close"
+                );
+            }
+        }
     }
 
     #[test]
