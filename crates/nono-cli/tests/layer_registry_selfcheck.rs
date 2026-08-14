@@ -1129,41 +1129,55 @@ fn every_open_marker_in_code_has_a_ledger_row() {
     // ROUND-4 (requirement 1 sweep): `!markers.is_empty()` is monotone in the
     // WRONG direction — if the walk-back stops recognising ONE marker shape,
     // that marker is silently unchecked while the floor stays satisfied by the
-    // others. The correctness property is about the PARSER: every scanned file
-    // that contains the literal ` OPEN` must yield at least one parsed marker.
-    let mut files_with_open_text: Vec<&'static str> = Vec::new();
+    // others. The correctness property is about the PARSER: every line that
+    // CARRIES a marker must have one PARSED out of it.
+    //
+    // ROUND-6 WR-06 fixed both halves of how that was measured.
+    //
+    // The trigger was the bare substring ` OPEN`, which is far wider than the
+    // class being parsed: `dwCreationDisposition: OPEN_EXISTING` in any of the
+    // three Win32-facing files would have tripped it and reported the file
+    // "blind" for a reason unrelated to any deferral record. It is now
+    // `line_carries_marker_tokens` — an `OPEN` whole word AND a finding-id
+    // token somewhere on the line.
+    //
+    // That detector is deliberately INDEPENDENT of the walk-back rather than a
+    // second copy of it: it tokenises the whole line, while the parser requires
+    // the id to be immediately ADJACENT to ` OPEN`. Re-using the parser (or
+    // restating its adjacency rule) would make this check vacuous by
+    // construction — trigger and parse would agree on every input. Because they
+    // differ only in adjacency, rewriting a marker as `WR-14 (OPEN)` or
+    // `WR-14 — OPEN` still trips the trigger and blinds the parser, which is
+    // exactly the failure this property exists to catch.
+    //
+    // The per-file bookkeeping was also wrong: it recorded a file as having
+    // parsed a marker only when `markers.len()` GREW, and the marker list dedups
+    // by id GLOBALLY. A second file repeating an id already seen — an ordinary
+    // thing when one deferral is annotated at both its sites — yielded no new
+    // marker and was reported blind. It is now a per-file counter.
+    let mut files_with_marker_text: Vec<&'static str> = Vec::new();
     let mut files_with_parsed_marker: Vec<&'static str> = Vec::new();
     for (label, path) in marker_sources() {
         let src = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
-        if src.contains(" OPEN") {
-            files_with_open_text.push(label);
+        if src.lines().any(line_carries_marker_tokens) {
+            files_with_marker_text.push(label);
         }
-        let before = markers.len();
+        let mut parsed_here = 0usize;
         for (n, line) in src.lines().enumerate() {
             // Every occurrence on the line, not just the first: one line may
             // carry two markers, and `find` would silently drop the second.
             for (pos, _) in line.match_indices(" OPEN") {
-                // Walk back over the identifier immediately preceding ` OPEN`.
-                let head = &line[..pos];
-                let mut id: Vec<char> = head
-                    .chars()
-                    .rev()
-                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
-                    .collect();
-                id.reverse();
-                let id: String = id.into_iter().collect();
-                // Shape: two uppercase letters, a dash, then digits (CR-01, WR-14).
-                let looks_like_finding_id = id.len() >= 4
-                    && id.chars().take(2).all(|c| c.is_ascii_uppercase())
-                    && id.chars().nth(2) == Some('-')
-                    && id[3..].chars().all(|c| c.is_ascii_digit());
-                if looks_like_finding_id && !markers.iter().any(|(seen, _)| seen == &id) {
+                let Some(id) = finding_id_before(line, pos) else {
+                    continue;
+                };
+                parsed_here = parsed_here.saturating_add(1);
+                if !markers.iter().any(|(seen, _)| seen == &id) {
                     markers.push((id, format!("{label}:{}", n + 1)));
                 }
             }
         }
-        if markers.len() > before {
+        if parsed_here > 0 {
             files_with_parsed_marker.push(label);
         }
     }
@@ -1174,17 +1188,18 @@ fn every_open_marker_in_code_has_a_ledger_row() {
          deferred finding has been closed (delete this gate deliberately if so) or the marker \
          convention changed and this scan is now blind."
     );
-    let blind: Vec<&&str> = files_with_open_text
+    let blind: Vec<&&str> = files_with_marker_text
         .iter()
         .filter(|f| !files_with_parsed_marker.contains(f))
         .collect();
     assert!(
         blind.is_empty(),
-        "discovery correctness: {:?} contain(s) the text ` OPEN` but yielded no parsed \
-         `XX-NN OPEN` marker, so the walk-back no longer recognises the shape written there \
-         and that finding's ledger row is unprotected. `!markers.is_empty()` cannot see this \
-         — it stays satisfied by the markers that DO still parse, which is the wrong \
-         direction. Files that parsed: {files_with_parsed_marker:?}.",
+        "discovery correctness: {:?} carr(y) both an `OPEN` word and an `XX-NN` finding id, \
+         but the walk-back parsed no `XX-NN OPEN` marker out of them — so the marker there is \
+         written in a shape this scan no longer recognises and that finding's ledger row is \
+         unprotected. `!markers.is_empty()` cannot see this: it stays satisfied by the markers \
+         that DO still parse, which is the wrong direction. Files that parsed: \
+         {files_with_parsed_marker:?}.",
         blind
     );
 
@@ -1806,6 +1821,107 @@ fn collect_by_extension(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
             out.push(path);
         }
     }
+}
+
+/// Is `token` a finding id — two uppercase ASCII letters, a dash, then digits
+/// (`CR-01`, `WR-14`)?
+fn is_finding_id(token: &str) -> bool {
+    token.len() >= 4
+        && token.chars().take(2).all(|c| c.is_ascii_uppercase())
+        && token.chars().nth(2) == Some('-')
+        && token
+            .get(3..)
+            .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// The finding id IMMEDIATELY preceding the ` OPEN` occurrence at byte `pos`,
+/// or `None` when what precedes it is not one.
+///
+/// This is the marker PARSER. Its defining property is adjacency.
+fn finding_id_before(line: &str, pos: usize) -> Option<String> {
+    let head = line.get(..pos)?;
+    let mut id: Vec<char> = head
+        .chars()
+        .rev()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
+    id.reverse();
+    let id: String = id.into_iter().collect();
+    is_finding_id(&id).then_some(id)
+}
+
+/// Does `line` carry the two things a deferral marker is made of — an `OPEN`
+/// whole word and a finding-id token — anywhere on it?
+///
+/// This is the marker DETECTOR, and it is deliberately NOT the parser
+/// (round-6 WR-06). It ignores adjacency, so it stays strictly wider than
+/// [`finding_id_before`]: any rewriting of the marker that keeps both tokens
+/// but breaks their adjacency (`WR-14 (OPEN)`, `WR-14 — OPEN`) trips this and
+/// blinds that, which is precisely the parser-went-blind failure the property
+/// exists to catch. Restating the parser's rule here instead would make the
+/// check agree with itself on every input.
+///
+/// `OPEN` is matched as a WHOLE WORD, which is what keeps ordinary Win32
+/// source out: `dwCreationDisposition: OPEN_EXISTING` contains ` OPEN` as a
+/// substring but no `OPEN` token.
+fn line_carries_marker_tokens(line: &str) -> bool {
+    let tokens: Vec<&str> = line
+        .split_whitespace()
+        .map(|t| t.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-'))
+        .collect();
+    tokens.contains(&"OPEN") && tokens.iter().any(|t| is_finding_id(t))
+}
+
+/// Detector self-test (round-6 WR-06): the sibling CI gate has one and it is
+/// why that gate can be trusted; this one had none, so its width was never
+/// exercised against anything but the two markers that happen to exist.
+#[test]
+fn the_open_marker_detector_separates_markers_from_win32_constants() {
+    for carries in [
+        "/// ⚠ WR-14 OPEN — the remediation is mis-targeted",
+        "// CR-01 OPEN",
+        "    // WR-10 OPEN (operator decision)",
+        // Adjacency broken but both tokens present: the detector MUST still
+        // fire, because this is the shape that blinds the parser.
+        "// WR-14 (OPEN)",
+        "// WR-14 — OPEN",
+    ] {
+        assert!(
+            line_carries_marker_tokens(carries),
+            "{carries:?} carries both marker tokens and must trip the detector"
+        );
+    }
+    for ordinary in [
+        "    dwCreationDisposition: OPEN_EXISTING,",
+        "        FILE_OPEN,",
+        "// the handle is open for the lifetime of the job",
+        "// WR-14 is deferred",
+        "// leave the door OPEN",
+    ] {
+        assert!(
+            !line_carries_marker_tokens(ordinary),
+            "{ordinary:?} is not a deferral marker and must NOT trip the detector — a false \
+             fire reports a file 'blind' for a reason unrelated to any deferral record"
+        );
+    }
+    // The detector must stay strictly WIDER than the parser, or the
+    // discovery-correctness property is vacuous by construction.
+    let broken = "// WR-14 (OPEN)";
+    assert!(line_carries_marker_tokens(broken));
+    assert!(
+        broken
+            .match_indices(" OPEN")
+            .all(|(pos, _)| finding_id_before(broken, pos).is_none()),
+        "the parser must NOT recognise the adjacency-broken form; if it did, detector and \
+         parser would agree on every input and the blind-file check could never fire"
+    );
+    let intact = "// WR-14 OPEN";
+    assert_eq!(
+        intact
+            .match_indices(" OPEN")
+            .find_map(|(pos, _)| finding_id_before(intact, pos)),
+        Some("WR-14".to_string())
+    );
 }
 
 /// The FORCE-INCLUDE clauses of `ci.yml`'s `run_code_jobs` classifier, with
