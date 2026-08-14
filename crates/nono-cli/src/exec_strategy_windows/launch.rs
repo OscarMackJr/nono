@@ -1397,23 +1397,6 @@ pub(super) fn select_windows_token_arm(
 // and `nono-shell-broker` consume the same source-of-truth implementation.
 // The local definition was removed; callsites here use the re-exported symbol.
 
-/// Phase 117 D-21 (CINT-02): apply the startup self-attestation gate against
-/// the real suspended child's process handle, deciding whether the launch
-/// may proceed (optionally with a visibly downgraded claim, D-25) or must
-/// abort (D-22). Factored out of `spawn_windows_child` so the decision logic
-/// is unit-testable against a real (never-resumed) suspended child without
-/// exercising the full `spawn_windows_child` cascade end-to-end.
-///
-/// Returns `Ok(())` on `AttestationDecision::Proceed` or
-/// `AttestationDecision::ProceedDowngraded` — the D-27 audit event and D-27
-/// banner are both emitted from inside this function, before returning `Ok`,
-/// on the downgraded path (D-28: only the coarse count reaches the banner;
-/// layer-specific detail stays on the audit-event channel).
-///
-/// Returns `Err` on `AttestationDecision::Abort` or on `attest_and_decide`'s
-/// own `Err` (an unrecognized required-layer name — fail-closed, D-26).
-///
-
 /// Emit the D-27 audit record for a `ProceedDowngraded` outcome and report
 /// WHICH channel actually received the per-layer detail.
 ///
@@ -1524,6 +1507,28 @@ fn downgrade_detail_pointer(
     }
 }
 
+/// Phase 117 D-21 (CINT-02): apply the startup self-attestation gate against
+/// the real suspended child's process handle, deciding whether the launch
+/// may proceed (optionally with a visibly downgraded claim, D-25) or must
+/// abort (D-22). Factored out of `spawn_windows_child` so the decision logic
+/// is unit-testable against a real (never-resumed) suspended child without
+/// exercising the full `spawn_windows_child` cascade end-to-end.
+///
+/// Returns `Ok(())` on `AttestationDecision::Proceed` or
+/// `AttestationDecision::ProceedDowngraded` — the D-27 audit event and D-27
+/// banner are both emitted from inside this function, before returning `Ok`,
+/// on the downgraded path (D-28: only the coarse count reaches the banner;
+/// layer-specific detail stays on the audit-event channel).
+///
+/// Returns `Err` on `AttestationDecision::Abort` or on `attest_and_decide`'s
+/// own `Err` (an unrecognized required-layer name — fail-closed, D-26).
+///
+/// (WR-09: this block was orphaned ~130 lines above, separated from the
+/// function by a blank line and by two helpers inserted between them, so it
+/// documented `emit_downgrade_diagnostics` instead. Surfaced by the new
+/// Windows clippy leg via `clippy::empty_line_after_doc_comments` — the
+/// first thing that gate caught.)
+///
 /// # AUD-04 contract (per `SecurityEventLayer::emit_attestation_event`'s own
 /// doc comment)
 ///

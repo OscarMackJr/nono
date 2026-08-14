@@ -458,8 +458,21 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
+      # Phase 117 review WR-09: windows-latest added. The matrix was
+      # [ubuntu-latest, macos-latest], so EVERY `#[cfg(target_os = "windows")]`
+      # file — the whole exec_strategy_windows/ tree, agent_daemon/launch.rs's
+      # windows_impl, telemetry/windows.rs, the Windows halves of
+      # cli_bootstrap.rs and output.rs, and nono-shell-broker — was never
+      # linted at all. The Windows test jobs set `RUSTFLAGS: -Dwarnings`,
+      # which catches rustc warnings but NOT clippy-only lints, and CLAUDE.md
+      # makes `clippy::unwrap_used` a hard project rule. This was a missing
+      # gate rather than a live violation: the exact command below was run
+      # locally on Windows before adding this leg and exited 0.
+      #
+      # `--all-features` includes `layer-fault-injection`, so the seam code
+      # the `windows-layer-fault-injection` job exercises is linted here too.
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
