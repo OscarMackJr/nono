@@ -1,406 +1,430 @@
 ---
 phase: 117-fail-direction-contract-startup-self-attestation
-fixed_at: 2026-08-14T16:40:00Z
+fixed_at: 2026-08-14T21:30:00Z
 review_path: .planning/phases/117-fail-direction-contract-startup-self-attestation/117-REVIEW.md
-iteration: 2
-round: 3
+iteration: 3
+round: 5
 findings_in_scope: 8
 fixed: 8
 skipped: 0
 status: all_fixed
 ---
 
-# Phase 117: Code Review Fix Report — round 3
+# Phase 117: Code Review Fix Report — round 5
 
-**Source review:** `117-REVIEW.md` (round 2, reviewed 2026-08-14T09:40:00Z; 1 Critical + 7
+**Source review:** `117-REVIEW.md` (round 4, reviewed 2026-08-14T18:20:00Z; 0 Critical + 8
 Warning = 8 findings, all in scope)
 **Scope:** `critical_warning` — the review reported 0 Info findings, so this is every finding.
 
-> The round-2 fix report is preserved at `117-REVIEW-FIX.round1.md`.
+> Round-3's fix report is preserved at `117-REVIEW-FIX.round3.md`; round 1's at
+> `117-REVIEW-FIX.round1.md`.
 
 | | Count | Findings |
 |---|---|---|
-| Fixed | 8 | CR-01, WR-01, WR-02, WR-03, WR-04, WR-05, WR-06, WR-07 |
+| Fixed | 8 | WR-01, WR-02, WR-03, WR-04, WR-05, WR-06, WR-07, WR-08 |
 | Skipped | 0 | — |
 
-7 commits on `gsd-reviewfix/117-r3-1333`, fast-forwarded onto
+7 commits on `gsd-reviewfix/117-r5-193`, fast-forwarded onto
 `milestone/v2.13-carryforward-closeout`. All carry DCO sign-off.
+
+Round 4 was the first with zero blockers. **No runtime-behaviour change was made this round** —
+every commit touches guards, records or CI configuration. The one thing that is not a review
+finding (the D-28 filesystem gate's fail-open read) is test code as well.
 
 ---
 
-## The standing obligation for this round
+## The root, not the eight leaves
 
-Round 3 exists because round 2's fix pass created its own blocker: WR-04's fix was evaluated
-against one fail direction (operator visibility) and never against the other (disclosure to the
-confined child). Every runtime-behaviour change below therefore carries an explicit
-**two-direction analysis**, and every guard carries a **perturbation proof** plus a
-**non-vacuity** argument that is about *correctness of coverage*, not merely non-emptiness.
+The brief's framing is correct and it is what I built to. Round 3 unified two disagreeing
+`#[cfg(test)]` classifiers into `crates/nono-cli/src/cfg_test_regions.rs` — the right move — but
+**propagated the classifier to both consumers while propagating the correctness assertion to only
+one**. WR-01, WR-02 and WR-03 are three faces of that single omission, so they are one commit
+(`aa1765cb`) and the fix is structural:
 
-Two things worth stating up front, because both were caught by running things rather than by
-reading them:
+```rust
+// cfg_test_regions.rs
+impl ProductionScan<'_> {
+    /// Assert the split is correct, and fail loudly with the evidence if it is not.
+    pub fn assert_split_is_correct(&self, label: &str) { … }
+}
+```
 
-1. **My own first draft of the WR-03 helper was vacuous on the WR-02 mirror.** It took "the rest
-   of the text" as the window in which a qualifying negation had to appear, which is fine for a
-   one-sentence remediation string and useless on a 2000-character Markdown ledger cell — the
-   restored prescriptive SPEC text PASSED because a correction 400 characters later in the same
-   cell satisfied it. Found by running the perturbation, not by inspection. Window now bounded.
-2. **My own CR-01 test introduced a flaky failure** in a pre-existing latency assertion, which
-   `cargo test --workspace` surfaced as 15 failures against the known 14-failure baseline. I
-   characterised it (8 runs alone vs. 3 runs paired) rather than declaring it environmental, and
-   fixed the contention. Detail under CR-01 below.
+Every consumer now calls that one function. There is no longer a shape of this gate a third
+consumer can adopt while skipping the property, because the property is not something a consumer
+writes — it is something it calls. The three checks inside it are ordered worst-direction-first:
+
+1. `unclosed_regions` — **over-claim**: production text silently unscanned (WR-03).
+2. `leaked_test_attributes` — **under-claim**: test assertions able to satisfy the caller (WR-02).
+3. `skipped_regions` non-empty — the zero-region case neither of the above can see.
+
+`skipped_lines()` is kept, but its doc now says in as many words that it is a floor and never a
+correctness check, and *why*: it is monotone in the wrong direction.
+
+---
+
+## Requirement 2 — verified by round 4's exact perturbations
+
+Round 4's demonstration was: one blank line before `agent_daemon/launch.rs`'s
+`mod attestation_gate_tests {` moves 387 lines of test code into the production half; the daemon
+gate's `skipped_lines() > 0` floor stays satisfied; renaming the real production
+`layer = "DaclAncestorTraverse"` site then leaves the gate GREEN, satisfied by a test assertion at
+line 2225.
+
+| # | Perturbation | Result | Note |
+|---|---|---|---|
+| P1 | one blank line before `mod attestation_gate_tests {` | **GREEN** | and correctly so — see below |
+| P2 | P1 **+** rename the production `layer = "DaclAncestorTraverse"` | **FAILS** | round 4: stayed GREEN |
+| P3 | rename alone, no blank line | **FAILS** | baseline sanity |
+| P4 | narrow the classifier window back to the round-3 shape, keeping the blank line | **FAILS** | guard half works independently |
+
+**On P1 being green.** The brief asks for the blank-line perturbation to make the gate FAIL. It
+does not, and that is the fix working rather than the fix missing: I closed the defect on **both**
+halves, so with the widened classifier the blank line no longer causes a leak, and there is
+nothing left for the gate to detect. P2 is the decisive test — it is the exact combination round 4
+proved could stay green, and it now fails:
+
+```
+DaclAncestorTraverse is expected at (EntryPath::Daemon, None) with an attestable probe
+(ConfiguredOnly), but daemon_attest_and_decide's source never names "DaclAncestorTraverse"
+outside a comment — the row goes completely unattested on `nono agent launch` (CR-02).
+```
+
+P4 exists precisely because P1's greenness is otherwise unfalsifiable. Reverting only the
+classifier's widened window, with the blank line still in place, produces:
+
+```
+WR-01/WR-02: 6 test attribute(s) survived into the PRODUCTION half of agent_daemon/launch.rs
+(first at line Some(1870)), so at least one `#[cfg(test)]` module leaked into the scan and its
+assertions can satisfy the caller's gate on their own.
+```
+
+So the guard catches the leak even when the classifier does not — which is the property that
+matters for the *next* evading shape, the one neither of us has thought of. All four perturbations
+were reverted; `git diff` confirms `agent_daemon/launch.rs` is untouched at final HEAD.
 
 ---
 
 ## Fixed
 
-### CR-01: WR-04's fix persisted un-redacted `LayerId` names to a child-readable path (D-28)
+### WR-01 + WR-02 + WR-03: propagate the property, not the helper
 
-**Files:** `crates/nono-cli/src/output.rs`, `crates/nono-cli/src/exec_strategy_windows/launch.rs`
-**Commits:** `15215d37`, plus `f55bd174` (test-contention repair, below)
-**Status:** fixed — **requires human confirmation** (this is the round's only runtime-behaviour
-change)
+**Files:** `cfg_test_regions.rs`, `exec_strategy_windows/layer_registry.rs`, `output.rs`
+**Commit:** `aa1765cb`
 
-Round 2 bought marker content-authority by writing `dedup_key` — the plaintext, comma-joined
-`LayerId` set — verbatim into
-`%LOCALAPPDATA%\nono\sessions\<id>\attestation-downgrade\<hash>`. The marker content is now a
-**128-bit domain-separated `DefaultHasher` digest** (two passes under distinct constant prefixes,
-because `DefaultHasher` is fixed-key and an undifferentiated second pass would just repeat the
-first). Filename gains a `.v2` suffix so a round-2 plaintext marker is not consulted.
+**WR-02 (the root).** `layer_registry.rs:1452` kept `skipped_lines() > 0`. Both consumers, and the
+`main.rs` half of `output.rs`'s gate (which had only `!skipped_regions.is_empty()` — the same
+wrong-direction predicate, on the file whose test module asserts directly on the rendered
+remediation text), now call `assert_split_is_correct`.
 
-**Two-direction analysis.**
+**WR-01.** The pending-attribute window admitted three shapes while its doc stated the class.
+Widened to "anything that is not the gated item": blank lines, plain `//` comments, block-comment
+bodies. `cfg` attributes are now joined across source lines until their brackets balance, so
+`#[cfg(all(` on its own line is recognised — `is_cfg_test_attr` compacts whitespace before
+matching so the joined form and the single-line form classify identically. The leak check matches
+the test-attribute **class** (`#[test]`, `#[tokio::test]`, `#[rstest::test]`), not one literal;
+pinning only `#[test]` would have made the leak check itself the narrow needle this round keeps
+finding.
 
-*(a) What does this now expose that it did not before, and to whom — can the confined child
-read it on the `Null`, `WriteRestricted` and Low-IL arms?*
-**Nothing new, on any arm.** The child *can* read this file on all three (Null: same token;
-WriteRestricted: `WRITE_RESTRICTED` applies restricting SIDs to WRITE access checks only; Low-IL:
-MIC defaults to `NO_WRITE_UP`, reads up are permitted, and nothing labels the sessions tree). That
-reachability is unchanged — what changes is what is *there* to read. The content is now a
-deterministic function of the same input that already determines the file's NAME, so an observer
-who can invert one can invert the other, and an observer who cannot enumerate the key space
-learns nothing from either. **Marginal disclosure relative to the file merely existing under that
-name is exactly zero** — which is the pre-phase baseline the review itself endorses ("the pre-fix
-zero-byte marker leaked nothing beyond an enumerable 64-bit hash"). Relative to round 2 it
-strictly decreases: a child that does not enumerate previously got the names for free.
+Three new unit tests, one per shape. Shape (2)'s fixture is the **real occurrence** the review
+cited — `crates/nono-proxy/src/credential.rs`'s test module, written in this codebase's own idiom
+today — not a synthetic one.
 
-*(b) What does this now deny that it did not before?*
-**Nothing.** The set of `(session, key)` pairs that suppress the banner is identical — the digest
-is injective for every input this code can produce, pinned by an explicit injectivity assertion —
-so absent / zero-byte / mismatched / unreadable markers still ANNOUNCE. Operator-visible
-behaviour is bit-identical; only the on-disk byte string changed.
+**WR-03.** "Closer not found" produced a region running to EOF with no signal. `unclosed_regions`
+now records it and `assert_split_is_correct` rejects it first, before the leak check, because it
+is the worse direction. The closer is matched against the module line's **original leading
+whitespace** (so tab-indented modules close) and admits a trailing comment (`} // end of tests`).
+Four tests cover it, including two `#[should_panic]` proofs that the assertion actually fires.
 
-**On the unforgeability constraint the brief carried forward.** Round 2's stated rationale was
-that an offline-computable key over a 13-element enum lets an attacker pre-plant the marker. That
-is true, and round 2 **did not fix it** — its own doc says so ("an attacker can enumerate and
-pre-plant every valid marker"). I have not traded it away, because there was nothing to trade:
-this fix preserves 100% of the authority round 2 actually achieved (collision detection,
-zero-byte rejection, tamper rejection) while closing the disclosure hole.
-
-I did **not** achieve unforgeability, and I am saying so rather than implying it. It is not
-reachable from here: on the `Null` and `WriteRestricted` arms the confined child runs under the
-same user *and the same integrity level* as the supervisor, so there is no on-disk location this
-process can read across spawns that that process cannot also write. A keyed MAC needs a secret,
-and any secret stored where the next supervisor invocation can read it (dedup must survive across
-processes — the hook path re-enters on every tool call) is readable by a same-IL same-user child
-too. The doc now states this precisely instead of blaming the 13-element key space. **If an
-operator wants unforgeability, it requires a design decision this fix pass cannot take** — e.g.
-DACL/label-hardening the sessions subtree (which only helps the Low-IL arms) or moving dedup state
-off the filesystem entirely.
-
-**Guards, with perturbation proofs:**
-
-- `launch.rs::downgrade_marker_files_never_contain_a_layer_name` drives the REAL writer over the
-  REAL `LayerId::ALL` vocabulary on the `DowngradeDetailChannel::None` arm (the worst case: the
-  channel that records nothing anywhere else), then reads back every byte left under
-  `sessions_dir()`. Non-vacuity asserted on **both** the needle set (`>= 13` names, from the enum,
-  not a hand-written list) and the file set (non-empty, asserted *before* the scan).
-  **PERTURBATION:** restoring `f.write_all(dedup_key.as_bytes())` FAILS with all 13 layer names
-  listed. Note the reader-side test stayed **GREEN** under that same perturbation — a
-  filesystem-level assertion was required, and a unit test of the helper would have shipped the
-  defect again.
-- `only_an_exact_key_match_suppresses_the_banner` gains case 3b: the plaintext key must NOT be
-  accepted content. **PERTURBATION:** widening the reader to also accept `dedup_key` FAILS there.
-- `marker_content_never_names_a_layer_and_stays_injective` pins shape, non-disclosure and
-  injectivity in `output.rs` **without importing the layer type**, preserving that module's
-  structural D-28 property.
-
-Also corrects `print_attestation_downgrade_banner`'s doc, which claimed `dedup_key` was "never
-parses or displays, only hashes" in the same edit that made the function persist it verbatim.
-That statement is true again.
-
-**Self-inflicted regression, found and fixed (`f55bd174`).** `cargo test --workspace` returned 15
-failures against the known 14-failure Windows-host baseline; the extra one was
-`attestation_downgrade_banner_cold_vs_warm_dedup_marker_latency`. Measured **alone** on the same
-compiled binary, 8 consecutive runs: warm 1.6–15.7ms, all green. Measured **concurrently** with
-my new D-28 test — which does `create_dir_all` + `remove_dir_all` under the same sessions root on
-another harness thread — one run of three hit **235.68ms**, tripping the 100ms bound. So: harness
-filesystem contention I introduced, not a latency regression in the code (the CR-01 change adds
-two `DefaultHasher` passes and nothing else). Both tests now take one shared
-`SESSIONS_ROOT_TEST_LOCK`, acquired through poisoning. 5/5 paired runs green afterwards, and the
-workspace suite is back to exactly 14. I rejected weakening the 100ms bound (it is a real D-24
-budget), `#[ignore]` (a gate people learn to ignore is worse than no gate), and redirecting
-`LOCALAPPDATA` (CLAUDE.md forbids env mutation in parallel tests — it already causes several of
-the 14 baseline failures).
-
----
-
-### WR-01: the CR-01 gate scanned 1773 lines of test code as production
-
-**Files:** `crates/nono-cli/src/cfg_test_regions.rs` (new), `output.rs`, `layer_registry.rs`,
-`main.rs` · **Commit:** `61e4ea40`
-
-The two mirrors of the `#[cfg(test)]`-region classifier were written **in the same fix pass** and
-disagreed. Rather than align them, I **eliminated the mirror**: there is now exactly one
-implementation, `crate::cfg_test_regions` (test-only), with unit tests for the rule itself, and
-both gates call it. A third gate needing the rule must call it too.
-
-Fixed in the shared rule:
-- Attributes and doc comments between `#[cfg(test)]` and its `mod` line no longer break the
-  region. This is the live defect: six of `launch.rs`'s twelve test modules carry
-  `#[allow(clippy::unwrap_used)]` there.
-- `#[cfg(not(test))]` was classified as a test gate by **both** copies (it contains the substring
-  `test)`), so a `#[cfg(not(test))] mod foo {` — production code — would have been skipped whole.
-  Latent, not live; now excluded.
-
-Two doc claims made **true** rather than deleted:
-- *"asserted to EXIST in every scanned file"* — each scanned file must now contribute at least one
-  **skipped test region**.
-- *"The caller asserts non-vacuity per file"* — the floor was a **global sum of 2 across two
-  files**. It is now per file.
-
-Secondary from the finding: the arm walk-back now searches production entries only. It previously
-searched raw lines, so a comment naming `DowngradeDetailChannel::EventLog` within 12 lines above a
-violating string satisfied the gate.
-
-**Non-vacuity is asserted on CORRECTNESS, not emptiness.** `!skipped_regions.is_empty()` would
-have stayed green through the actual defect. Instead: **no `#[test]` attribute may appear in any
-file's production half** — a leaked module brings its `#[test]`s with it, so this catches the class
-directly without restating the classifier's own rule.
-
-**PERTURBATIONS (each fails only with the fix in place):**
-1. Restore the pending-flag-clears-on-any-line bug → FAILS: *"41 `#[test]` attribute(s) appear in
-   the PRODUCTION half of exec_strategy_windows/launch.rs (first at line 3323)"*. The daemon gate
-   stayed GREEN under this same perturbation — which is precisely why the leak check lives in
-   `output.rs`'s gate.
-2. Drop the `not(test` exclusion → the rule test FAILS on `#[cfg(not(test))]`, and
-   `not_test_modules_are_production` FAILS.
-3. Break `launch.rs`'s only EventLog site **and** add a second one in `output.rs`, so the OLD
-   global `hits >= 2` floor is still satisfied → the per-file floor FAILS: *"matched 0 site(s) in
-   exec_strategy_windows/launch.rs (floor 1)"*. This is the exact case the old doc claimed was
-   covered.
-4. Inject an unconditional event-log mention whose only nearby arm is a **comment** → FAILS with
-   `Nearest arm found: ""`. The old raw-line walk-back accepted it.
-
-**Two-direction:** test-only. Denies more (three previously-passing shapes now fail the build);
+**Two-direction:** test-only. Denies more (four previously-passing shapes now fail the build);
 exposes nothing — no runtime path, output, file or wire format touched.
 
 ---
 
-### WR-03 + WR-02 + WR-04 + WR-07: every mirror of the contract record
+### WR-04: the SPEC event-log gate matched two verbs, not the class
 
-**Files:** `main.rs`, `crates/nono/src/error.rs`, `tests/layer_registry_selfcheck.rs`,
-`proj/SPEC-windows-fail-direction-contract.md` · **Commit:** `84e48ffe`
+**File:** `main.rs` · **Commit:** `2b7da685`
 
-One commit because these are one defect wearing four hats, and each gate depends on the others'
-content — they cannot be landed green in isolation.
+`84e48ffe` fixed `main.rs`'s rendered-string guard by class and wrote the rejected narrow shape
+into the SPEC mirror **in the same commit**. The predicate is now "any mention that is **not
+qualified**", which no phrasing can evade — a new verb still has to explain itself. A mention is
+legitimate only with one of four qualifiers attached within 200 characters, each chosen to be a
+**fact about the legitimate path rather than a phrasing of it**:
 
-**WR-03.** The sibling CR-06 assertion was still the narrow-needle shape, 20 lines above the
-function WR-06 fixed: the needle was the command + backtick + a **sentence-final period**, so it
-rejected exactly one historical sentence ending while claiming the class "must never be prescribed
-as the remedy". It now matches the CLASS (the command substring) and excludes the one legitimate
-mention by requiring its NEGATION.
+| Qualifier | Why it is legitimate |
+|---|---|
+| `event id 10011` | the downgrade audit event — the path that really does write there |
+| `emit_attestation_event` | that path's emitting symbol |
+| `explicit negation` | how the abort path may name it |
+| `nothing is written there` | ditto |
 
-**WR-02.** The sweep for that rule covered `crates/` but not `proj/`. The SPEC's WR-17 ledger row
-still recorded, in the present tense, that `MandatoryIntegrityLabel` "gets the real remedy
-(`icacls <path> /setintegritylevel Medium`)" — a command `main.rs` carries a regression assertion
-against — and that other layers "point at the Windows Application event log", a channel both
-`main.rs` and `output.rs` assert is named only as a negation. Row rewritten and marked SUPERSEDED;
-RF-13's first sentence corrected for CR-03. Two new gates scan the SPEC **with the same helper**
-the rendered-string assertions use, so the mirrors are structurally prevented from diverging.
+Matched case-insensitively: the SPEC writes both "Windows Application Event Log" and "…event
+log", and a case-sensitive needle is one more evasion. All four real mentions (`SPEC:276`,
+`:292` ×2, `:294`) are qualified today; I measured every window rather than assuming.
 
-> The bounded-window bug in that helper (found by perturbation, described at the top of this
-> report) is the concrete reason to distrust "both mirrors now assert the class" claims that were
-> not perturbed.
+Adds the **detector self-test** the sibling WR-05 gate has and this one lacked — which is why the
+round-3 "perturbation" only ever exercised the single historical phrasing the needle was written
+from. Eight prescriptive phrasings must fire (`points at`, `is pointed at`, `pointing … at`,
+`directs … to`, `refers … to`, `names … as the place to look`, `see the …`, `check the … Event
+Log`); the three real qualified mentions must stay silent; and a qualifier 420 characters away
+must **not** rescue a mention — the attached-window vacuity the sibling helper's own first draft
+shipped with.
 
-**WR-04.** A blank line between the CR-02 and WR-10 rows terminated the D-15 table in GFM, so
-WR-10's row rendered as a paragraph of pipe characters — while WR-10's entire skip justification
-was that it was "recorded in the SPEC's table". Blank line deleted, and
-`every_open_marker_in_code_has_a_ledger_row` makes it structural: **discovery-based** (finds every
-`XX-NN OPEN` marker, names none), **GFM-faithful** (rows collected only while contiguous with the
-header + delimiter pair, exactly as a renderer parses them), and **collision-aware** — finding IDs
-REPEAT across iterations, so the matching row must also be marked OPEN or the Iteration-5 WR-14
-row would satisfy the Iteration-6 WR-14 marker.
-
-**WR-07.** The `WR-14 OPEN` record stated the wrong reason. Verified against source:
-`probe_in_job` is `pub` behind `pub mod attestation`; both production callers discard the `Err`
-(`attestation.rs::classify_probe_outcome` → `Unconfirmed`; the daemon's
-`matches!(probe_in_job(process, job), Ok(true))`). So the null handle is not what makes the case
-unreachable, and the case **IS** reachable today for FFI/Python/TypeScript embedders, which see
-the mis-targeted `ClearStaleLayerResidue { layer: "JobObjectContainment" }` in a shipped build.
-Record corrected, given the ledger row it never had, and pinned by a gate that also asserts both
-swallow sites still swallow — so if either call site stops discarding, the record's own claim
-fails the build.
-
-**PERTURBATIONS (each fails only with the fix in place):**
-- Reword the remediation to `` `icacls <path> /setintegritylevel Medium` to clear this. `` — a
-  phrasing the OLD needle permitted → FAILS.
-- Restore the SPEC's prescriptive WR-17 text → **both** SPEC gates FAIL.
-- Re-insert the table-terminating blank line → the ledger gate FAILS naming **both** open markers.
-- Delete only the Iteration-6 WR-14 row, leaving the Iteration-5 WR-14 row as a decoy → the ledger
-  gate still FAILS on WR-14.
-- Restore "requires a null job handle" → the WR-07 record gate FAILS.
-
-**Two-direction:** no runtime behaviour changes. `error.rs` is comment-only (the `remediation()`
-match arm is untouched); `main.rs`'s change is inside `#[cfg(test)]`; the SPEC is a document.
-Nothing new is exposed, nothing new is denied at runtime — only the build denies more.
+**PERTURBATION:** rewrite the WR-27 row as "with every other layer pointed at the Windows
+Application event log" — a phrasing the old needle permitted — and the gate **FAILS**, naming
+`SPEC:294` and listing the four qualifiers it wanted. Reverted.
 
 ---
 
-### WR-05: stale line citations across the registry surface
+### WR-05: the WR-14-record gate searched all of `error.rs`
 
-**Files:** `layer_registry.rs`, `tests/layer_registry_meta_test.rs`,
-`tests/layer_force_unavailable.rs`, `tests/layer_registry_selfcheck.rs` · **Commit:** `06be2ae6`
+**File:** `tests/layer_registry_selfcheck.rs` · **Commit:** `f62b22a3`
 
-31 raw `file.rs:<line>` citations, none inside a `call_sites` array and therefore outside every
-gate. Every one I re-resolved was wrong, matching the reviewer's sample:
+**Scoping to the whole record was not enough, and I only learned that by running the
+perturbation.** The record's closing paragraph costs the real fix as "rippling through … the C
+FFI", so with the block-scoped version in place I deleted the FFI-reachability sentence — WR-07's
+one correction — and the gate still **PASSED**. The needles are now scoped to the **case-(3)
+claim** (`"(3) is unreachable through"` … `"(1) cannot fire"`), where `"FFI"` can only have come
+from the sentence being pinned. That perturbation then **FAILS**.
 
-| Citation | Claimed | Actually |
+Both scope delimiters must be present: a missing opener or closer panics with a specific message
+rather than silently widening back toward the whole file, which is the fail-OPEN direction. A
+size band (`400..record.len()`) catches a collapsed or runaway extraction.
+
+Same file, from the requirement-1 sweep: `every_open_marker_in_code_has_a_ledger_row` had
+`!markers.is_empty()` — if the walk-back stops recognising **one** marker shape, that marker goes
+silently unchecked while the floor stays satisfied by the others. Added the parser-correctness
+property (**every scanned file containing ` OPEN` must yield a parsed marker**) and made the scan
+take every occurrence on a line rather than only the first.
+
+**PERTURBATIONS:** delete the FFI-reachability sentence → **FAILS**. Rewrite the marker id so the
+file contains ` OPEN` text but no parseable marker → **FAILS** naming the blind file. (A weaker
+first attempt — breaking only one of the two ids on that line — correctly stayed green, because
+the line's `grep \`WR-14 OPEN\`` hint still carries a parseable marker.) Both reverted.
+
+---
+
+### WR-06: the injectivity claim exceeded the mechanism
+
+**File:** `output.rs` · **Commit:** `cb7eab00`
+
+Three records claimed a property an assertion over **six hand-written keys** did not establish.
+Exhaustive is cheap, so the claim is made **true** rather than reworded away: all 2^13 subsets of
+a 13-name vocabulary, sorted and comma-joined exactly as production builds the key, each asserted
+to map to distinct content, with a `seen.len() == 8192` count check so a broken enumeration cannot
+pass vacuously. The vocabulary is synthetic and fixed-shape on purpose — `output.rs` must not
+learn the layer identity type (D-28's structural half), and the launch-side sibling is what binds
+the real vocabulary end to end.
+
+The strength framing is corrected too: two passes over the same fixed-key SipHash-1-3 permutation
+differing only by a domain prefix is 128 bits of output **width** against accidental collision —
+all WR-04 ever needed — and not a security level against a chosen-input adversary. `output.rs:266`
+and the test doc both say what is actually checked.
+
+**PERTURBATION (the discriminating one):** truncate the digest input to the key's first 25
+characters. All six sample keys still differ within 25 chars, so the old assertion **PASSES**; the
+exhaustive sweep **FAILS**, naming the colliding pair `"Layer00,Layer01,Layer02,Layer03"` /
+`"…,Layer04"`. Reverted.
+
+---
+
+### WR-07: the SPEC gates did not run in CI for the change class they guard
+
+**Files:** `.github/workflows/ci.yml`, `tests/layer_registry_selfcheck.rs` · **Commit:** `2a25cf69`
+
+`run_code_jobs` was `false` when every changed file matched `\.md$`, so a pull request editing
+**only** the SPEC ran zero jobs — and every SPEC defect this phase found was a SPEC-only edit.
+
+I did **not** take the review's suggested shape of dropping the blanket `\.md$`. That would run
+the full matrix on every `.planning/` artifact commit, which is a large unrelated cost the finding
+does not call for. `^proj/` is force-included instead: that is where the contract documents live
+and where the test tree reads from.
+
+The comment the review asked for "at both ends" is a **gate** at the other end.
+`every_markdown_file_gated_by_a_test_runs_the_code_jobs` is discovery-based: it finds Markdown
+reads in the crate's source and test tree in **both** house idioms — `include_str!` with the
+directory in the path, and `workspace_root().join("proj").join("….md")` without it — resolves each
+basename to a real file to get its tree, and fails if that tree has no force-include clause. A
+second contract document added later is covered without the test being touched. Comment lines are
+excluded from the scan so prose about the rule (including this gate's own doc, which names the
+SPEC) is not an instance of it — I hit exactly that self-match on the first draft.
+
+**PERTURBATION:** delete the `|| [[ "${file}" =~ ^proj/ ]]` clause → **FAILS**:
+
+```
+WR-07: 1 Markdown file(s) are read and asserted on by the test tree but are NOT force-included …
+  proj/SPEC-windows-fail-direction-contract.md (read by src/main.rs) — no `=~ ^proj/ ]]` clause
+```
+
+Reverted.
+
+---
+
+### WR-08: the per-file literal floor had one literal of headroom
+
+**File:** `output.rs` · **Commit:** `bf28746c`
+
+The floor is now `max(10, recorded_baseline / 2)`. For `attestation_downgrade_event.rs` that is
+`max(10, 26/2) = 13`, so the two-literal refactor clears it by 11 instead of crossing it by 1,
+while a genuine collapse still trips it. Baselines are **explicit constants**, not recomputed from
+the current source — a derived baseline would make the floor unconditionally satisfiable, which is
+the failure mode the gate exists to catch — and an `assert_eq` pins the baseline list against the
+surface list so a newly added surface file cannot arrive unfloored. Measured counts print on every
+run, so drift is legible without a failure.
+
+Measured at final HEAD: `output.rs` 429, `launch.rs` 757, `attestation.rs` 66,
+`attestation_downgrade_event.rs` 26, `main.rs` 204.
+
+**PERTURBATIONS:** raise the small file's baseline to 208 → **FAILS** with "floor 104 = max(10,
+baseline 208 / 2)", so the proportional floor genuinely binds. Drop `main.rs` from `BASELINE` →
+**FAILS** with "covers 4 file(s) but 5 were scanned". Both reverted.
+
+---
+
+### (Not a review finding) Two wrong-direction checks in the CR-01 D-28 filesystem gate
+
+**File:** `exec_strategy_windows/launch.rs` · **Commit:** `f7cea97f`
+
+Found by applying requirement 1's question to every non-vacuity check in the phase's guards rather
+than only the two cited. This is the phase's most security-relevant gate:
+
+1. **Fail-open read.** `let Ok(bytes) = std::fs::read(file) else { continue; };` — an unreadable
+   file was **silently skipped**. In a D-28 guard an unscannable file is precisely the one that
+   could be hiding the plaintext layer set. It is now a violation of the guard's premise, reported
+   with the IO error.
+2. `!files.is_empty()` is more satisfied the more files exist, so it could not distinguish "the
+   one expected marker" from "one of two expected artefacts still being written". The
+   announcement writes exactly one file; that is now `assert_eq!(files.len(), 1)`, with the
+   message stating that a second file under a child-readable sessions path is a D-28 event
+   needing review rather than a widened floor.
+
+---
+
+## Requirement 1: the full sweep, and what it cleared
+
+Every non-vacuity check in the phase's guards, with the question "could this stay green as the
+thing it protects degrades?" applied to each.
+
+| Check | Verdict | Action |
 |---|---|---|
-| `network.rs:1500` | `select_network_backend` | a `Setup` error string; real fn `:1618` |
-| `launch.rs:2236` | `verify_broker_authenticode` | real fn `:2666` |
-| `launch.rs:2190` | `is_dev_build_layout` | real fn `:2620` |
-| `launch.rs:375` | containment assign | real fn `:404` |
-| `launch.rs:1620` | the `RestrictedToken` seam | that seam is in `restricted_token.rs` |
-| `mod.rs:449/462/486` | guard construction order | doc/comment lines |
-
-All 31 converted to `file.rs::Symbol` form, each resolved by reading the definition rather than
-trusting the prose. Two gates close the class, since narrowing is the fail-OPEN direction:
-
-- `no_line_number_citations_remain_in_the_registry_surface` rejects the raw form outright. It
-  carries a **detector self-test** (must find both the single-line and range forms; must NOT flag
-  `launch.rs::verify_broker_authenticode` or a path-qualified symbol form), so a broken matcher
-  cannot report a clean surface.
-- `every_registry_surface_symbol_citation_resolves` content-verifies every `file.rs::Symbol`
-  anywhere in those files — the rule the SPEC already gets — with a `checked >= 20` floor.
-
-**PERTURBATIONS:** revert one citation to `launch.rs:2134-2137` → the raw-form gate FAILS; rename
-a cited symbol → the resolution gate FAILS naming file and symbol.
-
-**Two-direction:** comments, doc comments and test code only. No runtime path, output, file or
-wire format changes.
+| `layer_registry.rs` `skipped_lines() > 0` | **wrong direction** | replaced (WR-02) |
+| `output.rs` `!scan.skipped_regions.is_empty()` ×2 (two-file loop, `main.rs` half) | **wrong direction** | replaced (WR-02) |
+| `selfcheck` `!markers.is_empty()` | **wrong direction** | parser-correctness property added |
+| `launch.rs` D-28 `!files.is_empty()` + skip-on-unreadable | **wrong direction / fail-open** | fixed (`f7cea97f`) |
+| `output.rs` `PER_FILE_FLOOR: 25` | right direction, mis-calibrated | proportional (WR-08) |
+| `output.rs` `checked >= 500` global literal floor | right direction | kept |
+| `output.rs` `hits >= floor` per file, `main_mentions >= 1` | right direction | kept |
+| `layer_registry.rs` `checked >= 5` daemon rows | right direction | kept |
+| `layer_registry.rs` `checked >= 2` call sites | right direction | kept |
+| `selfcheck` `rows.len() >= 40`, `checked >= 20` | right direction | kept |
+| `launch.rs` `LayerId::ALL >= 13` needle floor | right direction (reads the enum) | kept |
+| `meta_test.rs` `also_automated_entries_are_non_vacuous` | right direction (unreadable ⇒ failure) | kept |
+| `meta_test.rs` `manual_verification_section_excludes_the_registry_table` | `section.len() < spec.len()` is weak, but the sibling `!contains("## Layer registry")` **is** the correctness check and degrades loudly | kept, recorded |
+| `main.rs` `the_spec_never_prescribes_the_medium_label_command` (deliberately no floor) | correct — the SPEC may stop mentioning the command | kept |
 
 ---
 
-### WR-06: the literal extractor silently dropped char-literal lines
+## Requirement 3: no narrow needles in what I wrote this round
 
-**File:** `crates/nono-cli/src/output.rs` · **Commit:** `60352cf9`
+Three predicates written this round could each have been a narrow needle. Each is a class:
 
-`string_literals` documented itself as needing no char-literal handling "because the files it is
-pointed at contain neither". `output.rs` is one of those files and contains `else if c == '"' {`
-twice — inside `string_literals` itself. Char literals are now consumed with a **lookahead**: a
-blind `'` opener would consume from a lifetime (`&'a str`) to the next `'` anywhere on the line,
-trading one false negative for a worse one. Unterminated (`\`-continued) literals are still not
-pushed, deliberately, so this does not quietly alter what the gate covers. Adds a **per-file
-floor** (25) alongside the global 500 — a global floor cannot notice one file going quiet, which
-is exactly how this hid.
+- the event-log gate matches **any unqualified mention**, not a verb list (WR-04);
+- the test-attribute leak check matches `#[test]` **and** `::test]`-suffixed forms, not one
+  literal;
+- the region closer matches `}` at the module's own indent **with an optional trailing comment**,
+  not an exact whole-line string.
 
-**PERTURBATION (the decisive one):** injected
-`let _wr06_probe = if 'x' == '"' { "collapsed    run here" } else { "" };` — a real collapsed run
-on a line that also carries char literals. With the fixed extractor the gate **FAILS**. With the
-extractor reverted to the naive version and the **same probe still present**, the gate **PASSES**.
-The false negative is demonstrated, not argued. The extractor self-test also FAILS under the naive
-version.
-
-**Two-direction:** test-only. Denies more; exposes nothing.
+And every needle is scoped to its region: the event-log gate to ledger rows (`trim_start()`-aware,
+so an indented row is not missed), the WR-14 needles to the case-(3) claim, the CI gate's Markdown
+discovery to non-comment lines.
 
 ---
 
-### (Not a review finding) Stale warm-path record left by WR-04
+## Requirement 6: earlier rounds re-confirmed at final HEAD (`f7cea97f`)
 
-**Files:** `output.rs`, SPEC · **Commit:** `860d4772`
+| Fix | Evidence at final HEAD |
+|---|---|
+| **WR-02 (FFI)** | `types.rs:218 LayerAttestationFailed = 15`; `:244` conversion arm; `nono.h:138` doc block; `lib.rs:211` `NonoError::LayerAttestationFailed` arm. Intact. |
+| **WR-08** (probe-kind evidence keyed by `LayerId`) | `attestation.rs` `ConfirmedByEnforcingComponentReport` arm still keys on `entry.id` and fails CLOSED; `exactly_one_row_is_confirmed_by_enforcing_component_report` passes. Intact. |
+| **WR-11** (reserved device names) | `output.rs:449` `RESERVED` list + `eq_ignore_ascii_case` rejection at `:460`. Intact. |
+| **CR-03 / RF-13** | `machine_policy.rs:197 RequiredLayersPolicy`, `:275 required_layers`, `:683` reader; SPEC `:262` RF-13 row says "reads the sub-key into `RequiredLayersPolicy.required`". Intact and consistent. |
+| **WR-16** (`log_target_is_private` fail-secure) | `cli_bootstrap.rs:101`, still the canonicalize-and-component-check-against-granted-paths form. Intact. |
+| **CR-01 digest marker** | `output.rs:225` writes only `attestation_downgrade_marker_content(dedup_key)`; reader at `:280` compares content; `.v2` filename suffix present. Intact, and now additionally protected by the exhaustive injectivity sweep and the hardened D-28 filesystem gate. |
 
-Found while auditing the marker surface. WR-04 changed the warm dedup check from `path.exists()`
-to `read_to_string` + content comparison, and CR-01 made that content a digest — but three records
-still described it as a bare stat: the latency test's doc, the figure it prints, and the SPEC's
-D-24 latency table row. The SPEC also carried **74.8µs** as the warm cost, measured before the
-content check existed; replaced with the mechanism plus a re-measured range (1.2–20.6ms, this
-host, 2026-08-14), with the superseded figure called out rather than quietly deleted.
-
-Exactly the class this review keeps finding: a record that outlived the code it describes, in a
-document an operator reads as a contract.
+No earlier fix was undone. The only earlier-round code I *changed* is `output.rs`'s and
+`layer_registry.rs`'s non-vacuity blocks and the D-28 gate's read loop — all strictly strengthened.
 
 ---
 
 ## Verification
 
-All gates run **at final HEAD** (`860d4772`).
+All gates run **at final HEAD** (`f7cea97f`) unless noted.
 
 | Gate | Result |
 |---|---|
 | `cargo fmt --all -- --check` | **PASS** |
-| Windows `cargo clippy --workspace --all-targets --all-features -- -D warnings -D clippy::unwrap_used` | **PASS** (exit 0) |
-| `cross clippy --workspace --target x86_64-unknown-linux-gnu -- -D warnings -D clippy::unwrap_used` | **PASS** (exit 0), 15m07s |
-| `cargo-zigbuild clippy --workspace --target x86_64-apple-darwin -- -D warnings -D clippy::unwrap_used` (`SDKROOT` unset) | **PASS** (exit 0) |
-| `cargo test -p nono-sandbox-cli --bin nono` | 1657 passed, 14 failed |
-| `cargo test -p nono-sandbox-cli --test layer_registry_selfcheck` | 18 passed |
+| Windows `cargo clippy -p nono-sandbox-cli --all-targets --all-features -- -D warnings -D clippy::unwrap_used` | **PASS** (exit 0) |
+| `cargo-zigbuild clippy --workspace --target x86_64-apple-darwin -- -D warnings -D clippy::unwrap_used` (`SDKROOT` unset) | **PASS** (exit 0), 3m08s |
+| `cross clippy --workspace --target x86_64-unknown-linux-gnu -- -D warnings -D clippy::unwrap_used` | **PASS** (exit 0) — twice: 16m16s at `bf28746c`, 7m05s at final HEAD |
+| `cargo test -p nono-sandbox-cli --bin nono` | 1669 passed, **14 failed** (baseline) |
+| `cargo test -p nono-sandbox-cli --test layer_registry_selfcheck` | 19 passed |
 | `cargo test -p nono-sandbox-cli --test layer_registry_meta_test` | 10 passed |
-| `cargo test --workspace` (at `f55bd174`) | 1657 passed, 14 failed |
+| `cargo test --workspace` | 1669 + 844 + 51 + 40 + 18 passed, 14 failed (baseline) |
 
-Both cross-target gates were run **locally and to completion** — no PARTIAL→CI fallback. This was
-required: the change set touches `exec_strategy_windows/` (`#[path]`-mapped to `exec_strategy`)
-and `crates/nono/src/error.rs`, which carries `#[cfg(target_os = "linux")]` blocks. They were run
-twice: once at `f55bd174` and again at final HEAD after the docs-only commit.
+**Note on the Linux gate.** Both cross-target gates were run **locally and to completion** — no
+PARTIAL→CI fallback. The Linux gate was run twice: once at `bf28746c` (16m16s, cold) and again at
+final HEAD after `f7cea97f` (7m05s, warm cache), both exit 0. The only change between the two
+revisions is inside a `#[cfg(all(test, target_os = "windows"))]` module, which is cfg'd out
+entirely under a Unix target, so the outcome could not have differed — but CLAUDE.md requires the
+gate, not the argument, so it was re-run rather than reasoned about. The macOS gate was run once,
+at final HEAD.
 
 ### Regression baseline
 
-The 14 failures are the known Windows-host baseline, **identical by name** to those recorded at
-the phase base `334530af` in the round-2 report (`config::tests::*` HOME/USERPROFILE env races,
-`protected_paths::tests::*`, `profile_cmd::tests::test_init_allowed_when_pack_has_same_short_name`,
+The 14 failures are the known Windows-host baseline, **identical by name** to the list recorded in
+round 3 (`config::tests::*` HOME/USERPROFILE env races ×6, `protected_paths::tests::*` ×3,
+`profile_cmd::tests::test_init_allowed_when_pack_has_same_short_name`,
 `audit_session::tests::discover_sessions_does_not_warn_when_legacy_audit_root_is_empty`,
 `exec_strategy::labels_guard::tests::non_owned_path_with_a_foreign_label_is_exempt_not_a_coverage_gap`,
 `exec_strategy::launch::broker_dispatch_tests::broker_launch_assigns_child_to_job_object`,
 `exec_strategy::launch::write_deny_low_il_broker_no_pty_tests::write_deny_low_il_broker_no_pty_prevents_child_write_to_medium_il_file`).
 
-| | Passed | Failed |
+| | Passed (`--bin nono`) | Failed |
 |---|---|---|
 | Phase base `334530af` (recorded round 2) | 1641 | 14 |
-| Round-2 HEAD (recorded round 2) | 1646 | 14 |
-| This branch | **1657** | **14** |
+| Round-2 HEAD | 1646 | 14 |
+| Round-3 HEAD `860d4772` | 1657 | 14 |
+| **This branch `f7cea97f`** | **1669** | **14** |
 
-**Zero regressions; +11 tests over round 2.** The one intermediate 15-failure run is documented
-under CR-01 and was closed, not explained away.
-
----
-
-## Recommend human confirmation
-
-**CR-01 is the only runtime-behaviour change in this round.** Everything else is tests, comments,
-assertions or documents. Two things deserve a human read:
-
-1. **The disclosure argument.** The claim is that the marker's content adds *zero* marginal
-   disclosure because it is a deterministic function of the same input that already determines the
-   filename. That argument depends on the filename remaining a digest of `dedup_key` — if a future
-   change makes the filename opaque while leaving the content derived, the content becomes the
-   weaker link. Nothing currently gates that coupling.
-2. **Unforgeability remains open, by structure not by oversight.** Documented in
-   `print_attestation_downgrade_banner`'s doc. If the operator wants a tamper-proof
-   "already announced" record, it needs a design decision (hardening the sessions subtree — which
-   only helps the Low-IL arms — or moving dedup state off the filesystem). I did not take that
-   decision.
+**Zero regressions; +12 tests over round 3.**
 
 ---
 
-## Carry-forward (unchanged from round 2, plus one)
+## Left open, with their recorded rationale (unchanged)
 
-1. **CR-02 defect 1** — operator decision: does the daemon arm consume the registry? (Options A/B
-   costed in the SPEC ledger.)
+1. **CR-02 defect 1** — operator decision: does the daemon arm consume the registry? Options A/B
+   costed in the SPEC ledger. The gate deliberately proves "no daemon-expected row is unmentioned",
+   not "the registry drives the daemon", and its doc says so.
 2. **WR-12 + WR-14 are one change.** Landing the machine-policy plumbing makes WR-14's
-   mis-targeted remediation reachable. Both markers now say so, and the SPEC has a WR-14 row.
+   mis-targeted remediation reachable. Both markers say so; the SPEC has a WR-14 row; and the
+   record's case-(3) claim is now gate-protected at the right scope.
 3. **WR-10** — operator decision: accept the lockstep two-binary rename, or keep one `LayerId`
    covering two kernel objects with the divergence documented.
-4. **NEW — WR-14 is reachable for embedders today.** Not only "when WR-12 lands":
-   `nono::attestation::probe_in_job` is public API, and an embedder calling it with a null job
-   handle receives the mis-targeted remediation now. This raises WR-14's priority relative to the
-   round-2 record.
+4. **WR-14 is reachable for embedders today**, not only "when WR-12 lands" —
+   `nono::attestation::probe_in_job` is public API.
+
+---
+
+## What still deserves a human read
+
+Nothing this round changes runtime behaviour, so the CR-01 disclosure argument from round 3 stands
+unmodified and its two open items are unchanged (the filename/content coupling is still ungated;
+unforgeability is still structurally out of reach on the same-user, same-IL token arms).
+
+One judgement call is mine and should be reviewed as a decision rather than a fix: **WR-07's scope.**
+The review proposed dropping the blanket `\.md$` from the CI classifier; I force-included `^proj/`
+instead, because the proposed shape would run the full CI matrix on every `.planning/` artifact
+commit. If the intent was the broader change, the clause is one line and the sync gate will keep
+whatever is chosen honest.
 
 ---
 
@@ -408,16 +432,16 @@ assertions or documents. Two things deserve a human read:
 
 | # | Hash | Finding |
 |---|---|---|
-| 1 | `15215d37` | CR-01 |
-| 2 | `61e4ea40` | WR-01 |
-| 3 | `60352cf9` | WR-06 |
-| 4 | `84e48ffe` | WR-03 + WR-02 + WR-04 + WR-07 |
-| 5 | `06be2ae6` | WR-05 |
-| 6 | `f55bd174` | CR-01 (test-contention repair) |
-| 7 | `860d4772` | stale warm-path record (not a review finding) |
+| 1 | `aa1765cb` | WR-01 + WR-02 + WR-03 (one root) |
+| 2 | `2b7da685` | WR-04 |
+| 3 | `f62b22a3` | WR-05 (+ marker-discovery sweep) |
+| 4 | `cb7eab00` | WR-06 |
+| 5 | `2a25cf69` | WR-07 |
+| 6 | `bf28746c` | WR-08 |
+| 7 | `f7cea97f` | requirement-1 sweep: D-28 filesystem gate (not a review finding) |
 
 ---
 
 _Fixed: 2026-08-14_
 _Fixer: Claude (gsd-code-fixer)_
-_Iteration: 2 (round 3)_
+_Iteration: 3 (round 5)_
