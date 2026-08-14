@@ -1126,30 +1126,45 @@ fn every_open_marker_in_code_has_a_ledger_row() {
     // that exist today, so a third marker added later is covered without this
     // test being touched.
     let mut markers: Vec<(String, String)> = Vec::new();
+    // ROUND-4 (requirement 1 sweep): `!markers.is_empty()` is monotone in the
+    // WRONG direction — if the walk-back stops recognising ONE marker shape,
+    // that marker is silently unchecked while the floor stays satisfied by the
+    // others. The correctness property is about the PARSER: every scanned file
+    // that contains the literal ` OPEN` must yield at least one parsed marker.
+    let mut files_with_open_text: Vec<&'static str> = Vec::new();
+    let mut files_with_parsed_marker: Vec<&'static str> = Vec::new();
     for (label, path) in marker_sources() {
         let src = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+        if src.contains(" OPEN") {
+            files_with_open_text.push(label);
+        }
+        let before = markers.len();
         for (n, line) in src.lines().enumerate() {
-            let Some(pos) = line.find(" OPEN") else {
-                continue;
-            };
-            // Walk back over the identifier immediately preceding ` OPEN`.
-            let head = &line[..pos];
-            let mut id: Vec<char> = head
-                .chars()
-                .rev()
-                .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
-                .collect();
-            id.reverse();
-            let id: String = id.into_iter().collect();
-            // Shape: two uppercase letters, a dash, then digits (CR-01, WR-14).
-            let looks_like_finding_id = id.len() >= 4
-                && id.chars().take(2).all(|c| c.is_ascii_uppercase())
-                && id.chars().nth(2) == Some('-')
-                && id[3..].chars().all(|c| c.is_ascii_digit());
-            if looks_like_finding_id {
-                markers.push((id, format!("{label}:{}", n + 1)));
+            // Every occurrence on the line, not just the first: one line may
+            // carry two markers, and `find` would silently drop the second.
+            for (pos, _) in line.match_indices(" OPEN") {
+                // Walk back over the identifier immediately preceding ` OPEN`.
+                let head = &line[..pos];
+                let mut id: Vec<char> = head
+                    .chars()
+                    .rev()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+                    .collect();
+                id.reverse();
+                let id: String = id.into_iter().collect();
+                // Shape: two uppercase letters, a dash, then digits (CR-01, WR-14).
+                let looks_like_finding_id = id.len() >= 4
+                    && id.chars().take(2).all(|c| c.is_ascii_uppercase())
+                    && id.chars().nth(2) == Some('-')
+                    && id[3..].chars().all(|c| c.is_ascii_digit());
+                if looks_like_finding_id && !markers.iter().any(|(seen, _)| seen == &id) {
+                    markers.push((id, format!("{label}:{}", n + 1)));
+                }
             }
+        }
+        if markers.len() > before {
+            files_with_parsed_marker.push(label);
         }
     }
 
@@ -1158,6 +1173,19 @@ fn every_open_marker_in_code_has_a_ledger_row() {
         "non-vacuity: no `XX-NN OPEN` marker was found in any scanned source. Either every \
          deferred finding has been closed (delete this gate deliberately if so) or the marker \
          convention changed and this scan is now blind."
+    );
+    let blind: Vec<&&str> = files_with_open_text
+        .iter()
+        .filter(|f| !files_with_parsed_marker.contains(f))
+        .collect();
+    assert!(
+        blind.is_empty(),
+        "discovery correctness: {:?} contain(s) the text ` OPEN` but yielded no parsed \
+         `XX-NN OPEN` marker, so the walk-back no longer recognises the shape written there \
+         and that finding's ledger row is unprotected. `!markers.is_empty()` cannot see this \
+         — it stays satisfied by the markers that DO still parse, which is the wrong \
+         direction. Files that parsed: {files_with_parsed_marker:?}.",
+        blind
     );
 
     let mut missing = Vec::new();
@@ -1198,10 +1226,80 @@ fn every_open_marker_in_code_has_a_ledger_row() {
 /// record depends on. If either call site stops discarding, the record becomes
 /// false and this fails, which is the whole point: the defect class this phase
 /// keeps re-producing is a record that outlives the code it describes.
+///
+/// # Round-4 WR-05: the needles are scoped to the record
+///
+/// They used to be whole-file `contains` checks on `error.rs`. `"FFI"` already
+/// matched four unrelated pre-existing doc comments, so deleting the
+/// FFI-reachability sentence — the one correction WR-07 asked for — would not
+/// have failed this gate; the other three were block-unique by luck. The
+/// predicate's SCOPE was wider than the thing its message claimed to protect,
+/// which is the same shape as WR-01 and WR-04.
 #[test]
 fn the_wr14_open_record_matches_the_actual_swallow_sites() {
     let error_rs = std::fs::read_to_string(workspace_root().join("crates/nono/src/error.rs"))
         .expect("read crates/nono/src/error.rs");
+
+    // ROUND-4 WR-05: these needles used to be searched over ALL of error.rs,
+    // not over the record they claim to protect. `"FFI"` already matches four
+    // unrelated pre-existing doc comments about the C FFI surface, so DELETING
+    // the FFI-reachability sentence from the WR-14 record — the single
+    // correction WR-07 asked for — would NOT have failed this gate. The other
+    // three were block-unique by luck, not by construction: naming
+    // `agent_daemon/launch.rs` or `classify_probe_outcome` in some other doc
+    // comment is an ordinary thing to do, and this gate would have gone
+    // vacuous silently.
+    //
+    // Scope every needle to the region it belongs to. Note that scoping to the
+    // WHOLE record is still not enough for `"FFI"`: the record's closing
+    // paragraph costs the real fix as "rippling through … the C FFI", which
+    // would keep the needle satisfied with the reachability sentence deleted.
+    // Verified by running exactly that perturbation. So the case-(3) claim is
+    // extracted on its own, and inside it `"FFI"` can only have come from the
+    // sentence this gate exists to pin.
+    fn section<'a>(hay: &'a str, from: &str, to: &str, what: &str) -> &'a str {
+        let start = hay.find(from).unwrap_or_else(|| {
+            panic!(
+                "WR-05: the opening delimiter {from:?} of the {what} is gone from \
+                 crates/nono/src/error.rs. Either the record was restructured — re-scope this \
+                 gate deliberately — or it was deleted, in which case the claims below are \
+                 unprotected."
+            )
+        });
+        let rest = &hay[start..];
+        let len = rest.find(to).unwrap_or_else(|| {
+            panic!(
+                "WR-05: the closing delimiter {to:?} of the {what} is gone from \
+                 crates/nono/src/error.rs. Without it this scope silently widens back toward \
+                 the whole file, which is the fail-OPEN direction this fix removes."
+            )
+        });
+        &rest[..len]
+    }
+
+    // The whole deferral record: marker → the match arm it annotates.
+    let record = section(
+        &error_rs,
+        "⚠ WR-14 OPEN",
+        "Self::LayerAttestationFailed { layer, .. } =>",
+        "WR-14 OPEN record",
+    );
+    // Case (3) alone: its own claim, ending where case (1)'s begins. This is
+    // the region every needle below actually belongs to.
+    let case3 = section(
+        record,
+        "(3) is unreachable through",
+        "(1) cannot fire",
+        "case-(3) reachability claim",
+    );
+    assert!(
+        (400..record.len()).contains(&case3.len()),
+        "WR-05: the extracted case-(3) claim is {} characters out of {} in the record — the \
+         delimiters no longer bracket it, so the needle checks below assert against almost \
+         nothing.",
+        case3.len(),
+        record.len()
+    );
 
     for needle in [
         "classify_probe_outcome",
@@ -1210,15 +1308,15 @@ fn the_wr14_open_record_matches_the_actual_swallow_sites() {
         "FFI",
     ] {
         assert!(
-            error_rs.contains(needle),
-            "WR-07: the `WR-14 OPEN` record in crates/nono/src/error.rs no longer names \
-             {needle:?}. The record must state that BOTH production callers discard the Err \
-             (that is what makes the case unreachable through nono's own binaries), and that \
-             the case IS reachable for FFI/embedder callers today."
+            case3.contains(needle),
+            "WR-07: the `WR-14 OPEN` record's case-(3) claim in crates/nono/src/error.rs no \
+             longer names {needle:?}. That claim must state that BOTH production callers \
+             discard the Err (that is what makes the case unreachable through nono's own \
+             binaries), and that the case IS reachable for FFI/embedder callers today."
         );
     }
     assert!(
-        !error_rs.contains("requires a null job handle"),
+        !case3.contains("requires a null job handle"),
         "WR-07: the incorrect reason (a null job handle no production caller passes) is back \
          in the WR-14 OPEN record. Both production callers swallow the Err, so the job handle \
          is not what makes the case unreachable."
