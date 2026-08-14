@@ -446,6 +446,142 @@ mod tests {
         );
     }
 
+    /// The class needle for the event-log rule, and the qualifiers that make a
+    /// mention legitimate.
+    ///
+    /// Matched case-insensitively: the SPEC writes both "Windows Application
+    /// Event Log" and "Windows Application event log", and a case-sensitive
+    /// needle would be one more way to evade the rule.
+    const EVENT_LOG_NEEDLE: &str = "windows application event log";
+
+    /// A mention is legitimate only if one of these sits within
+    /// [`EVENT_LOG_WINDOW`] characters of it, on either side.
+    ///
+    /// Two legitimate classes, and nothing else:
+    ///
+    /// - the **downgrade path**, which really does write there — pinned by the
+    ///   audit event id and by the emitting symbol, both of which are facts
+    ///   about that path rather than phrasings of it;
+    /// - an **explicit negation**, which is how the abort path is allowed to
+    ///   name it at all.
+    const EVENT_LOG_QUALIFIERS: [&str; 4] = [
+        "event id 10011",
+        "emit_attestation_event",
+        "explicit negation",
+        "nothing is written there",
+    ];
+
+    /// Bounded, like [`medium_label_command_mentions`]'s. An unbounded "rest
+    /// of the cell" window is vacuous on a 2000-character Markdown ledger row.
+    const EVENT_LOG_WINDOW: usize = 200;
+
+    /// Every mention of the event log in `text` that carries no attached
+    /// qualifier, as `(offset, context)` pairs.
+    ///
+    /// # WR-04: this is a CLASS predicate, not a verb list
+    ///
+    /// The previous implementation was two present-tense verb phrases:
+    ///
+    /// ```text
+    /// n.contains("points at the Windows Application event log")
+    ///     || n.contains("point at the Windows Application event log")
+    /// ```
+    ///
+    /// while its own doc stated the rule as the class "no ledger row asserts
+    /// that non-label layers are POINTED AT the event log". `pointed at`,
+    /// `pointing at`, `directs the operator to`, `refers … to`, `names … as
+    /// the place to look` and `see the …` all evaded it, so the gate could
+    /// relabel but never deny. This is the identical complaint round 2 raised
+    /// as WR-06 against `!contains("see the Windows Application event log")`
+    /// — and round 3 fixed that one correctly, then wrote the rejected narrow
+    /// shape into this SPEC mirror in the same commit.
+    ///
+    /// The predicate is now "any mention that is not qualified", which no
+    /// phrasing can evade: a new verb still has to explain itself.
+    fn unqualified_event_log_mentions(text: &str) -> Vec<(usize, String)> {
+        // Lowercase AND whitespace-normalise once, then work entirely in that
+        // string: positions from a lowercased copy cannot index the original
+        // safely, and the SPEC carries em-dashes and typographic quotes.
+        let n = text
+            .to_lowercase()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut out = Vec::new();
+        for (pos, _) in n.match_indices(EVENT_LOG_NEEDLE) {
+            let mut from = pos.saturating_sub(EVENT_LOG_WINDOW);
+            while from < pos && !n.is_char_boundary(from) {
+                from += 1;
+            }
+            let mut to = pos
+                .saturating_add(EVENT_LOG_NEEDLE.len())
+                .saturating_add(EVENT_LOG_WINDOW)
+                .min(n.len());
+            while to > pos && !n.is_char_boundary(to) {
+                to -= 1;
+            }
+            let ctx = &n[from..to];
+            if !EVENT_LOG_QUALIFIERS.iter().any(|q| ctx.contains(q)) {
+                out.push((pos, ctx.to_string()));
+            }
+        }
+        out
+    }
+
+    /// WR-04 detector self-test: the predicate must FIRE on every phrasing the
+    /// old two-verb needle let through, and stay SILENT on the real qualified
+    /// mentions.
+    ///
+    /// The WR-05 raw-citation gate has one of these and it is why that gate
+    /// can be trusted; this one had none, so its "perturbation" only ever
+    /// exercised the single historical phrasing the needle was written from.
+    #[test]
+    fn the_event_log_detector_fires_on_the_whole_class() {
+        for evader in [
+            "| WR-17 | every other layer points at the Windows Application event log |",
+            "| WR-17 | every other layer is pointed at the Windows Application event log |",
+            "| WR-17 | pointing the operator at the Windows Application event log |",
+            "| WR-17 | directs the operator to the Windows Application event log |",
+            "| WR-17 | refers the operator to the Windows Application event log |",
+            "| WR-17 | names the Windows Application event log as the place to look |",
+            "| WR-17 | see the Windows Application event log for layer detail |",
+            "| WR-17 | check the Windows Application Event Log for layer detail |",
+        ] {
+            assert!(
+                !unqualified_event_log_mentions(evader).is_empty(),
+                "WR-04: the detector missed a prescriptive phrasing — every one of these \
+                 evaded the two-verb needle it replaces: {evader}"
+            );
+        }
+
+        for legitimate in [
+            "| WR-15 | now name the real Windows Application event log, event id 10011 |",
+            "| WR-27 | with the Windows Application event log named ONLY as an explicit \
+             negation, because nothing is written there on the abort path |",
+            "| WR-15 | `emit_attestation_event` writes the Windows Application Event Log |",
+        ] {
+            assert!(
+                unqualified_event_log_mentions(legitimate).is_empty(),
+                "WR-04: the detector flagged a legitimately qualified mention — the downgrade \
+                 path really does write there, and an explicit negation is how the abort path \
+                 is allowed to name it: {legitimate}"
+            );
+        }
+
+        // The window must be ATTACHED. A qualifier far away in the same
+        // 2000-character ledger cell must NOT rescue the mention — that is the
+        // exact vacuity the sibling helper's first draft shipped with.
+        let far = format!(
+            "| WR-17 | points at the Windows Application event log |{}| event id 10011 |",
+            " filler".repeat(60)
+        );
+        assert!(
+            !unqualified_event_log_mentions(&far).is_empty(),
+            "WR-04: a qualifier {} characters away must not qualify the mention",
+            " filler".repeat(60).len()
+        );
+    }
+
     /// WR-02: the SPEC must also state the event-log rule the code enforces.
     ///
     /// Same class, same document, same fix pass that missed it: `main.rs` and
@@ -455,33 +591,37 @@ mod tests {
     /// log" as the resolution.
     ///
     /// The SPEC legitimately DESCRIBES the event log in other contexts (the
-    /// downgrade path really does write there), so the rule enforced here is
-    /// narrower and stated precisely: the D-15 ledger must not record it as
-    /// the abort-path destination. The predicate is "no ledger row asserts
-    /// that non-label layers are POINTED AT the event log".
+    /// downgrade path really does write there), so the rule is stated as: a
+    /// D-15 ledger row may name the event log only with an ATTACHED qualifier
+    /// establishing it as the downgrade-path destination or as an explicit
+    /// negation. See [`unqualified_event_log_mentions`] for why this is a
+    /// class predicate rather than a verb list (WR-04), and
+    /// [`the_event_log_detector_fires_on_the_whole_class`] for the detector
+    /// self-test that makes it trustworthy.
     #[test]
     fn the_spec_ledger_does_not_point_abort_path_layers_at_the_event_log() {
         const SPEC: &str = include_str!("../../../proj/SPEC-windows-fail-direction-contract.md");
 
-        let offenders: Vec<String> = SPEC
-            .lines()
-            .enumerate()
-            .filter(|(_, l)| l.starts_with('|'))
-            .filter(|(_, l)| {
-                let n = l.split_whitespace().collect::<Vec<_>>().join(" ");
-                n.contains("points at the Windows Application event log")
-                    || n.contains("point at the Windows Application event log")
-            })
-            .map(|(i, l)| format!("{}: {}", i + 1, l.trim()))
-            .collect();
+        let mut offenders: Vec<String> = Vec::new();
+        for (idx, line) in SPEC.lines().enumerate() {
+            if !line.trim_start().starts_with('|') {
+                continue;
+            }
+            for (_, ctx) in unqualified_event_log_mentions(line) {
+                offenders.push(format!("SPEC:{}: …{ctx}…", idx + 1));
+            }
+        }
 
         assert!(
             offenders.is_empty(),
-            "WR-02: the SPEC's D-15 ledger records the Windows Application event log as the \
-             abort-path destination for non-label layers. Nothing is written there when nono \
-             aborts — every `LayerAttestationFailed` construction site is a plain `return \
-             Err(..)` — and both `main.rs` and `output.rs` assert the code names it only as a \
-             negation (WR-27/WR-06). Rows:\n  {}",
+            "WR-02/WR-04: {} D-15 ledger mention(s) of the Windows Application event log carry \
+             no attached qualifier (one of {:?} within {EVENT_LOG_WINDOW} chars). Nothing is \
+             written there when nono ABORTS — every `LayerAttestationFailed` construction site \
+             is a plain `return Err(..)` — and both `main.rs` and `output.rs` assert the code \
+             names it only as a negation (WR-27/WR-06). Either qualify the mention as the \
+             downgrade-path destination, or state it as an explicit negation:\n  {}",
+            offenders.len(),
+            EVENT_LOG_QUALIFIERS,
             offenders.join("\n  ")
         );
     }
