@@ -339,6 +339,153 @@ mod tests {
         SandboxArgs::default()
     }
 
+    /// The Medium-label command classification rule (CR-06 / WR-03), stated
+    /// ONCE and applied to every mirror.
+    ///
+    /// `icacls <path> /setintegritylevel Medium` WRITES a Medium mandatory
+    /// label — verified on this host to leave `Mandatory Label\Medium
+    /// Mandatory Level:(NW)` in place, which D-02 reads back as
+    /// `SkipPreExistingLabel`, aborting identically. It can therefore never be
+    /// the remedy for a `MandatoryIntegrityLabel` attestation failure, and any
+    /// surface that names it must name it as an explicit WARNING that it does
+    /// not clear the condition.
+    ///
+    /// # Why a shared helper rather than two assertions
+    ///
+    /// WR-03 exists because the narrow needle survived in the function
+    /// directly above the one WR-06 fixed, and WR-02 because the SPEC's D-15
+    /// ledger went on prescribing the command as "the real remedy" long after
+    /// the code stopped. Those are the same rule stated in three places. It is
+    /// stated here once; `text` is whatever surface is being checked.
+    ///
+    /// Non-vacuity is the caller's job for the SPEC (where the command may
+    /// legitimately vanish) and is asserted here for the rendered remediation,
+    /// which is expected to keep warning about it.
+    fn medium_label_command_mentions(label: &str, text: &str) -> usize {
+        const MEDIUM_LABEL_CMD: &str = "/setintegritylevel Medium";
+        // The qualifier must ATTACH to the mention. An unbounded "rest of the
+        // text" window is vacuous on any long surface: the first draft of this
+        // helper accepted the SPEC's restored prescriptive text because a
+        // correction 400 characters later in the SAME ledger cell satisfied it.
+        // Caught by running the perturbation, not by reading the code.
+        const WINDOW: usize = 200;
+
+        // Whitespace-normalise so a `\`-wrapped source literal or a
+        // line-wrapped Markdown cell cannot split the needle — the exact
+        // mechanism WR-01 found silently emptying a sibling gate.
+        let normalised = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut mentions = 0usize;
+        for (pos, _) in normalised.match_indices(MEDIUM_LABEL_CMD) {
+            mentions += 1;
+            let from = pos + MEDIUM_LABEL_CMD.len();
+            // Char-boundary-safe truncation: the surfaces scanned contain
+            // em-dashes and typographic quotes.
+            let mut to = (from + WINDOW).min(normalised.len());
+            while to > from && !normalised.is_char_boundary(to) {
+                to -= 1;
+            }
+            let following = &normalised[from..to];
+            assert!(
+                following.contains("writes a Medium label") || following.contains("re-triggers"),
+                "CR-06/WR-03: {label} names `{MEDIUM_LABEL_CMD}` without an attached warning \
+                 (within {WINDOW} chars) that it does NOT clear the condition. It writes a \
+                 Medium label and re-triggers the identical abort, so it can never be the \
+                 remedy. Text: {text}"
+            );
+        }
+        mentions
+    }
+
+    /// [`medium_label_command_mentions`] plus the non-vacuity floor, for
+    /// surfaces that are expected to carry the warning.
+    fn assert_medium_label_command_is_only_ever_negated(label: &str, text: &str) {
+        let mentions = medium_label_command_mentions(label, text);
+        assert!(
+            mentions >= 1,
+            "CR-06/WR-03 non-vacuity: {label} no longer warns about \
+             `/setintegritylevel Medium` at all, so this guard now checks nothing. The \
+             operator is expected to be told explicitly that it does NOT clear the \
+             condition; restore the warning, or retire this guard deliberately. Text: {text}"
+        );
+    }
+
+    /// WR-02: the SPEC is the other mirror of the CR-06 rule, and it was the
+    /// one still prescribing the command.
+    ///
+    /// The Iteration-5 sweep for this class covered `crates/` but not `proj/`,
+    /// so the D-15 ledger's WR-17 row went on recording, in the present tense,
+    /// that `MandatoryIntegrityLabel` "gets the real remedy (`icacls <path>
+    /// /setintegritylevel Medium`)" — a command `main.rs` carries a regression
+    /// assertion against — and that every other layer "points at the Windows
+    /// Application event log", a channel both `main.rs` and `output.rs` now
+    /// assert is named only as a negation. The contract document an operator
+    /// or the next planner reads prescribed what the code proves wrong.
+    ///
+    /// This closes the class rather than the instance: it applies the SAME
+    /// helper to the SPEC that the rendered-string assertions apply to the
+    /// remediation, so the two mirrors cannot state contradictory rules again.
+    /// It deliberately does NOT assert a non-vacuity floor — the SPEC is
+    /// allowed to stop mentioning the command entirely, and requiring a
+    /// mention would pin prose that has no reason to persist.
+    #[test]
+    fn the_spec_never_prescribes_the_medium_label_command() {
+        const SPEC: &str = include_str!("../../../proj/SPEC-windows-fail-direction-contract.md");
+
+        let mut mentions = 0usize;
+        for (idx, line) in SPEC.lines().enumerate() {
+            mentions += medium_label_command_mentions(
+                &format!("SPEC-windows-fail-direction-contract.md:{}", idx + 1),
+                line,
+            );
+        }
+        // Report the count so a reader of the test output can see whether the
+        // scan found anything at all, without turning that into a floor.
+        eprintln!(
+            "WR-02: {mentions} `/setintegritylevel Medium` mention(s) in the SPEC, all \
+             qualified as non-remedial"
+        );
+    }
+
+    /// WR-02: the SPEC must also state the event-log rule the code enforces.
+    ///
+    /// Same class, same document, same fix pass that missed it: `main.rs` and
+    /// `output.rs` both assert the Windows Application event log is named only
+    /// as an explicit negation on the abort path, while the SPEC's WR-17 row
+    /// recorded "every other layer points at the Windows Application event
+    /// log" as the resolution.
+    ///
+    /// The SPEC legitimately DESCRIBES the event log in other contexts (the
+    /// downgrade path really does write there), so the rule enforced here is
+    /// narrower and stated precisely: the D-15 ledger must not record it as
+    /// the abort-path destination. The predicate is "no ledger row asserts
+    /// that non-label layers are POINTED AT the event log".
+    #[test]
+    fn the_spec_ledger_does_not_point_abort_path_layers_at_the_event_log() {
+        const SPEC: &str = include_str!("../../../proj/SPEC-windows-fail-direction-contract.md");
+
+        let offenders: Vec<String> = SPEC
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| l.starts_with('|'))
+            .filter(|(_, l)| {
+                let n = l.split_whitespace().collect::<Vec<_>>().join(" ");
+                n.contains("points at the Windows Application event log")
+                    || n.contains("point at the Windows Application event log")
+            })
+            .map(|(i, l)| format!("{}: {}", i + 1, l.trim()))
+            .collect();
+
+        assert!(
+            offenders.is_empty(),
+            "WR-02: the SPEC's D-15 ledger records the Windows Application event log as the \
+             abort-path destination for non-label layers. Nothing is written there when nono \
+             aborts — every `LayerAttestationFailed` construction site is a plain `return \
+             Err(..)` — and both `main.rs` and `output.rs` assert the code names it only as a \
+             negation (WR-27/WR-06). Rows:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
     /// Phase 117-21 WR-04 / Phase 117-29 WR-17 / Phase 117-39 CR-06:
     /// `LayerAttestationFailed` for the `MandatoryIntegrityLabel` layer must
     /// render the `Display` line AND a remediation line that names a command
@@ -367,11 +514,18 @@ mod tests {
         // icacls remains the INSPECTION command.
         assert!(lines[1].contains("icacls"));
         // CR-06: but never as the remedy — it cannot remove a label.
-        assert!(
-            !lines[1].contains("/setintegritylevel Medium`."),
-            "the Medium-label command must never be prescribed as the remedy (CR-06): {}",
-            lines[1]
-        );
+        //
+        // WR-03: this used to be `!contains("/setintegritylevel Medium`.")` —
+        // command, closing backtick AND a sentence-final period. It rejected
+        // exactly one historical sentence ending, so `` `icacls <path>
+        // /setintegritylevel Medium` to clear this ``, or any phrasing that
+        // does not end the sentence right there, evaded it entirely, while
+        // the message claimed the far wider class "must never be prescribed
+        // as the remedy". Match the CLASS — the command substring — and
+        // exclude the one legitimate mention by requiring its NEGATION, the
+        // same shape `render_error_for_operator_names_a_reachable_channel_
+        // for_non_label_layers` uses for the event log.
+        assert_medium_label_command_is_only_ever_negated("the rendered remediation", &lines[1]);
         // The remedy must name the removal mechanism.
         assert!(
             lines[1].contains("SetNamedSecurityInfoW"),

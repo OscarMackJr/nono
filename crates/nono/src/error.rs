@@ -516,12 +516,40 @@ impl NonoError {
             //   3. `crate::attestation::probe_in_job`'s null-job refusal,
             //      which is a programming error, not operator-actionable.
             //
-            // All three are UNREACHABLE in a shipped build today: (2) is
-            // compiled out of default builds, (3) requires a null job handle
-            // no production caller passes, and (1) cannot fire while both
-            // tighten inputs at the launch gate are hardcoded empty slices
-            // (WR-12). (1) becomes reachable the moment that plumbing lands,
-            // so THIS ARM MUST BE FIXED IN THE SAME CHANGE.
+            // Reachability, corrected (Iteration 6 review, WR-07 — the
+            // previous wording got case (3) backwards):
+            //
+            //   (2) is compiled out of default builds.
+            //
+            //   (3) is unreachable through NONO'S OWN BINARIES, but NOT
+            //       because "no production caller passes a null job handle".
+            //       That is a claim about the callee's input, and it is not
+            //       what makes the case unreachable. Both production callers
+            //       DISCARD the `Err` outright, so this variant could not
+            //       reach `remediation()` even if they did pass one:
+            //         - nono-cli   `exec_strategy_windows/attestation.rs`
+            //           wraps it in `classify_probe_outcome`, whose `Err(_)`
+            //           arm maps to `LayerAttestationStatus::Unconfirmed`;
+            //         - nono-agentd `agent_daemon/launch.rs` uses
+            //           `matches!(probe_in_job(process, job), Ok(true))`.
+            //       Getting this backwards matters for the co-fix below: an
+            //       implementer would look for a null-handle guard at the
+            //       call site rather than noticing the two swallow points,
+            //       and would conclude the case had become reachable when it
+            //       had not.
+            //
+            //       It IS reachable TODAY for FFI/Python/TypeScript embedders:
+            //       `crate::attestation::probe_in_job` is `pub` behind `pub
+            //       mod attestation`, and an embedder that calls it with a
+            //       null job handle gets `ClearStaleLayerResidue { layer:
+            //       "JobObjectContainment" }` — the mis-targeted remediation,
+            //       in a shipped build. "Unreachable in a shipped build" is
+            //       true only of nono's own binaries.
+            //
+            //   (1) cannot fire while both tighten inputs at the launch gate
+            //       are hardcoded empty slices (WR-12). It becomes reachable
+            //       the moment that plumbing lands, so THIS ARM MUST BE FIXED
+            //       IN THE SAME CHANGE.
             //
             // The fix needs a discriminator the library can see — a
             // `kind: LayerAttestationFailureKind` field on the variant, plus

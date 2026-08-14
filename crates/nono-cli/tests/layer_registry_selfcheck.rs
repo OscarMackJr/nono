@@ -1025,3 +1025,228 @@ fn token_arm_doc_cites_a_symbol_not_a_raw_line_range() {
          it survives line drift (WR-32)"
     );
 }
+
+/// Phase 117 review WR-04: every `OPEN` marker in the tree must have a row in
+/// the SPEC's review-fix discrepancy ledger — and that row must actually BE a
+/// row of that table.
+///
+/// # Why this exists
+///
+/// WR-10 was consciously skipped on the sole basis that the conflation was
+/// "recorded explicitly in the SPEC's ... table (D-15)". The recorded
+/// mitigation was the entire justification for not fixing a live
+/// naming/claim-precision defect in a cross-binary wire contract — and the
+/// record was not in the table it was claimed to be in: a stray blank line sat
+/// between the CR-02 row and the WR-10 row, and in GitHub-Flavored Markdown a
+/// blank line TERMINATES a table. The WR-10 row rendered as a literal
+/// paragraph of pipe characters.
+///
+/// So the parse here is deliberately GFM-faithful: rows are collected only
+/// while they are contiguous with the header + delimiter pair. A blank line
+/// anywhere in the table drops every row after it, which is exactly what a
+/// reader's Markdown renderer does, and exactly what this gate must notice.
+///
+/// # The ID-collision hazard, handled explicitly
+///
+/// Finding identifiers REPEAT across review iterations: there is a `WR-14
+/// (Iteration 5, ...)` row AND a `WR-14 (Iteration 6, ...)` row. Requiring
+/// merely "some row whose id cell starts with `WR-14`" would therefore be
+/// satisfiable by the wrong row — the exact "green for the wrong reason" shape
+/// this phase keeps producing. The matching row must ALSO be marked `OPEN`,
+/// which no closed row of an earlier iteration is.
+#[test]
+fn every_open_marker_in_code_has_a_ledger_row() {
+    // Rows of the SPEC's review-fix ledger, as raw lines, parsed the way a GFM
+    // renderer parses them: header, delimiter, then contiguous `|` lines.
+    fn ledger_rows(spec: &str) -> Vec<String> {
+        let lines: Vec<&str> = spec.lines().collect();
+        let header = lines
+            .iter()
+            .position(|l| l.trim_start().starts_with("| # | What was wrong |"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "the SPEC's review-fix ledger header was not found — the table this gate \
+                     exists to protect has been renamed or removed"
+                )
+            });
+        assert!(
+            lines
+                .get(header + 1)
+                .is_some_and(|l| l.trim_start().starts_with("|---")),
+            "the ledger header is not followed by a delimiter row, so it is not a table at all"
+        );
+        let mut rows = Vec::new();
+        for line in lines.iter().skip(header + 2) {
+            if !line.trim_start().starts_with('|') {
+                break;
+            }
+            rows.push((*line).to_string());
+        }
+        rows
+    }
+
+    // Source files that may carry an `OPEN` marker. Deliberately explicit: a
+    // glob would silently start scanning generated or vendored trees.
+    fn marker_sources() -> Vec<(&'static str, PathBuf)> {
+        vec![
+            (
+                "crates/nono/src/error.rs",
+                workspace_root().join("crates/nono/src/error.rs"),
+            ),
+            (
+                "crates/nono-cli/src/exec_strategy_windows/layer_registry.rs",
+                manifest_dir().join("src/exec_strategy_windows/layer_registry.rs"),
+            ),
+            (
+                "crates/nono-cli/src/exec_strategy_windows/launch.rs",
+                manifest_dir().join("src/exec_strategy_windows/launch.rs"),
+            ),
+            (
+                "crates/nono-cli/src/exec_strategy_windows/attestation.rs",
+                manifest_dir().join("src/exec_strategy_windows/attestation.rs"),
+            ),
+            (
+                "crates/nono-cli/src/output.rs",
+                manifest_dir().join("src/output.rs"),
+            ),
+        ]
+    }
+
+    let rows = ledger_rows(&read_spec());
+    assert!(
+        rows.len() >= 40,
+        "non-vacuity: the review-fix ledger parsed to only {} row(s). It carried 60+ before \
+         this gate was written, so a low count means the table was truncated — by a blank \
+         line, a section split, or any other renderer-visible break — and every row after the \
+         break is no longer part of the table a reader sees.",
+        rows.len()
+    );
+
+    // Discovery: find every `XX-NN OPEN` marker rather than naming the two
+    // that exist today, so a third marker added later is covered without this
+    // test being touched.
+    let mut markers: Vec<(String, String)> = Vec::new();
+    for (label, path) in marker_sources() {
+        let src = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+        for (n, line) in src.lines().enumerate() {
+            let Some(pos) = line.find(" OPEN") else {
+                continue;
+            };
+            // Walk back over the identifier immediately preceding ` OPEN`.
+            let head = &line[..pos];
+            let mut id: Vec<char> = head
+                .chars()
+                .rev()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+                .collect();
+            id.reverse();
+            let id: String = id.into_iter().collect();
+            // Shape: two uppercase letters, a dash, then digits (CR-01, WR-14).
+            let looks_like_finding_id = id.len() >= 4
+                && id.chars().take(2).all(|c| c.is_ascii_uppercase())
+                && id.chars().nth(2) == Some('-')
+                && id[3..].chars().all(|c| c.is_ascii_digit());
+            if looks_like_finding_id {
+                markers.push((id, format!("{label}:{}", n + 1)));
+            }
+        }
+    }
+
+    assert!(
+        !markers.is_empty(),
+        "non-vacuity: no `XX-NN OPEN` marker was found in any scanned source. Either every \
+         deferred finding has been closed (delete this gate deliberately if so) or the marker \
+         convention changed and this scan is now blind."
+    );
+
+    let mut missing = Vec::new();
+    for (id, site) in &markers {
+        let prefix = format!("| {id} ");
+        let matched = rows
+            .iter()
+            .any(|r| r.starts_with(&prefix) && r.contains("OPEN"));
+        if !matched {
+            missing.push(format!("{id} (marked OPEN at {site})"));
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "WR-04: {} finding(s) are marked OPEN in code but have no OPEN row in the SPEC's \
+         review-fix discrepancy ledger. A deferral whose entire justification is that it is \
+         recorded in the SPEC must actually be recorded there, as a row of that table:\n  {}\n\
+         (Ledger rows parsed: {}.)",
+        missing.len(),
+        missing.join("\n  "),
+        rows.len()
+    );
+}
+
+/// Phase 117 review WR-07: the `WR-14 OPEN` record must state the REAL reason
+/// `probe_in_job`'s failure is unreachable through nono's own binaries.
+///
+/// The block previously said case (3) "requires a null job handle no
+/// production caller passes". That is a claim about the callee's INPUT, and it
+/// is not what makes the case unreachable: both production callers DISCARD the
+/// `Err`, so the variant could not reach `remediation()` even with a null
+/// handle. An implementer reading the old wording would hunt for a null-handle
+/// guard at the call site and conclude the case had become reachable when it
+/// had not.
+///
+/// This pins both halves — the corrected record, and the two swallow sites the
+/// record depends on. If either call site stops discarding, the record becomes
+/// false and this fails, which is the whole point: the defect class this phase
+/// keeps re-producing is a record that outlives the code it describes.
+#[test]
+fn the_wr14_open_record_matches_the_actual_swallow_sites() {
+    let error_rs = std::fs::read_to_string(workspace_root().join("crates/nono/src/error.rs"))
+        .expect("read crates/nono/src/error.rs");
+
+    for needle in [
+        "classify_probe_outcome",
+        "agent_daemon/launch.rs",
+        "Ok(true)",
+        "FFI",
+    ] {
+        assert!(
+            error_rs.contains(needle),
+            "WR-07: the `WR-14 OPEN` record in crates/nono/src/error.rs no longer names \
+             {needle:?}. The record must state that BOTH production callers discard the Err \
+             (that is what makes the case unreachable through nono's own binaries), and that \
+             the case IS reachable for FFI/embedder callers today."
+        );
+    }
+    assert!(
+        !error_rs.contains("requires a null job handle"),
+        "WR-07: the incorrect reason (a null job handle no production caller passes) is back \
+         in the WR-14 OPEN record. Both production callers swallow the Err, so the job handle \
+         is not what makes the case unreachable."
+    );
+
+    // The two swallow sites the record depends on, asserted against the real
+    // source rather than trusted.
+    let cli_attestation =
+        std::fs::read_to_string(manifest_dir().join("src/exec_strategy_windows/attestation.rs"))
+            .expect("read exec_strategy_windows/attestation.rs");
+    assert!(
+        cli_attestation.contains("classify_probe_outcome(probe_in_job("),
+        "WR-07: nono-cli no longer wraps `probe_in_job` in `classify_probe_outcome`, so the \
+         WR-14 OPEN record's unreachability reasoning no longer describes this call site"
+    );
+    assert!(
+        cli_attestation.contains("Err(_) => LayerAttestationStatus::Unconfirmed"),
+        "WR-07: `classify_probe_outcome` no longer discards the Err — `probe_in_job`'s \
+         LayerAttestationFailed can now reach `remediation()` through nono-cli, and the \
+         WR-14 OPEN record must be updated in the same change"
+    );
+
+    let daemon = std::fs::read_to_string(manifest_dir().join("src/agent_daemon/launch.rs"))
+        .expect("read agent_daemon/launch.rs");
+    assert!(
+        daemon.contains("matches!(probe_in_job(process, job), Ok(true))"),
+        "WR-07: nono-agentd no longer discards `probe_in_job`'s Err via matches!(.., \
+         Ok(true)), so the WR-14 OPEN record's unreachability reasoning no longer describes \
+         this call site"
+    );
+}
