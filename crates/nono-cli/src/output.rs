@@ -1898,7 +1898,7 @@ mod tests {
 
         eprintln!(
             "D-24/Item-2 measured downgrade-banner dedup marker cost: cold (first occurrence, \
-             create_dir_all + write) = {cold_elapsed:?}; warm (repeat, path.exists() stat only) \
+             create_dir_all + write) = {cold_elapsed:?}; warm (repeat, read + digest compare) \
              = {warm_elapsed:?}"
         );
 
