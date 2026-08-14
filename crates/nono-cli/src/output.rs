@@ -1919,36 +1919,127 @@ mod tests {
         ("main.rs", include_str!("main.rs")),
     ];
 
+    /// Length in chars of a complete Rust char literal starting at `i`, or
+    /// `None` if this `'` opens something else (a lifetime, a stray quote).
+    ///
+    /// WR-06: the lookahead matters. Blindly treating `'` as a char-literal
+    /// opener would consume from a lifetime (`&'a str`) to the next `'`
+    /// anywhere on the line, silently swallowing any string literal in
+    /// between — trading one false negative for a worse one.
+    fn char_literal_len(chars: &[char], i: usize) -> Option<usize> {
+        if chars.get(i) != Some(&'\'') {
+            return None;
+        }
+        let mut j = i + 1;
+        if chars.get(j) == Some(&'\\') {
+            j += 1;
+            if chars.get(j) == Some(&'u') {
+                // '\u{XXXX}' — scan to the closing quote.
+                while j < chars.len() && chars[j] != '\'' {
+                    j += 1;
+                }
+            } else {
+                j += 1;
+            }
+        } else {
+            j += 1;
+        }
+        (chars.get(j) == Some(&'\'')).then(|| j - i + 1)
+    }
+
     /// Extract the *contents* of every double-quoted string literal on `line`.
     ///
-    /// Deliberately naive (no raw-string or char-literal handling): the files
-    /// it is pointed at contain neither on the lines that matter, and a
-    /// false positive here fails the build loudly rather than silently
-    /// passing — the correct direction for a gate whose whole purpose is to
-    /// stop a silent corruption.
+    /// No raw-string handling: the files it is pointed at contain none on the
+    /// lines that matter, and a false positive there fails the build loudly
+    /// rather than silently passing — the correct direction for a gate whose
+    /// whole purpose is to stop a silent corruption.
+    ///
+    /// # WR-06: char literals ARE handled, because the doc's excuse was false
+    ///
+    /// The previous version documented itself as having no char-literal
+    /// handling on the grounds that the scanned files contain none. `output.rs`
+    /// is one of the scanned files and contains `else if c == '"' {` twice —
+    /// inside this very function. On those lines the extractor opened a string
+    /// at the char literal's quote and never closed it, so the entire rest of
+    /// the line was DISCARDED rather than scanned. That is a false NEGATIVE
+    /// (silently scanning less), the opposite of the direction the doc claimed,
+    /// and it is precisely what the `checked` floor exists to catch and is far
+    /// too coarse to catch — 1417 literals scanned made a handful of dropped
+    /// lines invisible. Hence also the per-file floors at the call site.
     fn string_literals(line: &str) -> Vec<String> {
+        let chars: Vec<char> = line.chars().collect();
         let mut out = Vec::new();
-        let mut cur = String::new();
-        let mut in_string = false;
-        let mut escaped = false;
-        for c in line.chars() {
-            if in_string {
-                if escaped {
-                    escaped = false;
-                    cur.push(c);
-                } else if c == '\\' {
-                    escaped = true;
-                } else if c == '"' {
-                    in_string = false;
-                    out.push(std::mem::take(&mut cur));
-                } else {
-                    cur.push(c);
+        let mut i = 0usize;
+        while i < chars.len() {
+            if chars[i] == '\'' {
+                if let Some(len) = char_literal_len(&chars, i) {
+                    i += len;
+                    continue;
                 }
-            } else if c == '"' {
-                in_string = true;
+                i += 1;
+                continue;
+            }
+            if chars[i] != '"' {
+                i += 1;
+                continue;
+            }
+            i += 1;
+            let mut cur = String::new();
+            let mut closed = false;
+            while i < chars.len() {
+                if chars[i] == '\\' && i + 1 < chars.len() {
+                    // Keep the escaped character, drop the backslash — the
+                    // pre-WR-06 behaviour, preserved deliberately.
+                    cur.push(chars[i + 1]);
+                    i += 2;
+                    continue;
+                }
+                if chars[i] == '"' {
+                    i += 1;
+                    closed = true;
+                    break;
+                }
+                cur.push(chars[i]);
+                i += 1;
+            }
+            // Only a CLOSED literal is a literal. A `\`-continued literal ends
+            // the line unterminated; scanning its partial content would change
+            // what this gate covers, which is a separate decision from WR-06.
+            if closed {
+                out.push(cur);
             }
         }
         out
+    }
+
+    /// WR-06 self-test: the extractor must not lose a string literal that
+    /// shares a line with a char literal.
+    ///
+    /// This is the exact shape that was live in `output.rs` — `else if c ==
+    /// '"' {` — plus the lifetime case, which a naive char-literal fix breaks
+    /// in the same (silent, scan-less) direction.
+    #[test]
+    fn string_literal_extraction_survives_char_literals_and_lifetimes() {
+        assert_eq!(
+            string_literals(r#"} else if c == '"' { let s = "kept"; }"#),
+            vec!["kept".to_string()],
+            "a `'\"'` char literal must not open a string and swallow the rest of the line"
+        );
+        assert_eq!(
+            string_literals(r#"fn f<'a>(x: &'a str) { let s = "also kept"; }"#),
+            vec!["also kept".to_string()],
+            "a lifetime must not be treated as an unterminated char literal"
+        );
+        assert_eq!(
+            string_literals(r#"let c = '\''; let s = "still kept";"#),
+            vec!["still kept".to_string()],
+            "an escaped-quote char literal must be consumed whole"
+        );
+        assert_eq!(
+            string_literals(r#"let s = "a\"b";"#),
+            vec!["a\"b".to_string()],
+            "an escaped quote inside a string must not close it"
+        );
     }
 
     /// WR-01 class gate: no string literal on the D-27 downgrade surface may
@@ -1970,8 +2061,10 @@ mod tests {
     #[test]
     fn no_downgrade_surface_literal_has_a_collapsed_continuation() {
         let mut checked = 0usize;
+        let mut per_file: Vec<(&str, usize)> = Vec::new();
         let mut offenders: Vec<String> = Vec::new();
         for (label, src) in DOWNGRADE_SURFACE {
+            let before = checked;
             for (idx, line) in src.lines().enumerate() {
                 if line.trim_start().starts_with("//") {
                     continue;
@@ -2000,6 +2093,7 @@ mod tests {
                     }
                 }
             }
+            per_file.push((label, checked - before));
         }
         assert!(
             offenders.is_empty(),
@@ -2014,6 +2108,19 @@ mod tests {
             "WR-01: only {checked} string literal(s) scanned — the extractor went vacuous \
              (a gate that scans nothing is the defect this phase exists to eliminate)"
         );
+        // WR-06: a global floor of 500 is far too coarse to notice one file
+        // going quiet — the char-literal bug dropped whole lines inside a
+        // 1417-literal scan and nothing moved. Each file on the surface must
+        // contribute its own non-trivial share.
+        const PER_FILE_FLOOR: usize = 25;
+        for (label, n) in &per_file {
+            assert!(
+                *n >= PER_FILE_FLOOR,
+                "WR-06: only {n} string literal(s) scanned in {label} (floor \
+                 {PER_FILE_FLOOR}); the extractor has gone quiet for this file. Per-file \
+                 counts: {per_file:?}"
+            );
+        }
     }
 
     /// WR-26 class gate (Phase 117-44): no operator-facing string may name a
