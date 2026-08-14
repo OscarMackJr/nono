@@ -1,9 +1,9 @@
 ---
 phase: 117-fail-direction-contract-startup-self-attestation
-reviewed: 2026-08-14T09:40:00Z
+reviewed: 2026-08-14T18:20:00Z
 depth: standard
-round: 2
-files_reviewed: 36
+round: 4
+files_reviewed: 37
 files_reviewed_list:
   - .github/workflows/ci.yml
   - bindings/c/include/nono.h
@@ -11,6 +11,7 @@ files_reviewed_list:
   - bindings/c/src/types.rs
   - crates/nono-cli/Cargo.toml
   - crates/nono-cli/src/agent_daemon/launch.rs
+  - crates/nono-cli/src/cfg_test_regions.rs
   - crates/nono-cli/src/cli.rs
   - crates/nono-cli/src/cli_bootstrap.rs
   - crates/nono-cli/src/command_runtime.rs
@@ -42,493 +43,475 @@ files_reviewed_list:
   - crates/nono/src/sandbox/windows.rs
   - proj/SPEC-windows-fail-direction-contract.md
 findings:
-  critical: 1
-  warning: 7
+  critical: 0
+  warning: 8
   info: 0
   total: 8
 status: issues_found
 ---
 
-# Phase 117: Code Review Report — Round 2 (post-fix re-review)
+# Phase 117: Code Review Report — Round 4
 
-**Reviewed:** 2026-08-14T09:40:00Z
-**Depth:** standard
-**Files Reviewed:** 36
+**Reviewed:** 2026-08-14T18:20:00Z
+**Depth:** standard (round 4 re-review of `e6438f96..860d4772`, in the context of `f9ee603^..HEAD`)
+**Files Reviewed:** 37
 **Status:** issues_found
 
 ## Summary
 
-I independently re-derived every claimed fix rather than reading the fix report's
-assertions. Most of them hold up, and several hold up *better* than the report claims:
+**Verdict on the governing question: round 3 half-broke the pattern.** The runtime fix (CR-01)
+is genuinely correct in both directions — I re-derived it independently and could not make it
+fail. But the *guard* half of round 3 reproduced the pattern twice more, and I can demonstrate
+both mechanically rather than argue them:
 
-- **CR-03 (registry discard)** — verified. `read_required_layers` carries the parsed names;
-  `is_unconfigured()` (`machine_policy.rs:331`) and `validate()` (`:358`) both provably ignore
-  the field, so the runtime change is behaviour-neutral today and the gap is now at the single
-  consumer, as claimed.
-- **WR-08 (probe-kind-generic evidence)** — verified fail-closed. `match entry.id { WfpEgressFilters => …, _ => false }`
-  strictly narrows what can confirm; `exactly_one_row_is_confirmed_by_enforcing_component_report`
-  is an equality assertion, so it cannot go vacuous.
-- **CR-02 (daemon drift gate)** — verified non-vacuous by re-running the gate's own logic against
-  `agent_daemon/launch.rs`: it skips 1722 lines in 3 `#[cfg(test)]` module bodies and finds each of
-  the 5 daemon-expected rows at exactly one production site (`:1411,:1422,:1431,:1446,:1466`).
-  Renaming any one of them fails the gate. `checked >= 5` matches the registry's real count of 5
-  exactly (I enumerated the `EntryPath::Daemon` cells: 6 rows carry one, `MinifilterAbsence` is
-  excluded by `ProbeKind::NotApplicable`).
-- **WR-01 (collapsed literals)** — verified. Re-ran the gate's predicate: 1417 literals scanned
-  (floor 500), 0 offenders. A workspace-wide sweep for the same shape returns only legitimately
-  column-aligned fixtures.
-- **WR-02 (FFI)** — verified. `nono.h`'s new block is byte-consistent with cbindgen's style for
-  every other doc-commented variant in the file (`/**` block, same indent, appended after
-  `CANCELLED = 14`, `OTHER = 99` unmoved), so it is generated, not hand-edited. `map_error`
-  (`bindings/c/src/lib.rs:211`) already had an explicit `LayerAttestationFailed` arm, so no second
-  FFI gap.
-- **7a8fcd36 (citation-scan narrowing)** — verified *no* real coverage was lost: the whole-file scan
-  found 26 symbol citations, the region-scoped scan finds 23, and the 3 dropped are exactly the
-  three false positives (`.rs::`, `file.rs::Symbol`, and the WR-08 assertion prose).
+1. The new shared classifier `cfg_test_regions::scan_production` implements a rule strictly
+   narrower than the class it documents, and **the one consumer that did not receive a
+   correctness check can be driven green by a test assertion with a single blank line** — the
+   exact defect that consumer's own comment says it exists to close.
+2. Two of the round's new SPEC/record gates match a needle narrower than the class their own
+   doc-comments state, so they can relabel but never deny.
 
-The defects are concentrated in two places:
+No BLOCKER. I found no runtime correctness or security defect: no `.unwrap()`/`.expect()` in any
+production half of any changed file, no string-`starts_with` path handling, checked arithmetic in
+the new helper, and D-28's fail-secure `log_target_is_private()` gating intact.
 
-1. **The WR-04 fix introduced a new D-28 violation.** Making the dedup marker
-   content-authoritative meant writing the un-redacted, comma-joined `LayerId` set to a plain
-   file under `%LOCALAPPDATA%\nono\sessions\…` — a path the confined child can read on three of
-   the four token arms. The fix report reasoned only about *visibility to the operator* ("fail
-   direction is toward MORE visibility") and did not consider *disclosure to the confined
-   process*, which is the property D-28 exists to protect and which WR-16 hardened with
-   fail-secure path validation one phase earlier.
+### What I verified, and how
 
-2. **The class sweeps stopped at code and did not reach the contract document or the sibling
-   assertion two lines away.** WR-03 claims "every remaining `/setintegritylevel Medium` mention
-   in the tree is corrective or negated" — the SPEC's own D-15 ledger still prescribes it as "the
-   real remedy". WR-06 claims "both mirrors now assert the CLASS" — the sibling CR-06 assertion in
-   the *same test function's module* is still the exact narrow-needle shape WR-06 was raised to
-   eliminate. And the CR-01 `production()` helper still fails to exclude 6 of `launch.rs`'s test
-   modules for a reason its own doc says it fixed.
+Everything below was re-derived by executing the logic against the real files, not by reading the
+fix report's claims.
 
-I also confirmed, by replicating the gate logic line-for-line, that the CR-01 gate is **not**
-vacuous today (`hits` = exactly 1 in `output.rs` + 1 in `launch.rs` = the floor of 2;
-`main_mentions` = exactly 1). Its residual defects are structural, not live.
+| Claim under test | Method | Result |
+|---|---|---|
+| CR-01: plaintext layer set gone from disk | Read the writer (`output.rs:218-240`); only `attestation_downgrade_marker_content(dedup_key)` is written. Filename is a `DefaultHasher` digest + `.v2`. | **Holds.** No `LayerId` text reaches the marker on any path. |
+| CR-01: announce/suppress fails toward ANNOUNCE | Traced every abnormal state through `marker_says_already_announced` (`output.rs:280-285`). Absent / unreadable / permission-denied / directory-where-file-expected / non-UTF-8 → `read_to_string` `Err` → `false`. Zero-byte / truncated / mismatched / v1-plaintext → content compare fails → `false`. `session_id` rejected or `sessions_dir()` unavailable → `None` → no marker consulted. | **Holds in all 8 states.** |
+| CR-01: domain separation real | `digest(domain, key)` hashes `domain` then `key`; `impl Hash for str` is prefix-free (`write_str` appends `0xff`), and `DefaultHasher::new()` is fixed-key, so `hi`/`lo` are genuinely distinct. | **Holds.** (Strength claim overstated — see WR-06.) |
+| WR-01 perturbation ("41 `#[test]` leak, first at 3323") | Reimplemented `scan_production` exactly and ran both the fixed and the pre-fix variant over the real `launch.rs`. | **Reproduced exactly**: fixed → 12 regions, 0 leaked `#[test]`; naive → 6 regions, 41 leaked, first at line 3323. |
+| Classifier correctness on all four scanned files | Ran the replica over `output.rs`, `main.rs`, `exec_strategy_windows/launch.rs`, `agent_daemon/launch.rs`. | **Correct today.** 2/1/12/3 regions, 0 leaked `#[test]` in every file; both bare `#[cfg(test)] mod foo;` declarations (`main.rs:155`, `:162`) correctly open no region. |
+| WR-26 class gate non-vacuity, per file | Replicated `production()` + continuation join + 12-entry arm walk-back. | **Non-vacuous and correct**: `output.rs:165` hit, arm `EventLog => {`; `launch.rs:1488` hit, arm `EventLog => {`; `main.rs:310` mention preceded by `(No `. hits = 1/1, floor 1/1. |
+| WR-06 literal extractor + floors | Replicated `char_literal_len` + `string_literals` + the collapsed-run predicate over all five surface files. | **Passes, non-vacuous**: 1457 literals, 0 offenders. Per-file 421/757/66/26/187 (floor 25 — see WR-08). Hand-traced the report's decisive perturbation; the naive extractor does swallow the probe. |
+| WR-05 citation conversion | Replicated both new gates. | **0 raw `file.rs:<line>` citations remain** on the registry surface; 38 symbol citations extracted (floor 20), 28 distinct — I resolved every one of the 28 by grepping for the definition. All 28 resolve. |
+| WR-04 ledger gate | Parsed the SPEC the way the gate does. | **Correct.** Header at `:248`, delimiter `:249`, 52 contiguous rows to `:301`, no blank line inside. Exactly 2 `XX-NN OPEN` markers exist tree-wide (`error.rs:506`, `layer_registry.rs:925`); both have OPEN rows. |
+| WR-03 medium-label helper | Replicated `medium_label_command_mentions` over the SPEC and the rendered remediation. | **Passes**: 1 SPEC mention (`:294`), qualified within 200 chars; rendered remediation qualified immediately. |
+| Round-1/2 fixes not regressed | Re-checked WR-02 (FFI `LayerAttestationFailed = 15` in `types.rs`/`nono.h`/`lib.rs:211`), WR-08 (`classify_row` keyed by `LayerId`, `_ => false`), WR-11 (reserved device names), CR-03 (RF-13 row now matches `machine_policy`), WR-16 (`log_target_is_private` fail-secure, all 6 `capability.rs` citations still resolve). | **All intact.** |
+| Standing rules | Ran the classifier over 19 changed source files and grepped the *production* half only. | **0** `.unwrap()` / `.expect()` / `unwrap_or_else(\|\| panic` in production code. |
 
-Per the review brief I did not re-litigate CR-02's operator-wiring decision, WR-12, or WR-14's
-substance. WR-14's *recorded rationale* is wrong on one point and is reported below as WR-07.
-
-## Critical Issues
-
-### CR-01: WR-04's fix persists un-redacted downgraded `LayerId` names to a path the confined child can read (D-28 violation)
-
-**File:** `crates/nono-cli/src/output.rs:187-212` (writer), `:241-244` (reader), with
-`crates/nono/src/state_paths.rs:89` and `:60-66`
-
-**Issue:** Before the fix the dedup marker was a **zero-byte** file whose *name* was a 64-bit
-`DefaultHasher` digest of the downgraded-layer set. The fix now writes the key verbatim:
-
-```rust
-f.write_all(dedup_key.as_bytes())          // output.rs:199
-```
-
-`dedup_key` is the sorted, comma-joined `Debug`-format `LayerId` list built at
-`launch.rs:1598-1602`. The destination is
-`%LOCALAPPDATA%\nono\sessions\<session_id>\attestation-downgrade\<hash>` — an ordinary user file
-created with `OpenOptions::new().write(true).create_new(true)`, with no DACL hardening and no
-mandatory label.
-
-D-28 is a locked decision that this codebase enforces aggressively everywhere else:
-
-- `launch.rs:1605-1640` gates all three `ProceedDowngraded` emission sites on
-  `log_target_is_private()` so layer names never reach a channel the child shares.
-- `cli_bootstrap.rs`'s `log_target_is_private()` was hardened in WR-16 to canonicalize the
-  `--log-file` path and component-wise `Path::starts_with`-check it against this launch's own
-  granted `CapabilitySet` paths, failing secure on any error — specifically so a log file inside
-  the granted workspace cannot leak the names.
-- `downgrade_detail_pointer`'s `Stderr` arm (`launch.rs:1496-1502`) exists solely to say
-  "layer names are withheld".
-- `attestation_downgrade_event.rs:84,108` and `output.rs:109` all repeat the rule.
-- The SPEC even carries a standing manual-verification item (`etw-applog-child-readability`)
-  because nobody has proven the Application event log is *not* child-readable.
-
-The marker file is subject to **none** of that. Reachability from the child:
-
-| Token arm | Can the child read `%LOCALAPPDATA%\nono\sessions\…`? |
-|---|---|
-| `Null` | Yes — same user token, ordinary DACL |
-| `WriteRestricted` | Yes — `WRITE_RESTRICTED` applies restricting SIDs to **write** access checks only |
-| `LowIlPrimary` / `BrokerLaunchNoPty` (Low-IL) | Yes — MIC's default policy is `NO_WRITE_UP`; reads up are permitted unless `NO_READ_UP` is set, and nothing labels the sessions tree |
-| AppContainer grandchild | No — package SID not granted there |
-
-So on the `Stderr` and `None` detail channels — the two cases where the code deliberately
-withholds or cannot record the names anywhere else — the marker file becomes the *only* durable,
-plaintext record of exactly which confinement layers failed to confirm, sitting where the
-untrusted process can read it. That is precisely the reconnaissance signal D-28 was written to
-deny, and it is a regression: the pre-fix zero-byte marker leaked nothing beyond an enumerable
-64-bit hash.
-
-The fix report's own risk note for WR-04 ("Fail direction is toward MORE visibility") reasons only
-about the operator-facing direction and never evaluates the disclosure direction.
-
-**Fix:** Do not store the plaintext key. Keep the marker content-authoritative without
-disclosing the set — e.g. store a keyed digest whose key is not derivable by the child, or store a
-value that only distinguishes collisions without naming layers:
-
-```rust
-// output.rs — writer
-use std::hash::{DefaultHasher, Hash, Hasher};
-// A second, independent digest under a per-session random salt held only in
-// the supervisor's session state. Distinguishes a genuine repeat from a
-// 64-bit filename collision, without naming any LayerId on a channel the
-// confined child can read (D-28).
-let mut h = DefaultHasher::new();
-session_secret.hash(&mut h);      // supervisor-only, never granted to the child
-dedup_key.hash(&mut h);
-f.write_all(format!("{:016x}", h.finish()).as_bytes())?;
-```
-
-and mirror it in `marker_says_already_announced`. If a per-session secret is unwanted, revert to
-the zero-byte marker and accept the collision case (announce-on-collision can instead be obtained
-by including the *length* of the layer set in the filename, which discloses nothing).
-
-Either way, add a D-28 regression test in the same shape as
-`launch.rs:4005`'s discovery-based withholding scan: assert that no file written under
-`sessions_dir()` on the downgrade path contains any `LayerId`'s `{id:?}` text.
-
-Also update `print_attestation_downgrade_banner`'s doc (`output.rs:75-96`), which currently says
-`dedup_key` is "an opaque `&str` this function never parses or displays, only hashes" — after this
-fix the function *does* persist it verbatim, so the doc is false in the same edit that made it so.
+Per the brief I did not re-litigate CR-02's daemon-wiring operator decision or WR-12's fleet-control
+plumbing. I checked both recorded rationales against the code: RF-13's row now correctly says the
+reader carries the value into `RequiredLayersPolicy.required` (matching CR-03), and the
+`WR-10 OPEN` / `WR-14 OPEN` markers both exist with matching SPEC rows. Those records are correct.
 
 ## Warnings
 
-### WR-01: The CR-01 gate still scans 1773 lines of `launch.rs`'s test modules as production, and its doc asserts two guarantees the code does not provide
+### WR-01: `cfg_test_regions`'s rule is narrower than the class it documents — a blank line or a plain `//` comment un-skips an entire test module
 
-**File:** `crates/nono-cli/src/output.rs:1856-1955` (`production`), `:1995-2001` (the `hits` floor)
+**File:** `crates/nono-cli/src/cfg_test_regions.rs:101-130` (and the rule stated at `:27-40`)
 
-**Issue:** The fix report states that `production()` "now skips cfg-test-gated inline modules by
-brace region, which has neither failure mode." I re-ran the helper's exact logic against the three
-scanned files. It does not:
+**Issue:** The pending-attribute window admits exactly three intervening shapes:
 
-```
-output.rs : production entries 1114 / 2039, skipped regions [(1372,1507), (1510,2038)]   OK
-launch.rs : production entries 3632 / 5889, skipped regions [(2741,2769),(2772,2903),
-            (2906,3017),(3020,3123),(3126,3283),(5799,5888)]
-main.rs   : production entries  189 /  889, skipped regions [(316,888)]                  OK
-```
-
-Six of `launch.rs`'s twelve test modules are **not** skipped — `job_hardening_tests` (`:3289`),
-`attestation_gate_tests` (`:3377`), `detached_stdio_tests` (`:4574`), `broker_dispatch_tests`
-(`:4673`), `env_filter_tests` (`:5281`), `write_deny_low_il_broker_no_pty_tests` (`:5544`) —
-because each carries `#[allow(clippy::unwrap_used)]` between the `#[cfg(all(test, …))]` attribute
-and the `mod` line, and the loop clears `pending_test_attr` on any intervening line
-(`output.rs:1913-1929`). **1773 production entries** come from inside those modules. The daemon
-gate written in the same fix pass (`layer_registry.rs:1428-1432`) *does* handle this
-(`if t.starts_with("#[") || t.starts_with("///") { continue; }`) — the two mirrors of the same
-helper disagree.
-
-Two further problems in the same block:
-
-1. **The doc states an assertion that does not exist.** `output.rs:1859-1860`: "The marker is now a
-   top-level `#[cfg(test)]` line, **which is asserted to EXIST in every scanned file**." There is
-   no such assertion. `:1900-1901`: "**The caller asserts non-vacuity per file**; that is what
-   caught the truncation above, and it is the only thing that can." The caller asserts
-   `hits >= 2` — a **global sum across two files** (`:1957`, `:1995`). Today each file contributes
-   exactly 1, so the floor is tight; but nothing prevents `launch.rs` going to 0 while `output.rs`
-   drifts to 2, and the doc tells the next maintainer that case is covered. This is the same
-   "the record misstates the mechanism" shape that made the original CR-01 vacuous.
-2. **`is_cfg_test_attr` (`:1881`) would classify `#[cfg(not(test))]` as a test gate** (it matches
-   the substring `test)`), so a `#[cfg(not(test))] mod foo {` — a *production* module — would be
-   silently skipped in its entirety. No such attribute exists in the three scanned files today, so
-   this is latent, not live.
-
-Secondary: the arm walk-back (`:1969-1977`) searches **raw** lines including comments, so a
-comment naming `DowngradeDetailChannel::EventLog` within 12 lines above a violating string would
-satisfy the gate.
-
-**Fix:**
 ```rust
-// output.rs — align with layer_registry.rs's daemon gate, and tighten the attr test
-fn is_cfg_test_attr(t: &str) -> bool {
-    t.starts_with("#[cfg(") && !t.contains("not(test")
-        && (t.contains("test)") || t.contains("test,"))
-}
-// …inside the loop, before clearing the pending flag:
-if pending_test_attr && (t.starts_with("#[") || t.starts_with("///")) {
+if t.starts_with("#[") || t.starts_with("///") || t.starts_with("//!") {
+```
+
+Any other line clears `pending_test_attr`, and the following `mod foo {` then opens no region —
+so the whole module body is classified as production. Three shapes that Rust and rustfmt both
+permit fall outside that window:
+
+1. **A blank line** between `#[cfg(test)]` and `mod`.
+2. **A plain `//` comment** (not `///`, not `//!`) between them.
+3. **A multi-line `cfg` attribute** — `#[cfg(all(` on its own line fails `is_cfg_test_attr`
+   entirely, so `pending_test_attr` is never even set.
+
+This is not hypothetical styling. Shape (2) already exists in this workspace, written in this
+codebase's own idiom:
+
+```rust
+// crates/nono-proxy/src/credential.rs:596
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+// The env-guard below mutates process env via set_var/remove_var with a symmetric
+// Drop restore (the CLAUDE.md-endorsed save/restore test pattern); the
+// disallowed_methods ban targets non-test misuse, so scope an allow to the tests.
+#[allow(clippy::disallowed_methods)]
+mod tests {
+```
+
+Measured impact when the shape lands on a scanned file — one blank line inserted before
+`agent_daemon/launch.rs`'s `mod attestation_gate_tests {`:
+
+```
+BASELINE           regions=3  skipped=1728  production sites: DaclAncestorTraverse [1466]
+BLANKLINE-PERTURB  regions=2  skipped=1341  production sites: DaclAncestorTraverse [1466, 2225]
+```
+
+387 lines of test code cross into the production half. This is WR-01's own failure mode reopened
+by a different intervening token, in the module that was created specifically to make it
+impossible. The module's unit tests cover the `#[allow(...)]` case, the `not(test)` case, the
+bare-declaration case and the nesting case — none of the three above.
+
+The `#[test]`-leak assertion in `output.rs` catches this for its three files. `layer_registry.rs`'s
+gate does not (WR-02, below), and any future third consumer inherits the same gap.
+
+**Fix:** Widen the window to the class ("anything that is not the gated item"), and make the
+attribute test see continuation lines:
+
+```rust
+// cfg_test_regions.rs — inside the pending window
+if t.is_empty() || t.starts_with("#[") || t.starts_with("//") || t.starts_with("*/") {
     idx += 1;
-    continue;                       // attributes/docs may sit between cfg and item
+    continue;
 }
 ```
-and replace the global floor with a per-file one so the doc becomes true:
-```rust
-let mut per_file: Vec<(&str, usize)> = Vec::new();
-// …push (label, hits_in_this_file) per iteration…
-for (label, n) in &per_file {
-    assert!(*n >= 1, "CR-01: the WR-26 class gate matched {n} site(s) in {label}; \
-        each scanned file must contribute at least one known EventLog-arm site, or the \
-        needle has drifted out of that file's production text");
-}
-```
-Additionally assert that each scanned file actually contained at least one skipped test region,
-so a marker change cannot silently turn the "production half only" claim into a whole-file scan.
+
+and treat an unterminated `#[cfg(` line as an attribute continuation (accumulate until the
+bracket balances) before classifying. Add all three shapes to the module's unit tests, each with
+the `nono-proxy/src/credential.rs:596` shape as the fixture for case (2) so the test cites a real
+occurrence rather than a synthetic one.
 
 ---
 
-### WR-02: The SPEC's D-15 ledger still prescribes the remedy WR-03 removed from the code, and still names the channel WR-27 forbade
+### WR-02: the daemon gate's non-vacuity check is monotone in the wrong direction, so a partial split leaves it green — provably
 
-**File:** `proj/SPEC-windows-fail-direction-contract.md:294` (WR-17 row); secondary `:262` (RF-13 row)
+**File:** `crates/nono-cli/src/exec_strategy_windows/layer_registry.rs:1449-1458`
 
-**Issue:** WR-03's fix report claims: "Swept the class: every remaining `/setintegritylevel
-Medium` mention in the tree is corrective or negated, none prescriptive." The sweep covered
-`crates/` but not `proj/`. The SPEC's WR-17 ledger row states, in the present tense, as the
-recorded resolution:
-
-> `render_error_for_operator` now branches on the failed layer name: `MandatoryIntegrityLabel`
-> gets the real remedy (`icacls <path> /setintegritylevel Medium`); every other layer points at
-> the Windows Application event log instead of the always-wrong check-only command.
-
-Both halves are now false **and** both are the exact operator-harming guidance this phase later
-eliminated:
-
-- `icacls /setintegritylevel Medium` was verified on-host to write a Medium label and re-trigger
-  the identical abort (CR-06); `main.rs:363-367` carries a regression assertion forbidding it.
-- Pointing other layers at the Windows Application event log is what WR-27 removed; both
-  `main.rs:427-445` and `output.rs:2003-2036` now *assert* that the event log is named only as an
-  explicit negation.
-
-So the contract document — the one an operator or the next planner reads — prescribes a command
-the code proves wrong and a channel the code's own tests forbid. This is precisely the "two
-mirrored sites carry contradictory guidance for one condition" defect WR-03 was raised to close,
-relocated one document over. It also self-certifies with a stale re-run receipt
-(`grep -n "\"MandatoryIntegrityLabel\" =>" … (2026-08-11) → line 262`), which reads as verified.
-
-Secondary, same class and same document: the RF-13 row (`:262`) still says "The reader now
-DETECTS a configured sub-key and emits a loud warning" — after CR-03 the reader also **carries**
-the value into `RequiredLayersPolicy.required`. Benign in direction, but it is the row WR-12's
-skip rationale leans on.
-
-**Fix:** Amend the WR-17 row's Resolution column to record what the code does *now* (label-removal
-via `SetNamedSecurityInfoW(.., LABEL_SECURITY_INFORMATION, .., <empty ACL>)`; non-label layers
-pointed at `-vv --log-file`, with the event log named only as a negation), with a forward
-reference to the CR-06/WR-27 rows that superseded it. Update RF-13's first sentence to
-"reads the sub-key into `RequiredLayersPolicy.required` and warns that no consumer enforces it".
-
-Then close the class rather than the instance: `layer_registry_selfcheck.rs` already
-content-verifies every `file.rs::Symbol` citation in the whole SPEC — add a sibling gate asserting
-the SPEC contains **no** occurrence of `/setintegritylevel Medium` that is not immediately
-qualified as non-remedial, mirroring `main.rs`'s own regression assertion.
-
----
-
-### WR-03: The sibling CR-06 assertion is still the narrow-needle shape WR-06 was raised to eliminate
-
-**File:** `crates/nono-cli/src/main.rs:362-367`
-
-**Issue:** WR-06's fix rewrote `render_error_for_operator_names_a_reachable_channel_for_non_label_layers`
-to "assert the CLASS, not one verb" and mirrored the rule in `output.rs`. The assertion **20 lines
-above it, in the same test module, guarding the same rendered string** was not touched:
+**Issue:** WR-01's fix eliminated the duplicate classifier but propagated the *correctness* check
+to only one of the two consumers. `output.rs` got the real one — "no `#[test]` attribute may
+appear in any file's production half" (`output.rs:2271-2283`). `layer_registry.rs` kept:
 
 ```rust
+let skipped_test_lines = scan.skipped_lines();
+assert!(skipped_test_lines > 0, "CR-02 non-vacuity: no `#[cfg(test)]` module body was excluded …");
+```
+
+`skipped_lines() > 0` is satisfied *more* the more the classifier skips and cannot distinguish
+"all three test regions skipped" from "two of three skipped". It is the exact predicate whose
+weakness the round-3 report itself names ("`!skipped_regions.is_empty()` would have stayed green
+through the actual defect") — fixed in one mirror, left in the other, in the same commit.
+
+Demonstrated end to end. With the WR-01 shape present (one blank line before
+`mod attestation_gate_tests {`), I then renamed the real production site the gate exists to pin:
+
+```
+BLANKLINE+RENAME   regions=2  skipped=1341   (> 0, so the non-vacuity assert still PASSES)
+    DaclAncestorTraverse  production sites: [2225]      <- line 1466 renamed; 2225 is a TEST assertion
+```
+
+The gate stays **GREEN** while the production arm it guards has been renamed away — satisfied by
+`attestation_gate_tests`'s own assertion. That is verbatim the failure this gate's own comment
+records as the reason the test-module exclusion exists:
+
+> renaming the production `layer = "DaclAncestorTraverse"` left it GREEN, because
+> `agent_daemon/launch.rs`'s own `attestation_gate_tests` asserts on that same string. A gate that
+> a test assertion can satisfy is the defect one step over.
+
+**Fix:** Give this gate the same correctness check `output.rs` has, and lift it into the shared
+module so a third consumer cannot skip it:
+
+```rust
+// cfg_test_regions.rs
+impl ProductionScan<'_> {
+    /// Zero-based lines of any `#[test]` attribute left in the production
+    /// half. Non-empty means the split is WRONG, not merely small.
+    #[must_use]
+    pub fn leaked_test_attributes(&self) -> Vec<usize> {
+        self.lines.iter().filter(|(_, l)| l.trim() == "#[test]").map(|(i, _)| *i).collect()
+    }
+}
+
+// layer_registry.rs — replace the `skipped_test_lines > 0` assert
+let leaked = scan.leaked_test_attributes();
 assert!(
-    !lines[1].contains("/setintegritylevel Medium`."),
-    "the Medium-label command must never be prescribed as the remedy (CR-06): {}",
-    lines[1]
+    leaked.is_empty(),
+    "CR-02: {} `#[test]` attribute(s) survived into the production half of \
+     agent_daemon/launch.rs (first at line {:?}) — a test module leaked, and its assertions \
+     can satisfy this gate",
+    leaked.len(),
+    leaked.first().map(|i| i + 1)
 );
 ```
 
-The needle is the literal `` /setintegritylevel Medium`. `` — command, closing backtick, **and a
-sentence-final period**. It rejects exactly one historical sentence ending. `` `icacls <path>
-/setintegritylevel Medium` to clear this ``, `` run `icacls /setintegritylevel Medium` ``, or any
-phrasing not ending the sentence right there evades it entirely. The class the assertion names
-("must never be prescribed as the remedy") is far wider than the predicate. The current text at
-`main.rs:295` is a legitimate *negated* mention ("`icacls /setintegritylevel Medium` writes a
-Medium label and re-triggers this same abort") — structurally identical to the event-log negation
-at `:305` that WR-06 handled correctly by requiring the negation rather than narrowing the needle.
-
-This is the phase's signature failure mode surviving in the file the fix pass edited, in the
-function directly above the one it fixed.
-
-**Fix:** Apply WR-06's own pattern:
-```rust
-const MEDIUM_LABEL_CMD: &str = "/setintegritylevel Medium";
-let normalised = lines[1].split_whitespace().collect::<Vec<_>>().join(" ");
-let mut mentions = 0usize;
-for (pos, _) in normalised.match_indices(MEDIUM_LABEL_CMD) {
-    mentions += 1;
-    let following = &normalised[pos + MEDIUM_LABEL_CMD.len()..];
-    assert!(
-        following.contains("writes a Medium label") || following.contains("re-triggers"),
-        "CR-06: the Medium-label command is mentioned other than as an explicit warning \
-         that it does NOT clear the condition: {}",
-        lines[1]
-    );
-}
-assert!(mentions >= 1, "CR-06 non-vacuity: the remediation no longer warns about \
-    `/setintegritylevel Medium` at all — restore the warning or retire this guard");
-```
+Keep the `skipped_test_lines > 0` floor as well; it catches the *zero*-region case the leak check
+does not.
 
 ---
 
-### WR-04: The D-15 ledger table is broken by a stray blank line, so WR-10's record is not a row of that table
+### WR-03: `scan_production` silently converts "closing brace not found" into a region that runs to EOF, and neither consumer's non-vacuity check can see it
 
-**File:** `proj/SPEC-windows-fail-direction-contract.md:299-301`
+**File:** `crates/nono-cli/src/cfg_test_regions.rs:113-126`
 
-**Issue:** The two rows the fix pass appended are separated by a blank line:
-
-```
-299: | CR-02 (Iteration 6, code-review fix pass) | … |
-300:
-301: | WR-10 (Iteration 6, code-review fix pass) | **OPEN — recorded, not fixed.** … |
-```
-
-In GitHub-Flavored Markdown a blank line terminates the table. Line 301 has no preceding header +
-delimiter pair, so it renders as a literal paragraph of pipe characters, not as a ledger row.
-
-This matters specifically because WR-10 was **consciously skipped** on the sole basis that "the
-review explicitly sanctions this alternative (record the conflation explicitly in the SPEC's …
-table (D-15))". The recorded mitigation is the entire justification for not fixing a live
-naming/claim-precision defect in a cross-binary wire contract — and the record is not in the table
-it is claimed to be in. (The `WR-10 OPEN` marker on `layer_registry.rs:924` is intact and
-greppable, and `every_spec_symbol_citation_resolves_to_a_real_definition` still validates the row's
-`nono-shell-broker/src/main.rs::broker_resume_gate` citation, which does resolve — `main.rs:369`.)
-
-**Fix:** Delete line 300 so the WR-10 row joins the table. Then make it structural — the SPEC
-already has parsing gates; add one that asserts the discrepancy ledger contains a row for every
-`OPEN` marker in the tree:
+**Issue:** The region terminator is an exact whole-line string match:
 
 ```rust
-#[test]
-fn every_open_marker_in_code_has_a_d15_ledger_row() {
-    let ledger = d15_ledger_rows(&read_spec());          // parse rows of THAT table
-    for marker in grep_open_markers(&workspace_sources()) {  // e.g. "WR-10 OPEN", "WR-14 OPEN"
-        assert!(ledger.iter().any(|r| r.starts_with(&format!("| {marker} "))),
-            "{marker} is marked OPEN in code but has no row in the SPEC's D-15 \
-             \"Contract vs. code discrepancies\" ledger");
+let indent = lines[idx].len() - lines[idx].trim_start().len();
+let closer = format!("{}}}", " ".repeat(indent));
+idx += 1;
+while idx < lines.len() && lines[idx] != closer { idx += 1; }
+skipped_regions.push((start, idx.min(lines.len().saturating_sub(1))));
+```
+
+When the closer is never found, `idx == lines.len()` and the region is recorded as running to the
+last line — **with no signal to the caller that it was never closed**. Everything after the module
+start is dropped from the production half. That is the over-claim direction, i.e. production text
+silently unscanned, which is the worse of the two failure directions.
+
+Three realistic triggers, none currently present but none prevented:
+
+- `} // end of tests` on the closing line (rustfmt preserves trailing comments after a brace).
+- Tab indentation: `indent` counts *bytes* stripped, then `" ".repeat(indent)` rebuilds them as
+  spaces, so a tab-indented nested module can never match its own closer.
+- A line that is exactly `}` at the module's indent inside a raw string or a `/* */` block inside
+  the test module (ends the region early — the opposite direction, caught only in `output.rs`).
+
+Neither consumer can notice. `skipped_lines() > 0` and `!skipped_regions.is_empty()` are both
+*more* satisfied by over-claiming; the `#[test]`-leak check only fires on under-claim. Measured:
+changing `launch.rs:2769` from `}` to `} // end of detached_token_gate_tests` merges two regions
+(12 → 11), and every assertion in both gates stays green.
+
+Today's blast radius is zero only by layout accident — I checked, and the four scanned files have
+essentially no production code after their first test region (`output.rs` 1 line, `main.rs` 0,
+`exec_strategy_windows/launch.rs` 11 separator lines, `agent_daemon/launch.rs` 4). That is not a
+property anyone is maintaining.
+
+**Fix:** Make "unclosed" representable and fail loudly:
+
+```rust
+// cfg_test_regions.rs
+pub struct ProductionScan<'a> {
+    pub lines: Vec<(usize, &'a str)>,
+    pub skipped_regions: Vec<(usize, usize)>,
+    /// Regions whose closing brace was never found — the scan ran to EOF and
+    /// silently dropped everything after `start`. Callers MUST assert this is
+    /// empty; an over-claimed region satisfies every non-vacuity floor.
+    pub unclosed_regions: Vec<usize>,
+}
+```
+
+populate it when `idx >= lines.len()`, and assert `unclosed_regions.is_empty()` in both consumers.
+Compute `indent` from `chars().take_while(|c| c.is_whitespace())` and rebuild the closer from the
+original leading whitespace slice rather than from `" ".repeat`, so tabs match.
+
+---
+
+### WR-04: the new SPEC event-log gate matches two verbs while its own doc states the class — it can relabel but never deny
+
+**File:** `crates/nono-cli/src/main.rs:465-487`
+(`the_spec_ledger_does_not_point_abort_path_layers_at_the_event_log`)
+
+**Issue:** The doc comment states the rule as a class:
+
+> The predicate is "no ledger row asserts that non-label layers are **POINTED AT** the event log".
+
+The predicate implemented is two present-tense verb phrases:
+
+```rust
+n.contains("points at the Windows Application event log")
+    || n.contains("point at the Windows Application event log")
+```
+
+`pointed at`, `pointing at`, `directs the operator to`, `refers … to`, `names … as the place to
+look`, `see the …` — every one of them evades it. This is the *identical* complaint round 2 raised
+as WR-06 against `!contains("see the Windows Application event log")`, and round 3 fixed that one
+correctly (`main.rs:583-600`: count **all** mentions of the class needle, require the negation) —
+then wrote the rejected narrow-needle shape into the new SPEC mirror **in the same commit**
+(`84e48ffe`). The perturbation the fix report cites ("restore the SPEC's prescriptive WR-17 text →
+both SPEC gates FAIL") only exercises the one historical phrasing the needle was written from.
+
+The sibling gate 30 lines above (`the_spec_never_prescribes_the_medium_label_command`) does it
+right — class needle plus an attached-qualifier window. Two gates, same commit, same document,
+opposite patterns.
+
+**Fix:** Use the sibling's own shape:
+
+```rust
+const EVENT_LOG: &str = "Windows Application event log";
+const WINDOW: usize = 160;
+for (idx, line) in SPEC.lines().enumerate().filter(|(_, l)| l.trim_start().starts_with('|')) {
+    let n = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    for (pos, _) in n.match_indices(EVENT_LOG) {
+        let before = &n[pos.saturating_sub(WINDOW)..pos];
+        let after_end = (pos + EVENT_LOG.len() + WINDOW).min(n.len());
+        let ctx = format!("{before}{}", &n[pos + EVENT_LOG.len()..after_end]);
+        assert!(
+            ctx.contains("named ONLY as an explicit negation")
+                || ctx.contains("downgrade")     // the path that really does write there
+                || ctx.contains("No ") || ctx.contains("no "),
+            "WR-02: SPEC:{} names the event log in a ledger row without qualifying it as \
+             the downgrade-path destination or as an explicit negation:\n{line}", idx + 1);
     }
 }
 ```
 
+and add a **detector self-test** — the WR-05 raw-citation gate has one and it is why that gate can
+be trusted; this one has none.
+
 ---
 
-### WR-05: Stale line citations survive in `layer_registry.rs`'s module doc and in `layer_registry_meta_test.rs`, covered by no gate
+### WR-05: the WR-14-record gate searches its needles over all of `error.rs`, not the record — one of the four already matches unrelated lines
 
-**Files:** `crates/nono-cli/src/exec_strategy_windows/layer_registry.rs:114-124` (and 25 line
-citations file-wide); `crates/nono-cli/tests/layer_registry_meta_test.rs:175`
+**File:** `crates/nono-cli/tests/layer_registry_selfcheck.rs:1157-1183`
+(`the_wr14_open_record_matches_the_actual_swallow_sites`)
 
-**Issue:** NR3-08 converted every `call_sites` array entry to line-drift-immune `"file.rs::Symbol"`
-form, and WR-19 swept the SPEC for the same class. Neither sweep reached (a) `layer_registry.rs`'s
-own module doc comment, or (b) the reason strings in `layer_registry_meta_test.rs`'s
-`MANUALLY_VERIFIED` list. Both carry raw line citations, and both are outside every citation gate:
-`registry_call_sites_exist` now scans **only** `call_sites: &[` regions (commit `7a8fcd36`), and
-`every_spec_symbol_citation_resolves_to_a_real_definition` scans only the SPEC.
-
-`layer_registry.rs` carries **25** `file.rs:<line>` citations, **zero** of them inside a
-`call_sites` array. I checked six at random; all six are wrong:
-
-| Citation | Claimed target | Actual content at that line |
-|---|---|---|
-| `launch.rs:2236` (`:117`) | `verify_broker_authenticode` definition | inside `CreateProcessW`/`process_info` block; real definition is `:2666` |
-| `launch.rs:1505-1506` (`:118`) | `verify_broker_authenticode` call site | `downgrade_detail_pointer`'s `None` arm; real call sites `:1906`, `:2235` |
-| `launch.rs:2190` / `:2194` (`:119`,`:121`) | `is_dev_build_layout` | `InitializeProcThreadAttributeList` teardown; real definition `:2620` |
-| `launch.rs:375` (`:78`) | — | middle of an unrelated error-message literal |
-| `mod.rs:484` (`:794`) | `prepare_live_windows_launch` | inside `wfp_composition_report`'s doc block |
-| `agent_daemon/launch.rs:959` (`:824`) | daemon job creation | an orphaned-process comment |
-| `crates/nono/src/sandbox/windows.rs:2247` (`:101`) | — | a bare `)));` |
-
-`layer_registry_meta_test.rs:175` is the same defect with an extra edge: it carries the *exact*
-citation pair the SPEC's WR-19 row declared stale and fixed —
-`` (`launch.rs:2190`,2194`) `` — with mismatched backticks. Two mirrors of one fact; one was fixed,
-the other was not.
-
-None of this is fix-pass-introduced (I diffed `launch.rs:1503-1510` and `:1828-1830` at the phase
-base `334530af` and both citations were already stale there), but it is live drift in files this
-phase declares authoritative, and the WR-05/`7a8fcd36` narrowing means no gate will ever see it.
-
-**Fix:** Convert all 25 to `"file.rs::Symbol"` form and extend the content-verifier past the
-`call_sites` regions. The safest shape, since narrowing is the fail-open direction, is to
-content-verify every `file.rs::Symbol` citation *anywhere* in `layer_registry.rs`,
-`layer_registry_meta_test.rs` and `layer_force_unavailable.rs` (the SPEC gate already does exactly
-this for the SPEC), and to add a gate that **rejects** any `file.rs:<digits>` citation in those
-files outright:
+**Issue:** The gate's stated job is that "the `WR-14 OPEN` record must state the REAL reason". Its
+implementation is four whole-file `contains` checks:
 
 ```rust
-#[test]
-fn no_line_number_citations_remain_in_the_registry_surface() {
-    for (label, src) in registry_surface_sources() {
-        for (n, line) in src.lines().enumerate() {
-            assert!(!LINE_CITATION_RE.is_match(line),
-                "{label}:{}: raw \"file.rs:<line>\" citation — these drift silently \
-                 (NR3-08/WR-19); use \"file.rs::Symbol\" form", n + 1);
-        }
+for needle in ["classify_probe_outcome", "agent_daemon/launch.rs", "Ok(true)", "FFI"] {
+    assert!(error_rs.contains(needle), "…the `WR-14 OPEN` record … no longer names {needle:?}…");
+}
+```
+
+`"FFI"` already appears on four lines of `crates/nono/src/error.rs` that have nothing to do with
+the WR-14 record — `:10`, `:274`, `:275`, `:295` — all pre-existing doc comments about the C FFI
+surface. So **deleting the FFI-reachability sentence from the WR-14 record, which is the single
+correction WR-07 asked for, would not fail this gate.** The other three needles are block-unique
+today by luck, not by construction: the gate goes vacuous the moment any of them is written
+elsewhere in the file, which for `agent_daemon/launch.rs` and `classify_probe_outcome` is an
+ordinary thing to do in a doc comment.
+
+Same shape as WR-01/WR-04: the predicate's *scope* is wider than the thing the message claims it
+protects.
+
+**Fix:** Extract the block and assert within it:
+
+```rust
+let block = {
+    let start = error_rs.find("⚠ WR-14 OPEN").expect(
+        "the WR-14 OPEN marker is gone from error.rs — either the finding was closed \
+         (delete this gate deliberately) or the marker convention changed");
+    let end = error_rs[start..].find("=> Some(NonoRemediation::ClearStaleLayerResidue")
+        .map_or(error_rs.len(), |o| start + o);
+    &error_rs[start..end]
+};
+for needle in ["classify_probe_outcome", "agent_daemon/launch.rs", "Ok(true)", "FFI"] {
+    assert!(block.contains(needle), "…");
+}
+assert!(!block.contains("requires a null job handle"), "…");
+```
+
+---
+
+### WR-06: the CR-01 injectivity claim is asserted over 6 keys and recorded as covering the whole key space
+
+**File:** `crates/nono-cli/src/output.rs:1560-1631`
+(`marker_content_never_names_a_layer_and_stays_injective`), with `:266-273`
+
+**Issue:** Three records state a property the gate does not establish:
+
+- `117-REVIEW-FIX.md`: "the digest is injective for every input this code can produce, **pinned by
+  an explicit injectivity assertion**".
+- `output.rs:271-272`: "the digest is injective for every input this code can produce, up to a
+  128-bit collision".
+- The test's own doc: "Checked **exhaustively** over a **spanning sample** of key shapes" — which
+  is self-contradictory.
+
+The assertion covers 6 hand-written keys. The production key space is the sorted comma-join of
+subsets of a 13-element enum, i.e. up to 2^13 = 8192 distinct inputs, all of which are cheaply
+enumerable. This is the same "the record claims a guarantee the mechanism does not provide" class
+that WR-01 (round 2) and WR-05 (round 3) were both raised against, in round 3's own new gate.
+
+Practical risk is low (a simultaneous 64-bit filename *and* 128-bit content collision), and the
+digest strength framing is also loose — two `DefaultHasher` passes over the same fixed-key
+SipHash-1-3 permutation with only a domain prefix is not "128-bit" against a chosen-input
+adversary, though it is fine against accidental collision, which is all WR-04 needed. The defect
+is the record, not the byte string.
+
+**Fix:** Either make the claim true or state the real one. Exhaustive is cheap and needs no
+`LayerId` import (which `output.rs` must not have):
+
+```rust
+// Synthetic 13-name vocabulary of the same shape production builds. 2^13
+// subsets, sorted comma-joined — the whole reachable key space.
+let vocab: Vec<String> = (0..13).map(|i| format!("Layer{i:02}")).collect();
+let mut seen = std::collections::HashMap::new();
+for mask in 0u16..(1 << 13) {
+    let key = vocab.iter().enumerate()
+        .filter(|(i, _)| mask & (1 << i) != 0)
+        .map(|(_, n)| n.as_str()).collect::<Vec<_>>().join(",");
+    let content = attestation_downgrade_marker_content(&key);
+    if let Some(prev) = seen.insert(content.clone(), key.clone()) {
+        panic!("marker-content collision between {prev:?} and {key:?} -> {content}");
     }
 }
 ```
 
----
-
-### WR-06: `no_downgrade_surface_literal_has_a_collapsed_continuation`'s extractor silently drops literals on lines containing a `'"'` char literal
-
-**File:** `crates/nono-cli/src/output.rs:1744-1766`
-
-**Issue:** `string_literals` is documented as "deliberately naive (no raw-string or char-literal
-handling): the files it is pointed at contain neither on the lines that matter". That is not true
-of `output.rs`, which the scan includes and which contains `else if c == '"' {` twice — inside
-`string_literals` itself (`:1755`, `:1763`). On those lines the extractor opens a string at the
-char literal's quote and never closes it, so the entire rest of the line is discarded rather than
-scanned. The doc's stated safety argument — "a false positive here fails the build loudly rather
-than silently passing" — describes the wrong direction: this is a false *negative* (silently
-scanning less), which is exactly the failure mode the `checked >= 500` floor exists to catch and
-is too coarse to catch (1417 scanned today).
-
-Low impact today (the dropped content is the extractor's own body), but it is a self-referential
-blind spot in an anti-vacuity gate.
-
-**Fix:** Skip char literals in the scanner, or exclude the extractor's own definition region:
-```rust
-} else if c == '\'' {
-    in_char = true;              // consume up to the matching unescaped '
-}
-```
-and tighten the floor to a per-file minimum so a single file going quiet is visible.
+and reword `output.rs:271-272` and the test doc to say what is actually checked.
 
 ---
 
-### WR-07: The `WR-14 OPEN` record misstates why `probe_in_job`'s failure is unreachable, and understates the FFI/embedder surface
+### WR-07: the SPEC gates this round added do not run in CI for the change class they guard
 
-**File:** `crates/nono/src/error.rs:506-529`
+**File:** `.github/workflows/ci.yml:46-49` (the `changes` classifier), with `:107`, `:456`
 
-**Issue:** The brief permits re-reporting a skipped finding when "the recorded rationale is
-actually wrong". The block states:
+**Issue:** Round 3's stated closure for WR-02 is structural:
 
-> All three are UNREACHABLE in a shipped build today: … (3) requires a null job handle no
-> production caller passes …
+> Two new gates scan the SPEC **with the same helper** the rendered-string assertions use, so the
+> mirrors are structurally prevented from diverging.
 
-That is a claim about the **callee's input**, and it is not what makes the case unreachable. Both
-production callers pass a real handle, yes — but neither would surface the error even if they did
-not, because both **swallow** it:
+Those gates (`the_spec_never_prescribes_the_medium_label_command`,
+`the_spec_ledger_does_not_point_abort_path_layers_at_the_event_log` in `--bin nono`;
+`every_open_marker_in_code_has_a_ledger_row`, `every_spec_symbol_citation_resolves…` in
+`layer_registry_selfcheck`) all run inside the `test` job, which is gated on:
 
-- `attestation.rs:312` → `classify_probe_outcome(probe_in_job(...))`, whose `Err(_)` arm
-  (`:265`) maps to `LayerAttestationStatus::Unconfirmed`. The `NonoError` is dropped on the floor.
-- `agent_daemon/launch.rs:1419` → `matches!(probe_in_job(process, job), Ok(true))`. Same.
-
-So `probe_in_job`'s `LayerAttestationFailed` can never reach `remediation()` **through nono's own
-binaries at all**, regardless of the job handle. Getting this backwards matters for the co-fix the
-block mandates ("THIS ARM MUST BE FIXED IN THE SAME CHANGE" as WR-12): an implementer reading it
-will look for a null-handle guard at the call site rather than noticing the two swallow points, and
-will conclude the case became reachable when it did not.
-
-Conversely the record **understates** one surface: `probe_in_job` is `pub` in `crates/nono`
-(`attestation.rs:274`) and is therefore reachable by every FFI/Python/TypeScript embedder, none of
-which swallow it. An embedder that calls it with a null job today gets
-`ClearStaleLayerResidue { layer: "JobObjectContainment" }` — the mis-targeted remediation, in a
-shipped build, right now. "Unreachable in a shipped build" is true only of nono's own binaries.
-
-**Fix:** Correct the block:
+```yaml
+needs: changes
+if: ${{ … && needs.changes.outputs.run_code_jobs == 'true' }}
 ```
-//   3. `crate::attestation::probe_in_job`'s null-job refusal. Unreachable through
-//      nono's own binaries not because no caller passes a null handle, but because
-//      BOTH production callers discard the Err:
-//        - nono-cli  `attestation.rs::classify_probe_outcome` -> Unconfirmed
-//        - nono-agentd `agent_daemon/launch.rs` -> matches!(.., Ok(true))
-//      It IS reachable for FFI/embedder callers, which see the mis-targeted
-//      remediation today.
+
+and `run_code_jobs` is set to `false` when every changed file matches
+`(^docs/)|(\.md$)|(\.mdx$)|(^LICENSE$)|(^\.github/ISSUE_TEMPLATE/)`. The contract document is
+`proj/SPEC-windows-fail-direction-contract.md` — a `.md` file. `run_docs_checks` does not cover
+`proj/` either.
+
+So a pull request that edits **only** the SPEC runs zero jobs. Every one of the three SPEC defects
+this phase actually found is a SPEC-only edit: restoring the prescriptive WR-17 remedy (WR-02),
+re-inserting the table-terminating blank line (WR-04), deleting an `OPEN` ledger row. The gates
+built to catch exactly those would not execute. The classifier itself is pre-existing and
+correctly fail-open in every other respect (empty diff, missing base SHA, failed `git diff` all
+leave both flags `true`); the new reliance on it is what this phase introduced.
+
+**Fix:** Exclude the contract documents from the docs-only skip, so a SPEC edit runs the code jobs
+that gate it:
+
+```yaml
+if [[ ! "${file}" =~ (^docs/)|(\.mdx$)|(^LICENSE$)|(^\.github/ISSUE_TEMPLATE/) ]] \
+   || [[ "${file}" =~ ^proj/ ]]; then
+  run_code_jobs=true
+fi
 ```
+
+(dropping the blanket `\.md$` in favour of an explicit docs-tree match, and force-including
+`proj/`). Note this list must stay in sync with every `include_str!`/`read_to_string` of a
+Markdown file in the test tree — worth a comment at both ends.
 
 ---
 
-_Reviewed: 2026-08-14T09:40:00Z_
+### WR-08: the new per-file literal floor has one literal of headroom on the smallest file
+
+**File:** `crates/nono-cli/src/output.rs:2139-2147`
+
+**Issue:** `PER_FILE_FLOOR: usize = 25` is a good idea (a global floor of 500 genuinely cannot see
+one file going quiet). But measured against the real files today:
+
+```
+output.rs                                              421
+exec_strategy_windows/launch.rs                        757
+exec_strategy_windows/attestation.rs                    66
+exec_strategy_windows/attestation_downgrade_event.rs    26   <- floor 25
+main.rs                                                187
+```
+
+`attestation_downgrade_event.rs` clears the floor by one. Deleting two string literals from that
+file — an ordinary refactor — trips a gate whose message reads "the extractor has gone quiet for
+this file", pointing the next maintainer at the extractor rather than at their own edit. The
+failure direction is loud, not silent, so this is a calibration/diagnosability problem rather than
+a coverage hole, but a floor that a two-line edit crosses is not measuring what it claims.
+
+**Fix:** Make the floor proportional and self-describing, e.g. a per-file floor of
+`max(10, previous_count / 2)` recorded as a named constant per file, or simply lower
+`attestation_downgrade_event.rs`'s floor to 10 with a comment stating it is a small file and the
+signal there is "went to zero", not "went below 25".
+
+---
+
+_Reviewed: 2026-08-14T18:20:00Z_
 _Reviewer: Claude (gsd-code-reviewer)_
-_Depth: standard — round 2 (re-review of fix pass `334530af..HEAD`)_
+_Depth: standard — round 4 (adversarial re-review of `e6438f96..860d4772`)_
