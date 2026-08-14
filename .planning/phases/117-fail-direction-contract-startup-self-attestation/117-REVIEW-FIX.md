@@ -1,436 +1,406 @@
 ---
 phase: 117-fail-direction-contract-startup-self-attestation
-fixed_at: 2026-08-14T04:05:00Z
+fixed_at: 2026-08-14T16:40:00Z
 review_path: .planning/phases/117-fail-direction-contract-startup-self-attestation/117-REVIEW.md
-iteration: 6
-findings_in_scope: 17
-fixed: 13
-partial: 1
-skipped: 3
-status: partial
+iteration: 2
+round: 3
+findings_in_scope: 8
+fixed: 8
+skipped: 0
+status: all_fixed
 ---
 
-# Phase 117: Code Review Fix Report — iteration 6
+# Phase 117: Code Review Fix Report — round 3
 
-**Source review:** `.planning/phases/117-fail-direction-contract-startup-self-attestation/117-REVIEW.md`
-(reviewed 2026-08-13T16:27:04Z; 3 Critical + 14 Warning = 17 findings, all in scope)
+**Source review:** `117-REVIEW.md` (round 2, reviewed 2026-08-14T09:40:00Z; 1 Critical + 7
+Warning = 8 findings, all in scope)
 **Scope:** `critical_warning` — the review reported 0 Info findings, so this is every finding.
 
-> The iteration-2 report previously at this path is preserved in git history (it covered a
-> different review round: CR-14, NR-02, NR-04, NR-05, NR-06). This file replaces it, following
-> the precedent that file itself set for the iteration-1 report.
-
-**Summary:**
+> The round-2 fix report is preserved at `117-REVIEW-FIX.round1.md`.
 
 | | Count | Findings |
 |---|---|---|
-| Fixed | 13 | CR-01, CR-03, WR-01, WR-02, WR-03, WR-04, WR-05, WR-06, WR-07, WR-08, WR-09, WR-11, WR-13 |
-| Partial | 1 | CR-02 |
-| Skipped (recorded, not fixed) | 3 | WR-10, WR-12, WR-14 |
+| Fixed | 8 | CR-01, WR-01, WR-02, WR-03, WR-04, WR-05, WR-06, WR-07 |
+| Skipped | 0 | — |
 
-17 commits on `gsd-reviewfix/117-189`, fast-forwarded onto
+7 commits on `gsd-reviewfix/117-r3-1333`, fast-forwarded onto
 `milestone/v2.13-carryforward-closeout`. All carry DCO sign-off.
 
 ---
 
-## Verification posture
+## The standing obligation for this round
 
-Every fix was verified by re-reading the change, running the affected tests, and — for every
-guard, gate or predicate — **perturbing a production site to prove the guard actually denies**.
-A guard that passed both before and after was not accepted as fixed. Perturbation evidence is
-recorded per finding below and in each commit message.
+Round 3 exists because round 2's fix pass created its own blocker: WR-04's fix was evaluated
+against one fail direction (operator visibility) and never against the other (disclosure to the
+confined child). Every runtime-behaviour change below therefore carries an explicit
+**two-direction analysis**, and every guard carries a **perturbation proof** plus a
+**non-vacuity** argument that is about *correctness of coverage*, not merely non-emptiness.
 
-**Whole-tree verification (final state):**
+Two things worth stating up front, because both were caught by running things rather than by
+reading them:
 
-| Gate | Result |
-|---|---|
-| `cargo fmt --all -- --check` | PASS |
-| Windows host `cargo clippy --workspace --all-targets --all-features -- -D warnings -D clippy::unwrap_used` | PASS (exit 0) |
-| `cross clippy --workspace --target x86_64-unknown-linux-gnu -- -D warnings -D clippy::unwrap_used` | **PASS (exit 0)**, 29m02s cold container |
-| `cargo-zigbuild clippy --workspace --target x86_64-apple-darwin -- -D warnings -D clippy::unwrap_used` (SDKROOT unset) | **PASS (exit 0)**, 4m53s |
-| `cargo test --workspace` | see regression baseline below |
-
-Both cross-target gates were run **locally and to completion** — no PARTIAL→CI fallback was
-used. This was required: WR-02 touches `bindings/c/src/`, and WR-09 touches
-`exec_strategy_windows/`.
-
-### Regression baseline (no regressions)
-
-`cargo test --workspace` ends with 14 failures, all in `-p nono-sandbox-cli --bin nono`. I ran
-the **same target at the phase base commit `334530af`** in a throwaway worktree:
-
-| | Passed | Failed |
-|---|---|---|
-| Phase base `334530af` | 1641 | 14 |
-| This branch | 1646 | 14 |
-
-The 14 failure **names are identical** in both runs (`config::tests::*` HOME/USERPROFILE env
-races, `protected_paths::tests::*`, `profile_cmd::tests::test_init_allowed_when_pack_has_same_short_name`,
-`audit_session::tests::discover_sessions_does_not_warn_when_legacy_audit_root_is_empty`,
-`exec_strategy::labels_guard::tests::non_owned_path_with_a_foreign_label_is_exempt_not_a_coverage_gap`,
-`exec_strategy::launch::broker_dispatch_tests::broker_launch_assigns_child_to_job_object`,
-`exec_strategy::launch::write_deny_low_il_broker_no_pty_tests::write_deny_low_il_broker_no_pty_prevents_child_write_to_medium_il_file`).
-These are the known Windows-host baseline failures. **Zero regressions; +5 net passing tests.**
-
-Every other target is fully green: `nono-sandbox` lib 844, `nono-ffi` 51,
-`layer_registry_selfcheck` 14, `layer_registry_meta_test` 10, plus 40/18 in the remaining
-targets.
-
-### Recommend human confirmation (runtime-behaviour changes)
-
-Three fixes change runtime behaviour rather than only tests or docs. Tests and perturbations
-pass, but semantics deserve a human read:
-
-- **CR-03** — `MachineEgressPolicy.required_layers.required` is now populated from the registry.
-  Confirmed `validate()` does not inspect the field (so a typo still cannot abort the policy
-  read, preserving D-26 degrade-not-abort) and `is_unconfigured()` already ignores it (so a
-  sentinel-only key cannot flip to "configured"). No consumer reads it yet, so shipped behaviour
-  is unchanged — but that is the whole point of WR-12 remaining open.
-- **WR-08** — `classify_row` now selects enforcing-component evidence by `LayerId`; a future row
-  with `ConfirmedByEnforcingComponentReport` and no evidence channel classifies `Unconfirmed`
-  (fail-closed) instead of inheriting WFP's answer. No behaviour change today (exactly one row
-  has that probe kind, pinned by a new test).
-- **WR-04** — the downgrade-banner dedup marker is now content-authoritative. The banner will
-  print once more per session on a toolchain bump that changes `DefaultHasher`, and prints
-  instead of suppressing on any marker mismatch. Fail direction is toward MORE visibility.
+1. **My own first draft of the WR-03 helper was vacuous on the WR-02 mirror.** It took "the rest
+   of the text" as the window in which a qualifying negation had to appear, which is fine for a
+   one-sentence remediation string and useless on a 2000-character Markdown ledger cell — the
+   restored prescriptive SPEC text PASSED because a correction 400 characters later in the same
+   cell satisfied it. Found by running the perturbation, not by inspection. Window now bounded.
+2. **My own CR-01 test introduced a flaky failure** in a pre-existing latency assertion, which
+   `cargo test --workspace` surfaced as 15 failures against the known 14-failure baseline. I
+   characterised it (8 runs alone vs. 3 runs paired) rather than declaring it environmental, and
+   fixed the contention. Detail under CR-01 below.
 
 ---
 
 ## Fixed
 
-### CR-01: The WR-26 class gate matched zero sites in the file it primarily targets
+### CR-01: WR-04's fix persisted un-redacted `LayerId` names to a child-readable path (D-28)
 
-**Files:** `crates/nono-cli/src/output.rs`
-**Commits:** `5590a8fe`, plus a correction folded into `1400d77a` (see below)
+**Files:** `crates/nono-cli/src/output.rs`, `crates/nono-cli/src/exec_strategy_windows/launch.rs`
+**Commits:** `15215d37`, plus `f55bd174` (test-contention repair, below)
+**Status:** fixed — **requires human confirmation** (this is the round's only runtime-behaviour
+change)
 
-Fixed both compounding causes. `production()` no longer ends at `l.trim() != "mod tests {"` (a
-line `launch.rs` does not contain, so the scan silently ran the whole 5862-line file), and the
-needle is matched against continuation-joined, whitespace-normalised lines instead of raw source.
-Added a `hits >= 2` non-vacuity assertion.
+Round 2 bought marker content-authority by writing `dedup_key` — the plaintext, comma-joined
+`LayerId` set — verbatim into
+`%LOCALAPPDATA%\nono\sessions\<id>\attestation-downgrade\<hash>`. The marker content is now a
+**128-bit domain-separated `DefaultHasher` digest** (two passes under distinct constant prefixes,
+because `DefaultHasher` is fixed-key and an undifferentiated second pass would just repeat the
+first). Filename gains a `.v2` suffix so a round-2 plaintext marker is not consulted.
 
-**Perturbation (2 of 2 required, both fail only after the fix):**
-- Hoisting an event-log pointer into the unconditional site-1 `warn!` in
-  `emit_downgrade_diagnostics` — *the exact regression CR-01 states the old gate could not deny*
-  — now FAILS: `launch.rs:1454 names the Windows Application event log but is not inside a
-  DowngradeDetailChannel::EventLog arm ... Nearest arm found: ""`.
-- Breaking the needle in both production sites now FAILS:
-  `the WR-26 class gate matched 0 site(s)`.
+**Two-direction analysis.**
 
-**Residual defect in my own first fix, caught by WR-06's non-vacuity assertion and corrected in
-`1400d77a`:** ending the scan at the first top-level `#[cfg(test)]` reduced the `main.rs` half to
-NOTHING, because `main.rs:155` is a bare `#[cfg(test)] mod test_env;` *declaration* 130 lines
-above the code the gate must see; and `output.rs`'s first test module is gated on
-`#[cfg(all(test, target_os = "windows"))]`, which an exact match never saw. `production()` now
-skips cfg-test-gated **inline** modules by brace region, which has neither failure mode. This is
-worth recording: the first fix would have shipped a second silently-vacuous half.
+*(a) What does this now expose that it did not before, and to whom — can the confined child
+read it on the `Null`, `WriteRestricted` and Low-IL arms?*
+**Nothing new, on any arm.** The child *can* read this file on all three (Null: same token;
+WriteRestricted: `WRITE_RESTRICTED` applies restricting SIDs to WRITE access checks only; Low-IL:
+MIC defaults to `NO_WRITE_UP`, reads up are permitted, and nothing labels the sessions tree). That
+reachability is unchanged — what changes is what is *there* to read. The content is now a
+deterministic function of the same input that already determines the file's NAME, so an observer
+who can invert one can invert the other, and an observer who cannot enumerate the key space
+learns nothing from either. **Marginal disclosure relative to the file merely existing under that
+name is exactly zero** — which is the pre-phase baseline the review itself endorses ("the pre-fix
+zero-byte marker leaked nothing beyond an enumerable 64-bit hash"). Relative to round 2 it
+strictly decreases: a child that does not enumerate previously got the names for free.
 
-### CR-03: `RequiredLayers` is parsed and then unconditionally discarded
+*(b) What does this now deny that it did not before?*
+**Nothing.** The set of `(session, key)` pairs that suppress the banner is identical — the digest
+is injective for every input this code can produce, pinned by an explicit injectivity assertion —
+so absent / zero-byte / mismatched / unreadable markers still ANNOUNCE. Operator-visible
+behaviour is bit-identical; only the on-disk byte string changed.
 
-**File:** `crates/nono/src/machine_policy.rs` · **Commit:** `ec78f8be`
+**On the unforgeability constraint the brief carried forward.** Round 2's stated rationale was
+that an offline-computable key over a 13-element enum lets an attacker pre-plant the marker. That
+is true, and round 2 **did not fix it** — its own doc says so ("an attacker can enumerate and
+pre-plant every valid marker"). I have not traded it away, because there was nothing to trade:
+this fix preserves 100% of the authority round 2 actually achieved (collision detection,
+zero-byte rejection, tamper rejection) while closing the disclosure hole.
 
-`warn_if_required_layers_configured` → `read_required_layers`, now carrying the parsed names.
-The control remains unenforced, but the gap moved to the single **consumer** (the launch gate),
-one `grep machine_required_layers` away, instead of being hidden three files away in a parser
-return. This removes the fail-open landmine the review identified: wiring
-`machine_required_layers: policy.required_layers.required` would previously have compiled, passed
-every test, looked wired, and still passed an empty slice.
+I did **not** achieve unforgeability, and I am saying so rather than implying it. It is not
+reachable from here: on the `Null` and `WriteRestricted` arms the confined child runs under the
+same user *and the same integrity level* as the supervisor, so there is no on-disk location this
+process can read across spawns that that process cannot also write. A keyed MAC needs a secret,
+and any secret stored where the next supervisor invocation can read it (dedup must survive across
+processes — the hook path re-enters on every tool call) is readable by a same-IL same-user child
+too. The doc now states this precisely instead of blaming the 13-element key space. **If an
+operator wants unforgeability, it requires a design decision this fix pass cannot take** — e.g.
+DACL/label-hardening the sessions subtree (which only helps the Low-IL arms) or moving dedup state
+off the filesystem entirely.
 
-**Perturbation:** restoring the `RequiredLayersPolicy::default()` discard makes
-`windows_required_layers_round_trip_is_not_silently_dropped` FAIL; restoring the fix passes. All
-38 `machine_policy` tests green.
+**Guards, with perturbation proofs:**
 
-### WR-01: Operator-facing literals contain 14-22-space runs from a bad automated edit
+- `launch.rs::downgrade_marker_files_never_contain_a_layer_name` drives the REAL writer over the
+  REAL `LayerId::ALL` vocabulary on the `DowngradeDetailChannel::None` arm (the worst case: the
+  channel that records nothing anywhere else), then reads back every byte left under
+  `sessions_dir()`. Non-vacuity asserted on **both** the needle set (`>= 13` names, from the enum,
+  not a hand-written list) and the file set (non-empty, asserted *before* the scan).
+  **PERTURBATION:** restoring `f.write_all(dedup_key.as_bytes())` FAILS with all 13 layer names
+  listed. Note the reader-side test stayed **GREEN** under that same perturbation — a
+  filesystem-level assertion was required, and a unit test of the helper would have shipped the
+  defect again.
+- `only_an_exact_key_match_suppresses_the_banner` gains case 3b: the plaintext key must NOT be
+  accepted content. **PERTURBATION:** widening the reader to also accept `dedup_key` FAILS there.
+- `marker_content_never_names_a_layer_and_stays_injective` pins shape, non-disclosure and
+  injectivity in `output.rs` **without importing the layer type**, preserving that module's
+  structural D-28 property.
 
-**Files:** `output.rs`, `exec_strategy_windows/{launch,attestation,attestation_downgrade_event}.rs`
-**Commit:** `c34f569e`
+Also corrects `print_attestation_downgrade_banner`'s doc, which claimed `dedup_key` was "never
+parses or displays, only hashes" in the same edit that made the function persist it verbatim.
+That statement is true again.
 
-Fixed by **class, not by the 5 cited sites**: a whole-workspace string-literal scan found 12
-affected literals across 4 files on the D-27 surface (and correctly excluded look-alikes such as
-`network.rs`'s `sc query` output fixtures, which are legitimately column-aligned). The `EventLog`
-arm of `downgrade_detail_pointer` is deliberately re-wrapped so the needle stays intact on one
-source line — the CR-01 gate scans line by line.
-
-Added `no_downgrade_surface_literal_has_a_collapsed_continuation`, which rejects a run of 4+
-spaces preceded by a non-space character (admitting the legitimate leading-indentation literals
-`output.rs` uses by design) and asserts `checked >= 500` literals scanned.
-
-**Perturbation:** re-collapsing `launch.rs:1505` FAILS with
-`14 consecutive spaces mid-literal`; restoring passes.
-
-### WR-02: `bindings/c` silently collapses `LayerAttestationFailed` to `Other`
-
-**Files:** `bindings/c/src/types.rs`, `bindings/c/include/nono.h` · **Commit:** `8cfde970`
-
-Added `LayerAttestationFailed = 15` plus its `From` arm; `nono.h` regenerated by
-build.rs/cbindgen. Value appended after `Cancelled = 14`, so no existing ABI value moves. The
-mandatory `_ => Self::Other` wildcard now carries a comment stating plainly that it swallows
-every future addition (`nono::NonoDiagnosticCode` is `#[non_exhaustive]`, so no exhaustiveness
-error is possible) and that a new code needs its own arm **and** its own round-trip assertion.
-
-Two tests, so the positive cannot pass for the wrong reason:
-`layer_attestation_failed_is_not_collapsed_to_other` (≠ `Other`, = the right variant, ABI value
-15) and the control `other_still_maps_to_other`. All 51 `nono-ffi` tests green.
-
-Cross-target verified (required — `bindings/c/src/`): linux-gnu PASS, apple-darwin PASS.
-
-### WR-03: `ClearStaleLayerResidue`'s library doc prescribed the remedy `main.rs` proved wrong
-
-**File:** `crates/nono/src/diagnostic/codes.rs` · **Commit:** `b6cf447f`
-
-Removed the `icacls /setintegritylevel Medium` example (which writes a Medium label and
-re-triggers the same abort) and pointed at `render_error_for_operator` as the single source, with
-the reason recorded so it cannot be helpfully re-added. Swept the class: every remaining
-`/setintegritylevel Medium` mention in the tree is corrective or negated, none prescriptive.
-
-### WR-04: The "non-silenceable" D-27 banner is silenceable by a pre-planted marker
-
-**File:** `crates/nono-cli/src/output.rs` · **Commit:** `e2cfe36e`
-
-Took the review's option (b). The decision is extracted into
-`marker_says_already_announced(path, key)` and now requires an exact stored-key match; absent,
-zero-byte, different-content (a genuine 64-bit collision between two different downgraded-layer
-sets) and unreadable all resolve to ANNOUNCE. The writer stores the key verbatim with
-`create_new(true)`.
-
-**Honest limit, stated in the function doc rather than papered over:** this does NOT stop a
-same-user process from pre-planting a *correct* marker. Accepted, with reasoning — such a process
-already holds strictly greater capability (it can edit nono's config or shadow `nono` on `PATH`),
-and the audit event and `tracing::warn!` on the same path are independent channels it does not
-control. "Unconditional" is redefined precisely: *not gated on `--silent`, not suppressed by any
-nono code path* — **not** tamper-proof.
-
-**Perturbation:** reverting the predicate to `path.exists()` FAILS on the zero-byte case. The
-test also asserts the positive direction (an exact match must still suppress), or dedup would do
-nothing and the hook path would re-print on every tool call.
-
-### WR-05: `every_call_site_string_names_a_line_number` no longer checks what its name asserts
-
-**File:** `crates/nono-cli/src/exec_strategy_windows/layer_registry.rs` · **Commit:** `6b2b47e8`
-
-Renamed to `every_call_site_string_is_symbol_form`, asserting `.rs::`, with a `checked >= 20`
-non-vacuity bound covering the two rows that legitimately carry `call_sites: &[]`.
-
-**Perturbation:** downgrading one real entry to `"restricted_token.rs:86"` (which the OLD
-assertion accepted) now FAILS.
-
-### WR-06: The WR-27 abort-path guard's predicate is narrower than the class it names
-
-**Files:** `crates/nono-cli/src/output.rs`, `crates/nono-cli/src/main.rs` · **Commit:** `1400d77a`
-
-Both mirrors now assert the CLASS ("mentions the event log") and exclude the legitimate mention
-by requiring the negation, rather than narrowing to one verb. Both state the **same** rule — this
-phase's memory records two plans shipping contradictory rules for one condition with every gate
-green — and both carry non-vacuity assertions.
-
-**Perturbation:** rewording `main.rs:305`'s negation to `check the Windows Application event log;
-no record is written on this path` — a phrasing the OLD needle permitted — now FAILS **both**
-guards (`output.rs`'s source-text mirror at `main.rs:303`, and
-`render_error_for_operator_names_a_reachable_channel_for_non_label_layers` on the rendered
-string).
-
-### WR-07: `layer_force_unavailable.rs` claims three automated rows; two exist
-
-**Files:** `crates/nono-cli/tests/layer_force_unavailable.rs`, `.../layer_registry_meta_test.rs`
-**Commit:** `65691203`
-
-Counts corrected to 2 + 8 `ALSO_AUTOMATED` + 3 `MANUALLY_VERIFIED` = 13 (the doc had also
-omitted the `ALSO_AUTOMATED` bucket entirely). Added
-`coverage_split_accounts_for_every_layer_id`, which counts **definition lines** (not mentions,
-which would inflate the total exactly when the functions went missing) and additionally asserts
-the two lists are **disjoint** — arithmetic alone would let a double-counted row hide a genuinely
-uncovered one.
-
-**Perturbation:** renaming `force_unavailable_dacl_package_sid_grant` FAILS with
-`defines 1 fn force_unavailable_* test(s) ... LayerId::ALL has 13`.
-
-### WR-08: `wfp_preconfirmed` is a WFP-specific fact consumed by a probe-kind-generic branch
-
-**Files:** `exec_strategy_windows/attestation.rs`, `.../layer_registry.rs` · **Commit:** `786a7887`
-
-Went beyond the review's stated minimum. The evidence is now selected by `match entry.id`, so any
-other row with that probe kind fails **closed** (`Unconfirmed`) rather than inheriting WFP's
-answer — fail-secure per CLAUDE.md in preference to the convenient wildcard. Because fail-closed
-alone would be a silent trap, `exactly_one_row_is_confirmed_by_enforcing_component_report` makes
-adding a second row a build failure whose message says exactly what to do (give it its own
-evidence channel and arm; do NOT widen the WFP arm).
-
-**Perturbation:** giving `FirewallRulesEgress` that probe kind FAILS with
-`Rows carrying this probe kind today: [WfpEgressFilters, FirewallRulesEgress]`. All 74
-attestation tests green.
-
-### WR-09: No CI job runs clippy on Windows
-
-**Files:** `.github/workflows/ci.yml`, `exec_strategy_windows/launch.rs` · **Commit:** `b8a4e5fc`
-
-Added `windows-latest` to the clippy matrix. **The gate immediately caught a real, pre-existing
-defect** — I ran the exact command locally before adding the leg and it FAILED:
-`apply_startup_attestation_gate`'s doc comment had been orphaned ~130 lines above its function
-(separated by a blank line and two helpers inserted between them), so it documented
-`emit_downgrade_diagnostics` instead. Confirmed pre-existing by diffing against the phase base
-`334530af`, not introduced by this pass. `clippy::empty_line_after_doc_comments` flagged it; the
-block is moved back onto its function here, because the CI leg cannot be added while the gate is
-red. Re-verified: exit 0.
-
-### WR-11: `session_id_is_safe_path_component`'s doc overstates what it excludes
-
-**File:** `crates/nono-cli/src/output.rs` · **Commit:** `634f2a9e`
-
-Added the exclusion rather than weakening the claim — rejection is itself the safe direction here
-(`None` means "no dedup marker", so the banner prints more, never less). ASCII-case-insensitive,
-because the Win32 device namespace is; `COM0`/`LPT0` included.
-
-The test covers the whole class (12 names × 3 casings) **plus a control set** (`CONSOLE`, `NULL`,
-`COM10`, `con-1`, ...) that must still be accepted — an over-broad exclusion would silently
-disable dedup for legitimate session ids, and nothing else would catch that.
-
-**Perturbation:** replacing the `RESERVED` check with a tautology FAILS on `"CON"`.
-
-### WR-13: `LayerApplication::NotApplied` is structurally unreachable for `WfpEgressFilters`
-
-**Files:** `exec_strategy_windows/mod.rs`, `.../layer_registry.rs` · **Commit:** `4e4a7800`
-
-This is a **doc-accuracy defect only** — the substantive deny direction is already exercised
-end-to-end by `launch.rs::wfp_row_can_be_selected_and_unconfirmed_from_a_real_guard_value`
-(composition `Some(true)`, evidence `false`, gate aborts against a guard reporting zero installed
-filters). Both docs now state the two-valuedness explicitly and say why.
-
-**Chose the doc-correction option deliberately over the review's first suggestion**
-(`Some(*installed_filter_count > 0)`): that would re-collapse composition and enforcement
-evidence into one signal, which is precisely the single-source-of-evidence defect NR-04 split
-apart and the reason the deny direction was unreachable to begin with. Narrowing the field's type
-was also rejected — it would delete the existing `Some(false)` negative-path coverage in
-`attestation.rs` without adding a reachable state.
-
-### (Not a review finding) Self-inflicted regression, found and fixed
-
-**File:** `crates/nono-cli/tests/layer_registry_selfcheck.rs` · **Commit:** `7a8fcd36`
-
-My WR-05 and WR-08 assertion messages legitimately name symbols in prose
-(`attestation.rs::classify_row`, and a `"file.rs::Symbol"` shape example). The citation
-extractors scanned **every** string literal in `layer_registry.rs`, so those were scraped as
-call-site citations and "resolved" to paths like `exec_strategy_windows/ProbeKind`, failing
-`registry_call_sites_exist` for citations nobody wrote. Caught by running the suite rather than
-only the test I had touched.
-
-Both extractors are now scoped via `call_sites_regions()`. Narrowing is the fail-OPEN direction
-if the marker stops matching, so two floors were added (`>= 13` lists, `>= 20` citations).
-**Perturbation:** breaking the region marker now FAILS the floor instead of extracting nothing.
+**Self-inflicted regression, found and fixed (`f55bd174`).** `cargo test --workspace` returned 15
+failures against the known 14-failure Windows-host baseline; the extra one was
+`attestation_downgrade_banner_cold_vs_warm_dedup_marker_latency`. Measured **alone** on the same
+compiled binary, 8 consecutive runs: warm 1.6–15.7ms, all green. Measured **concurrently** with
+my new D-28 test — which does `create_dir_all` + `remove_dir_all` under the same sessions root on
+another harness thread — one run of three hit **235.68ms**, tripping the 100ms bound. So: harness
+filesystem contention I introduced, not a latency regression in the code (the CR-01 change adds
+two `DefaultHasher` passes and nothing else). Both tests now take one shared
+`SESSIONS_ROOT_TEST_LOCK`, acquired through poisoning. 5/5 paired runs green afterwards, and the
+workspace suite is back to exactly 14. I rejected weakening the 100ms bound (it is a real D-24
+budget), `#[ignore]` (a gate people learn to ignore is worse than no gate), and redirecting
+`LOCALAPPDATA` (CLAUDE.md forbids env mutation in parallel tests — it already causes several of
+the 14 baseline failures).
 
 ---
 
-## Partial
+### WR-01: the CR-01 gate scanned 1773 lines of test code as production
 
-### CR-02: The `EntryPath::Daemon` half of the registry drives no decision
+**Files:** `crates/nono-cli/src/cfg_test_regions.rs` (new), `output.rs`, `layer_registry.rs`,
+`main.rs` · **Commit:** `61e4ea40`
 
-**Files:** `exec_strategy_windows/layer_registry.rs`, `proj/SPEC-windows-fail-direction-contract.md`
-**Commit:** `9c2640c5`
+The two mirrors of the `#[cfg(test)]`-region classifier were written **in the same fix pass** and
+disagreed. Rather than align them, I **eliminated the mirror**: there is now exactly one
+implementation, `crate::cfg_test_regions` (test-only), with unit tests for the rule itself, and
+both gates call it. A third gate needing the rule must call it too.
 
-The finding has three parts. **Two are closed; the third is an operator decision I deliberately
-did not take.**
+Fixed in the shared rule:
+- Attributes and doc comments between `#[cfg(test)]` and its `mod` line no longer break the
+  region. This is the live defect: six of `launch.rs`'s twelve test modules carry
+  `#[allow(clippy::unwrap_used)]` there.
+- `#[cfg(not(test))]` was classified as a test gate by **both** copies (it contains the substring
+  `test)`), so a `#[cfg(not(test))] mod foo {` — production code — would have been skipped whole.
+  Latent, not live; now excluded.
 
-**Closed — defect 3 (no daemon analog of `broker_expected_rows_are_abort_only`).** Added
-`daemon_expected_rows_are_all_named_by_the_daemon_gate`: a discovery-based gate naming no
-`LayerId`, requiring every `(Daemon, expected: true)` row with an attestable probe to be named by
-`agent_daemon/launch.rs`. Source-text by necessity — `nono-agentd` never declares
-`exec_strategy_windows`, so it *cannot* link the registry.
+Two doc claims made **true** rather than deleted:
+- *"asserted to EXIST in every scanned file"* — each scanned file must now contribute at least one
+  **skipped test region**.
+- *"The caller asserts non-vacuity per file"* — the floor was a **global sum of 2 across two
+  files**. It is now per file.
 
-**The perturbation mattered here.** My first version excluded comments only and stayed GREEN when
-the production `layer = "DaclAncestorTraverse"` was renamed, because that file's own
-`attestation_gate_tests` asserts on the same string. The gate now also excludes `#[cfg(test)]`
-module bodies (indent-aware closer, since the daemon's test modules nest inside `mod
-windows_impl`) and carries two non-vacuity assertions (`checked >= 5`,
-`skipped_test_lines > 0`). With those, the same rename FAILS with *"the row goes completely
-unattested on `nono agent launch`"*.
+Secondary from the finding: the arm walk-back now searches production entries only. It previously
+searched raw lines, so a comment naming `DowngradeDetailChannel::EventLog` within 12 lines above a
+violating string satisfied the gate.
 
-**Closed — defect 2 (the mirror contradicts the registry).** `DaclAncestorTraverse` declares
-`outcome: Abort` at `(Daemon, None)` while the daemon warns and proceeds. Recorded in the SPEC's
-D-15 "Contract vs. code discrepancies" ledger, which is where D-15 exists to hold it.
+**Non-vacuity is asserted on CORRECTNESS, not emptiness.** `!skipped_regions.is_empty()` would
+have stayed green through the actual defect. Instead: **no `#[test]` attribute may appear in any
+file's production half** — a leaked module brings its `#[test]`s with it, so this catches the class
+directly without restating the classifier's own rule.
 
-**NOT fixed — defect 1 (the `(Daemon, ..)` cells drive nothing).** This is the scope question.
-The gate proves *"no daemon-expected row is unmentioned"*, **not** *"the registry drives the
-daemon"*, and its own doc comment says so — I did not half-wire anything to make the registry
-look connected when it is not.
+**PERTURBATIONS (each fails only with the fix in place):**
+1. Restore the pending-flag-clears-on-any-line bug → FAILS: *"41 `#[test]` attribute(s) appear in
+   the PRODUCTION half of exec_strategy_windows/launch.rs (first at line 3323)"*. The daemon gate
+   stayed GREEN under this same perturbation — which is precisely why the leak check lives in
+   `output.rs`'s gate.
+2. Drop the `not(test` exclusion → the rule test FAILS on `#[cfg(not(test))]`, and
+   `not_test_modules_are_production` FAILS.
+3. Break `launch.rs`'s only EventLog site **and** add a second one in `output.rs`, so the OLD
+   global `hits >= 2` floor is still satisfied → the per-file floor FAILS: *"matched 0 site(s) in
+   exec_strategy_windows/launch.rs (floor 1)"*. This is the exact case the old doc claimed was
+   covered.
+4. Inject an unconditional event-log mention whose only nearby arm is a **comment** → FAILS with
+   `Nearest arm found: ""`. The old raw-line walk-back accepted it.
 
-**Open operator decision, with costs:**
-- **Option A — make the daemon consume the registry.** Restructure `nono-agentd`'s `#[path]`
-  includes so it links `layer_registry`/`attestation` and calls `attest_and_decide` with
-  `EntryPath::Daemon`. Cost: pulls the CLI-side `exec_strategy_windows` tree into the daemon
-  binary (that module's own doc states the independence is intentional), **and**
-  `DaclAncestorTraverse` would then abort daemon launches that succeed today.
-- **Option B — declare the `(Daemon, ..)` cells documentation-only**, give the row an explicit
-  daemon-specific outcome, and keep the hand-written mirror with this new gate as the binding.
-  Cost: the registry is authoritative on two of three entry paths, not three.
-
-**Explicitly rejected third option:** marking the row `expected: false`. The daemon *does* apply
-ancestor traverse (`ancestor_traverse_applied` is a real gate input), so that would be a lie in
-the opposite direction.
+**Two-direction:** test-only. Denies more (three previously-passing shapes now fail the build);
+exposes nothing — no runtime path, output, file or wire format touched.
 
 ---
 
-## Skipped
+### WR-03 + WR-02 + WR-04 + WR-07: every mirror of the contract record
 
-### WR-10: `MandatoryIntegrityLabel` conflates two different kernel objects
+**Files:** `main.rs`, `crates/nono/src/error.rs`, `tests/layer_registry_selfcheck.rs`,
+`proj/SPEC-windows-fail-direction-contract.md` · **Commit:** `84e48ffe`
 
-**Commit:** `63e18a80` (recorded, not fixed)
+One commit because these are one defect wearing four hats, and each gate depends on the others'
+content — they cannot be landed green in isolation.
 
-Recorded in the SPEC's D-15 ledger with a greppable `WR-10 OPEN` marker on the registry row, so
-code and SPEC now say the same thing — previously the conflation lived only in a parenthetical in
-the registry table's Probe column, which is not where a standing discrepancy belongs. The review
-explicitly sanctions this alternative ("If splitting is deferred, record the conflation
-explicitly in the SPEC's ... table (D-15)").
+**WR-03.** The sibling CR-06 assertion was still the narrow-needle shape, 20 lines above the
+function WR-06 fixed: the needle was the command + backtick + a **sentence-final period**, so it
+rejected exactly one historical sentence ending while claiming the class "must never be prescribed
+as the remedy". It now matches the CLASS (the command substring) and excludes the one legitimate
+mention by requiring its NEGATION.
 
-**Why the split is deferred, not merely unfinished:** it renames a value carried in
-`NONO_BROKER_REQUIRED_LAYERS`, a cross-binary wire contract whose consumer **fail-closed refuses
-to resume on any unrecognised name** (RF-02, deliberate). It is a lockstep two-binary change in
-which a mixed-version `nono-cli`/`nono-shell-broker` pair refuses **every** launch — an operator
-decision about release ordering, not a registry edit.
+**WR-02.** The sweep for that rule covered `crates/` but not `proj/`. The SPEC's WR-17 ledger row
+still recorded, in the present tense, that `MandatoryIntegrityLabel` "gets the real remedy
+(`icacls <path> /setintegritylevel Medium`)" — a command `main.rs` carries a regression assertion
+against — and that other layers "point at the Windows Application event log", a channel both
+`main.rs` and `output.rs` assert is named only as a negation. Row rewritten and marked SUPERSEDED;
+RF-13's first sentence corrected for CR-03. Two new gates scan the SPEC **with the same helper**
+the rendered-string assertions use, so the mirrors are structurally prevented from diverging.
 
-**Fail direction meanwhile:** both objects *are* genuinely attested on their own arms. This is a
-naming/claim-precision defect, not a layer going unattested.
+> The bounded-window bug in that helper (found by perturbation, described at the top of this
+> report) is the concrete reason to distrust "both mirrors now assert the class" claims that were
+> not perturbed.
 
-### WR-12: The entire D-26 tighten path is unreachable in a shipped build
+**WR-04.** A blank line between the CR-02 and WR-10 rows terminated the D-15 table in GFM, so
+WR-10's row rendered as a paragraph of pipe characters — while WR-10's entire skip justification
+was that it was "recorded in the SPEC's table". Blank line deleted, and
+`every_open_marker_in_code_has_a_ledger_row` makes it structural: **discovery-based** (finds every
+`XX-NN OPEN` marker, names none), **GFM-faithful** (rows collected only while contiguous with the
+header + delimiter pair, exactly as a renderer parses them), and **collision-aware** — finding IDs
+REPEAT across iterations, so the matching row must also be marked OPEN or the Iteration-5 WR-14
+row would satisfy the Iteration-6 WR-14 marker.
 
-**Not fixed. No commit.**
+**WR-07.** The `WR-14 OPEN` record stated the wrong reason. Verified against source:
+`probe_in_job` is `pub` behind `pub mod attestation`; both production callers discard the `Err`
+(`attestation.rs::classify_probe_outcome` → `Unconfirmed`; the daemon's
+`matches!(probe_in_job(process, job), Ok(true))`). So the null handle is not what makes the case
+unreachable, and the case **IS** reachable today for FFI/Python/TypeScript embedders, which see
+the mis-targeted `ClearStaleLayerResidue { layer: "JobObjectContainment" }` in a shipped build.
+Record corrected, given the ledger row it never had, and pinned by a gate that also asserts both
+swallow sites still swallow — so if either call site stops discarding, the record's own claim
+fails the build.
 
-The review's fix is "ship CR-03's plumbing (or a `--required-layers` CLI flag) so at least one
-production path can populate a non-empty tighten set", plus a discovery test asserting the gate
-call site does not pass a literal empty slice. The discovery test **cannot be added without the
-plumbing** — it would fail on the current tree.
+**PERTURBATIONS (each fails only with the fix in place):**
+- Reword the remediation to `` `icacls <path> /setintegritylevel Medium` to clear this. `` — a
+  phrasing the OLD needle permitted → FAILS.
+- Restore the SPEC's prescriptive WR-17 text → **both** SPEC gates FAIL.
+- Re-insert the table-terminating blank line → the ledger gate FAILS naming **both** open markers.
+- Delete only the Iteration-6 WR-14 row, leaving the Iteration-5 WR-14 row as a decoy → the ledger
+  gate still FAILS on WR-14.
+- Restore "requires a null job handle" → the WR-07 record gate FAILS.
 
-Carrying `MachineEgressPolicy` to `spawn_windows_child` is the step the SPEC's own RF-13 row
-already records as an **open operator decision**, requiring "acceptance that a fleet registry key
-can then refuse launches". Wiring it would take that decision on the operator's behalf and could
-start aborting launches on any machine with the key configured. Adding a `--required-layers` flag
-is a new feature, not a review fix.
+**Two-direction:** no runtime behaviour changes. `error.rs` is comment-only (the `remediation()`
+match arm is untouched); `main.rs`'s change is inside `#[cfg(test)]`; the SPEC is a document.
+Nothing new is exposed, nothing new is denied at runtime — only the build denies more.
 
-**What CR-03 already removed:** the *dangerous* half. The parser no longer discards the value, so
-the eventual plumbing cannot silently pass an empty slice while looking wired.
+---
 
-**Fail direction:** tightening only ever ADDS aborts, so an unreachable tighten path is dead code
-plus unexercised-fix risk (WR-29's `NotApplicable`-abort fix is pinned only by unit tests against
-synthetic rows) — not a fail-open.
+### WR-05: stale line citations across the registry surface
 
-### WR-14: `ClearStaleLayerResidue` fires for causes that are not residue
+**Files:** `layer_registry.rs`, `tests/layer_registry_meta_test.rs`,
+`tests/layer_force_unavailable.rs`, `tests/layer_registry_selfcheck.rs` · **Commit:** `06be2ae6`
 
-**Commit:** `730ddd2e` (hazard recorded, not fixed)
+31 raw `file.rs:<line>` citations, none inside a `call_sites` array and therefore outside every
+gate. Every one I re-resolved was wrong, matching the reviewer's sample:
 
-`remediation()` returns `ClearStaleLayerResidue` for every `LayerAttestationFailed`, including
-three cause classes with nothing stale to clear. **All three are unreachable in a shipped build
-today:** the `layer-fault-injection` seams are compiled out of default builds;
-`probe_in_job`'s null-job refusal needs a handle no production caller passes; and the
-operator-facing one (an unrecognized required-layer name, where `layer` is an admin's typo)
-cannot fire while both tighten inputs at the launch gate are hardcoded empty slices — i.e. it
-becomes reachable exactly when **WR-12**'s plumbing lands.
+| Citation | Claimed | Actually |
+|---|---|---|
+| `network.rs:1500` | `select_network_backend` | a `Setup` error string; real fn `:1618` |
+| `launch.rs:2236` | `verify_broker_authenticode` | real fn `:2666` |
+| `launch.rs:2190` | `is_dev_build_layout` | real fn `:2620` |
+| `launch.rs:375` | containment assign | real fn `:404` |
+| `launch.rs:1620` | the `RestrictedToken` seam | that seam is in `restricted_token.rs` |
+| `mod.rs:449/462/486` | guard construction order | doc/comment lines |
 
-The real fix needs a discriminator the library can see (a `kind` field on the variant plus a
-`NonoRemediation::CheckRequiredLayersPolicy`), because `crates/nono` is policy-free and must not
-learn `LayerId` names. That is a public-API shape change rippling through ~20 construction sites,
-~15 destructuring test patterns and the C FFI — too large to bundle into a review-fix pass
-without its own review.
+All 31 converted to `file.rs::Symbol` form, each resolved by reading the definition rather than
+trusting the prose. Two gates close the class, since narrowing is the fail-OPEN direction:
 
-Recorded in `error.rs` as a greppable `WR-14 OPEN` block that enumerates the three classes, notes
-their unreachability, states **"THIS ARM MUST BE FIXED IN THE SAME CHANGE"** as WR-12's plumbing,
-and records that `render_error_for_operator`'s `_` arm must not be the place that decides.
+- `no_line_number_citations_remain_in_the_registry_surface` rejects the raw form outright. It
+  carries a **detector self-test** (must find both the single-line and range forms; must NOT flag
+  `launch.rs::verify_broker_authenticode` or a path-qualified symbol form), so a broken matcher
+  cannot report a clean surface.
+- `every_registry_surface_symbol_citation_resolves` content-verifies every `file.rs::Symbol`
+  anywhere in those files — the rule the SPEC already gets — with a `checked >= 20` floor.
+
+**PERTURBATIONS:** revert one citation to `launch.rs:2134-2137` → the raw-form gate FAILS; rename
+a cited symbol → the resolution gate FAILS naming file and symbol.
+
+**Two-direction:** comments, doc comments and test code only. No runtime path, output, file or
+wire format changes.
+
+---
+
+### WR-06: the literal extractor silently dropped char-literal lines
+
+**File:** `crates/nono-cli/src/output.rs` · **Commit:** `60352cf9`
+
+`string_literals` documented itself as needing no char-literal handling "because the files it is
+pointed at contain neither". `output.rs` is one of those files and contains `else if c == '"' {`
+twice — inside `string_literals` itself. Char literals are now consumed with a **lookahead**: a
+blind `'` opener would consume from a lifetime (`&'a str`) to the next `'` anywhere on the line,
+trading one false negative for a worse one. Unterminated (`\`-continued) literals are still not
+pushed, deliberately, so this does not quietly alter what the gate covers. Adds a **per-file
+floor** (25) alongside the global 500 — a global floor cannot notice one file going quiet, which
+is exactly how this hid.
+
+**PERTURBATION (the decisive one):** injected
+`let _wr06_probe = if 'x' == '"' { "collapsed    run here" } else { "" };` — a real collapsed run
+on a line that also carries char literals. With the fixed extractor the gate **FAILS**. With the
+extractor reverted to the naive version and the **same probe still present**, the gate **PASSES**.
+The false negative is demonstrated, not argued. The extractor self-test also FAILS under the naive
+version.
+
+**Two-direction:** test-only. Denies more; exposes nothing.
+
+---
+
+### (Not a review finding) Stale warm-path record left by WR-04
+
+**Files:** `output.rs`, SPEC · **Commit:** `860d4772`
+
+Found while auditing the marker surface. WR-04 changed the warm dedup check from `path.exists()`
+to `read_to_string` + content comparison, and CR-01 made that content a digest — but three records
+still described it as a bare stat: the latency test's doc, the figure it prints, and the SPEC's
+D-24 latency table row. The SPEC also carried **74.8µs** as the warm cost, measured before the
+content check existed; replaced with the mechanism plus a re-measured range (1.2–20.6ms, this
+host, 2026-08-14), with the superseded figure called out rather than quietly deleted.
+
+Exactly the class this review keeps finding: a record that outlived the code it describes, in a
+document an operator reads as a contract.
+
+---
+
+## Verification
+
+All gates run **at final HEAD** (`860d4772`).
+
+| Gate | Result |
+|---|---|
+| `cargo fmt --all -- --check` | **PASS** |
+| Windows `cargo clippy --workspace --all-targets --all-features -- -D warnings -D clippy::unwrap_used` | **PASS** (exit 0) |
+| `cross clippy --workspace --target x86_64-unknown-linux-gnu -- -D warnings -D clippy::unwrap_used` | **PASS** (exit 0), 15m07s |
+| `cargo-zigbuild clippy --workspace --target x86_64-apple-darwin -- -D warnings -D clippy::unwrap_used` (`SDKROOT` unset) | **PASS** (exit 0) |
+| `cargo test -p nono-sandbox-cli --bin nono` | 1657 passed, 14 failed |
+| `cargo test -p nono-sandbox-cli --test layer_registry_selfcheck` | 18 passed |
+| `cargo test -p nono-sandbox-cli --test layer_registry_meta_test` | 10 passed |
+| `cargo test --workspace` (at `f55bd174`) | 1657 passed, 14 failed |
+
+Both cross-target gates were run **locally and to completion** — no PARTIAL→CI fallback. This was
+required: the change set touches `exec_strategy_windows/` (`#[path]`-mapped to `exec_strategy`)
+and `crates/nono/src/error.rs`, which carries `#[cfg(target_os = "linux")]` blocks. They were run
+twice: once at `f55bd174` and again at final HEAD after the docs-only commit.
+
+### Regression baseline
+
+The 14 failures are the known Windows-host baseline, **identical by name** to those recorded at
+the phase base `334530af` in the round-2 report (`config::tests::*` HOME/USERPROFILE env races,
+`protected_paths::tests::*`, `profile_cmd::tests::test_init_allowed_when_pack_has_same_short_name`,
+`audit_session::tests::discover_sessions_does_not_warn_when_legacy_audit_root_is_empty`,
+`exec_strategy::labels_guard::tests::non_owned_path_with_a_foreign_label_is_exempt_not_a_coverage_gap`,
+`exec_strategy::launch::broker_dispatch_tests::broker_launch_assigns_child_to_job_object`,
+`exec_strategy::launch::write_deny_low_il_broker_no_pty_tests::write_deny_low_il_broker_no_pty_prevents_child_write_to_medium_il_file`).
+
+| | Passed | Failed |
+|---|---|---|
+| Phase base `334530af` (recorded round 2) | 1641 | 14 |
+| Round-2 HEAD (recorded round 2) | 1646 | 14 |
+| This branch | **1657** | **14** |
+
+**Zero regressions; +11 tests over round 2.** The one intermediate 15-failure run is documented
+under CR-01 and was closed, not explained away.
+
+---
+
+## Recommend human confirmation
+
+**CR-01 is the only runtime-behaviour change in this round.** Everything else is tests, comments,
+assertions or documents. Two things deserve a human read:
+
+1. **The disclosure argument.** The claim is that the marker's content adds *zero* marginal
+   disclosure because it is a deterministic function of the same input that already determines the
+   filename. That argument depends on the filename remaining a digest of `dedup_key` — if a future
+   change makes the filename opaque while leaving the content derived, the content becomes the
+   weaker link. Nothing currently gates that coupling.
+2. **Unforgeability remains open, by structure not by oversight.** Documented in
+   `print_attestation_downgrade_banner`'s doc. If the operator wants a tamper-proof
+   "already announced" record, it needs a design decision (hardening the sessions subtree — which
+   only helps the Low-IL arms — or moving dedup state off the filesystem). I did not take that
+   decision.
+
+---
+
+## Carry-forward (unchanged from round 2, plus one)
+
+1. **CR-02 defect 1** — operator decision: does the daemon arm consume the registry? (Options A/B
+   costed in the SPEC ledger.)
+2. **WR-12 + WR-14 are one change.** Landing the machine-policy plumbing makes WR-14's
+   mis-targeted remediation reachable. Both markers now say so, and the SPEC has a WR-14 row.
+3. **WR-10** — operator decision: accept the lockstep two-binary rename, or keep one `LayerId`
+   covering two kernel objects with the divergence documented.
+4. **NEW — WR-14 is reachable for embedders today.** Not only "when WR-12 lands":
+   `nono::attestation::probe_in_job` is public API, and an embedder calling it with a null job
+   handle receives the mis-targeted remediation now. This raises WR-14's priority relative to the
+   round-2 record.
 
 ---
 
@@ -438,37 +408,16 @@ and records that `render_error_for_operator`'s `_` arm must not be the place tha
 
 | # | Hash | Finding |
 |---|---|---|
-| 1 | `c34f569e` | WR-01 |
-| 2 | `5590a8fe` | CR-01 |
-| 3 | `1400d77a` | WR-06 (+ CR-01 `production()` correction) |
-| 4 | `ec78f8be` | CR-03 |
-| 5 | `9c2640c5` | CR-02 (partial) |
-| 6 | `b6cf447f` | WR-03 |
-| 7 | `6b2b47e8` | WR-05 |
-| 8 | `65691203` | WR-07 |
-| 9 | `634f2a9e` | WR-11 |
-| 10 | `e2cfe36e` | WR-04 |
-| 11 | `786a7887` | WR-08 |
-| 12 | `4e4a7800` | WR-13 |
-| 13 | `730ddd2e` | WR-14 (hazard recorded) |
-| 14 | `63e18a80` | WR-10 (recorded) |
-| 15 | `7a8fcd36` | self-inflicted regression repair |
-| 16 | `b8a4e5fc` | WR-09 |
-| 17 | `8cfde970` | WR-02 |
-
----
-
-## Carry-forward for the next planning pass
-
-1. **CR-02 defect 1** — operator decision: does the daemon arm consume the registry? (Options A/B
-   costed above and in the SPEC ledger.)
-2. **WR-12 + WR-14 are one change.** Landing the machine-policy plumbing makes WR-14's
-   mis-targeted remediation reachable. Both markers (`WR-14 OPEN`, the SPEC's RF-13 row) say so.
-3. **WR-10** — operator decision: accept the lockstep two-binary rename, or keep one `LayerId`
-   covering two kernel objects with the divergence documented.
+| 1 | `15215d37` | CR-01 |
+| 2 | `61e4ea40` | WR-01 |
+| 3 | `60352cf9` | WR-06 |
+| 4 | `84e48ffe` | WR-03 + WR-02 + WR-04 + WR-07 |
+| 5 | `06be2ae6` | WR-05 |
+| 6 | `f55bd174` | CR-01 (test-contention repair) |
+| 7 | `860d4772` | stale warm-path record (not a review finding) |
 
 ---
 
 _Fixed: 2026-08-14_
 _Fixer: Claude (gsd-code-fixer)_
-_Iteration: 6_
+_Iteration: 2 (round 3)_
