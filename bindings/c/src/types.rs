@@ -208,6 +208,14 @@ pub enum NonoDiagnosticCode {
     TrustVerificationFailed = 12,
     IoError = 13,
     Cancelled = 14,
+    /// Phase 117 review WR-02. `nono::NonoDiagnosticCode::LayerAttestationFailed`
+    /// exists specifically so operators can distinguish a startup
+    /// self-attestation failure from generic misconfiguration (D-22), and
+    /// every C/Python/TypeScript consumer saw `Other = 99` for exactly that
+    /// case — because `nono::NonoDiagnosticCode` is `#[non_exhaustive]`, the
+    /// `From` impl's wildcard is mandatory and no compile error could ever
+    /// surface the omission.
+    LayerAttestationFailed = 15,
     Other = 99,
 }
 
@@ -233,8 +241,49 @@ impl From<nono::NonoDiagnosticCode> for NonoDiagnosticCode {
             nono::NonoDiagnosticCode::TrustVerificationFailed => Self::TrustVerificationFailed,
             nono::NonoDiagnosticCode::IoError => Self::IoError,
             nono::NonoDiagnosticCode::Cancelled => Self::Cancelled,
+            nono::NonoDiagnosticCode::LayerAttestationFailed => Self::LayerAttestationFailed,
             nono::NonoDiagnosticCode::Other => Self::Other,
+            // WR-02: `nono::NonoDiagnosticCode` is `#[non_exhaustive]`, so
+            // this wildcard is required by Rust and NO compile error will
+            // ever surface a future addition here. Every code added upstream
+            // silently becomes `Other = 99` for FFI consumers until someone
+            // adds an arm — which is exactly how `LayerAttestationFailed`
+            // was lost. `layer_attestation_failed_is_not_collapsed_to_other`
+            // covers this one; a new code needs its own arm AND its own
+            // round-trip assertion.
             _ => Self::Other,
         }
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_code_tests {
+    use super::NonoDiagnosticCode;
+
+    /// WR-02: the code that exists to be DISTINGUISHABLE must not arrive at
+    /// an FFI consumer as the catch-all.
+    #[test]
+    fn layer_attestation_failed_is_not_collapsed_to_other() {
+        let mapped = NonoDiagnosticCode::from(nono::NonoDiagnosticCode::LayerAttestationFailed);
+        assert_ne!(
+            mapped,
+            NonoDiagnosticCode::Other,
+            "LayerAttestationFailed exists so operators can tell an attestation failure from \
+             generic misconfiguration (D-22); collapsing it to Other = 99 destroys exactly \
+             that distinction for every C/Python/TypeScript consumer"
+        );
+        assert_eq!(mapped, NonoDiagnosticCode::LayerAttestationFailed);
+        assert_eq!(mapped as i32, 15, "the C ABI value must be stable");
+    }
+
+    /// Control: the mapping is not simply "never Other" — a genuinely
+    /// unclassified code must still arrive as `Other`, or the assertion
+    /// above would pass for the wrong reason.
+    #[test]
+    fn other_still_maps_to_other() {
+        assert_eq!(
+            NonoDiagnosticCode::from(nono::NonoDiagnosticCode::Other),
+            NonoDiagnosticCode::Other
+        );
     }
 }

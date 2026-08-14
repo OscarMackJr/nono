@@ -134,6 +134,16 @@ typedef enum NonoDiagnosticCode {
     NONO_DIAGNOSTIC_CODE_TRUST_VERIFICATION_FAILED = 12,
     NONO_DIAGNOSTIC_CODE_IO_ERROR = 13,
     NONO_DIAGNOSTIC_CODE_CANCELLED = 14,
+    /**
+     * Phase 117 review WR-02. `nono::NonoDiagnosticCode::LayerAttestationFailed`
+     * exists specifically so operators can distinguish a startup
+     * self-attestation failure from generic misconfiguration (D-22), and
+     * every C/Python/TypeScript consumer saw `Other = 99` for exactly that
+     * case — because `nono::NonoDiagnosticCode` is `#[non_exhaustive]`, the
+     * `From` impl's wildcard is mandatory and no compile error could ever
+     * surface the omission.
+     */
+    NONO_DIAGNOSTIC_CODE_LAYER_ATTESTATION_FAILED = 15,
     NONO_DIAGNOSTIC_CODE_OTHER = 99,
 } NonoDiagnosticCode;
 
