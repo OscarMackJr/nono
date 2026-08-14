@@ -440,6 +440,24 @@ fn session_id_is_safe_path_component(session_id: &str) -> bool {
         && !RESERVED.iter().any(|r| session_id.eq_ignore_ascii_case(r))
 }
 
+/// Serializes the tests that drive the REAL downgrade-banner writer against
+/// the REAL sessions root (`%LOCALAPPDATA%\nono\sessions`).
+///
+/// Two such tests now exist in this binary — `output.rs`'s cold/warm latency
+/// measurement and `launch.rs`'s CR-01/D-28 disclosure scan — and they live in
+/// different modules, so cargo's harness runs them on different threads. Adding
+/// the second one made the first flaky: measured alone the warm path is
+/// 1.6-15.7ms across 8 runs, but concurrently with a `create_dir_all` +
+/// `remove_dir_all` under the same root it was observed at 235ms, tripping the
+/// 100ms sanity bound. That is filesystem contention in the test harness, not a
+/// latency regression in the code under test — but a flaky gate is a gate
+/// people learn to ignore, so it is removed rather than explained.
+///
+/// Takes the lock through poisoning (`into_inner`): a panic in one of these
+/// tests must not convert every other run into a second, unrelated failure.
+#[cfg(all(test, target_os = "windows"))]
+pub(crate) static SESSIONS_ROOT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Color for [`print_attestation_downgrade_banner`]'s line — yellow/warning
 /// when `downgraded_count > 0`, else the neutral subtext color (mirrors
 /// `scope_status_color`'s shape, `crates/nono-cli/src/output.rs:503`).
@@ -1843,6 +1861,12 @@ mod tests {
     #[test]
     fn attestation_downgrade_banner_cold_vs_warm_dedup_marker_latency() {
         use super::{attestation_downgrade_marker_path, print_attestation_downgrade_banner};
+
+        // Serialize against the other test that writes under the real sessions
+        // root; see SESSIONS_ROOT_TEST_LOCK's doc for the measured contention.
+        let _guard = super::SESSIONS_ROOT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let session_id = format!(
             "test-latency-{}-{}",

@@ -4593,6 +4593,13 @@ mod attestation_gate_tests {
     fn downgrade_marker_files_never_contain_a_layer_name() {
         use crate::exec_strategy::attestation_downgrade_event::DowngradeDetailChannel;
 
+        // Serialize against `output.rs`'s cold/warm latency measurement, which
+        // writes under the same real sessions root; see
+        // `crate::output::SESSIONS_ROOT_TEST_LOCK`.
+        let _guard = crate::output::SESSIONS_ROOT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
         fn collect_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             let Ok(entries) = std::fs::read_dir(dir) else {
                 return;
