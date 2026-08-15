@@ -2391,14 +2391,14 @@ mod tests {
             src: &str,
         ) -> (
             Vec<(usize, String)>,
-            crate::cfg_test_regions::ProductionScan<'_>,
+            crate::cfg_test_regions::ProductionScan,
         ) {
             let scan = scan_production(src);
             let mut out: Vec<(usize, String)> = Vec::new();
             let mut i = 0usize;
             while i < scan.lines.len() {
-                let (start, first) = scan.lines[i];
-                let mut merged = first.to_string();
+                let (start, first) = (scan.lines[i].0, scan.lines[i].1.clone());
+                let mut merged = first;
                 // Continuation lines are contiguous in the source AND kept by
                 // the scan (they are neither comments nor cfg attributes), so
                 // requiring index contiguity here cannot re-admit skipped text.
@@ -2408,7 +2408,7 @@ mod tests {
                 {
                     merged.truncate(merged.trim_end().len() - 1);
                     i += 1;
-                    merged.push_str(scan.lines[i].1);
+                    merged.push_str(&scan.lines[i].1);
                 }
                 out.push((
                     start,

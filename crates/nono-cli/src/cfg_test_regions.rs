@@ -60,8 +60,8 @@
 //! module opened no region, and its whole body was classified as production —
 //! WR-01's failure mode reopened by a third intervening token.
 //!
-//! Both rules are now the same one, [`line_has_code`], defined **positively**:
-//! a line contributes code unless everything on it is whitespace or comment.
+//! Both rules are now the same one, [`code_text`], defined **positively**:
+//! code is everything on a line that is not comment.
 //! Rust's block comments nest, so the state carried between lines is a depth
 //! counter rather than a flag, and it is carried through region bodies too (so
 //! a `}` inside a block comment cannot close a region). The pending window no
@@ -73,6 +73,33 @@
 //! — the over-claim direction again — so it is recorded in
 //! [`ProductionScan::unterminated_block_comment`] and asserted alongside
 //! [`ProductionScan::unclosed_regions`].
+//!
+//! # Round-8 WR-02: the comment rule was still a first-two-bytes test
+//!
+//! [`code_text`]'s predecessor only entered block-comment state from a line
+//! whose TRIMMED text starts with `/*`, and it returned a yes/no rather than
+//! text. Two shapes therefore put comment prose into the production half:
+//!
+//! ```text
+//! let x = 1; /* NOTE: this mentions the
+//!    Windows Application event log in prose only */
+//! ```
+//!
+//! The comment was never opened, so line 2 — pure prose naming the WR-26
+//! gate's exact needle — was ordinary code to every consumer; and line 1 was
+//! kept RAW, comment and all, so even closing that gap would have left
+//! `let x = 1; /* DaclAncestorTraverse */` able to satisfy the daemon gate.
+//! Both directions are invisible to all four checks in
+//! [`ProductionScan::assert_split_is_correct`], and the first is **fail-open**
+//! for `layer_registry.rs`.
+//!
+//! The rule is now a lexer over the whole line, and
+//! [`ProductionScan::lines`] carries CODE TEXT rather than raw lines. Entering
+//! a comment mid-line means knowing where the literals are, so `"`, `'`, `b"`,
+//! `r"` and `r#"…"#` are lexed and their contents are code, not comment
+//! openers. The one limit retained deliberately — a comment-shaped line inside
+//! a MULTI-LINE string literal reads as a comment — is stated on [`code_text`]
+//! together with why closing it would be worse.
 //!
 //! # Round-4 WR-01: the window was narrower than the class it documented
 //!
@@ -437,79 +464,227 @@ pub fn is_test_attr(trimmed: &str) -> bool {
     last_segment == "test" || matches!(head, "rstest" | "test_case")
 }
 
-/// Does `line` contribute any CODE, given the block-comment nesting `depth`
-/// carried in from the line above? `depth` is updated for the next line.
+/// Is `b` a byte that can appear inside a Rust identifier?
 ///
-/// This is the module's ONE comment rule (round-6 WR-02). It is defined
-/// positively — a line contributes code unless everything on it is whitespace
-/// or comment — so both callers that need it (the whole-file scan and the
-/// pending-attribute window) ask the same question instead of each carrying a
-/// list of comment renderings.
+/// Used to tell the literal PREFIXES `r`/`b`/`br` from the last letter of an
+/// ordinary identifier: the `r` in `for` opens no raw string.
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Byte length of the char literal starting at `start`, or `None` when what is
+/// there is not one.
+///
+/// The case this exists for is the LIFETIME. `fn f<'a>(x: &'a str)` has four
+/// `'` on one line and none of them opens a literal; reading the first as one
+/// would consume up to the next `'` and, with it, any `/*` in between —
+/// silently keeping a comment's continuation lines as code, which is the
+/// direction round-8 WR-02 is about.
+fn char_literal_len(s: &[u8], start: usize) -> Option<usize> {
+    let mut j = start.saturating_add(1);
+    if s.get(j) == Some(&b'\\') {
+        // `'\n'`, `'\''`, `'\u{1F600}'` — all short, and all closed on the
+        // same line.
+        j = j.saturating_add(1);
+        let limit = j.saturating_add(10).min(s.len());
+        while j < limit {
+            if s[j] == b'\'' {
+                return Some(j.saturating_add(1).saturating_sub(start));
+            }
+            j = j.saturating_add(1);
+        }
+        return None;
+    }
+    let rest = std::str::from_utf8(s.get(j..)?).ok()?;
+    let c = rest.chars().next()?;
+    let end = j.saturating_add(c.len_utf8());
+    (s.get(end) == Some(&b'\'')).then(|| end.saturating_add(1).saturating_sub(start))
+}
+
+/// Byte length of the string, byte-string, raw-string or char literal starting
+/// at `start` in `line`, or `None` when no literal starts there.
+///
+/// An UNTERMINATED literal reports the rest of the line. A Rust string may
+/// span lines, and consuming the remainder is what keeps a `/*` or `//` inside
+/// one from being lexed as a comment opener without carrying string state
+/// between lines — see the limits on [`code_text`].
+fn literal_len(line: &str, start: usize) -> Option<usize> {
+    let s = line.as_bytes();
+    let prev_is_ident = start
+        .checked_sub(1)
+        .and_then(|p| s.get(p))
+        .is_some_and(|c| is_ident_byte(*c));
+    let mut i = start;
+    let mut hashes = 0usize;
+    let mut raw = false;
+    if !prev_is_ident {
+        // `b"…"` / `br#"…"#`
+        if s.get(i) == Some(&b'b') && matches!(s.get(i.saturating_add(1)), Some(&b'"' | &b'r')) {
+            i = i.saturating_add(1);
+        }
+        // `r"…"` / `r#"…"#` — the `#` count must be matched by the terminator,
+        // which is the whole point of a raw string: `r"C:\x"` has no escapes.
+        if s.get(i) == Some(&b'r') {
+            let mut j = i.saturating_add(1);
+            while s.get(j) == Some(&b'#') {
+                hashes = hashes.saturating_add(1);
+                j = j.saturating_add(1);
+            }
+            if s.get(j) == Some(&b'"') {
+                raw = true;
+                i = j;
+            }
+        }
+    }
+    match s.get(i) {
+        Some(&b'"') => {
+            let mut j = i.saturating_add(1);
+            while j < s.len() {
+                if raw {
+                    if s[j] == b'"' {
+                        let mut k = j.saturating_add(1);
+                        let mut seen = 0usize;
+                        while seen < hashes && s.get(k) == Some(&b'#') {
+                            seen = seen.saturating_add(1);
+                            k = k.saturating_add(1);
+                        }
+                        if seen == hashes {
+                            return Some(k.saturating_sub(start));
+                        }
+                    }
+                    j = j.saturating_add(1);
+                } else {
+                    match s[j] {
+                        b'\\' => j = j.saturating_add(2),
+                        b'"' => return Some(j.saturating_add(1).saturating_sub(start)),
+                        _ => j = j.saturating_add(1),
+                    }
+                }
+            }
+            Some(s.len().saturating_sub(start))
+        }
+        // Only when the literal starts exactly here: a `b`/`r` prefix followed
+        // by `'` is not a byte-char literal opener at THIS position (`b'x'` is
+        // reached one byte later, at the quote itself).
+        Some(&b'\'') if i == start => char_literal_len(s, start),
+        _ => None,
+    }
+}
+
+/// The CODE text of `line`, with comments removed, given the block-comment
+/// nesting `depth` carried in from the line above. `depth` is updated for the
+/// next line.
+///
+/// This is the module's ONE comment rule (round-6 WR-02, widened by round-8
+/// WR-02). It is defined positively — code is everything that is not comment —
+/// so every caller that needs it (the whole-file scan, the pending-attribute
+/// window, the attribute joiner, the `#[test]`-leak check) asks the same
+/// question instead of each carrying its own list of comment renderings.
 ///
 /// Rust's block comments NEST, so the carried state is a depth counter and not
 /// a flag.
 ///
-/// # Deliberate limit
+/// # Round-8 WR-02: comment state is entered MID-LINE, and the result is text
 ///
-/// Block-comment state is only ENTERED from a line whose trimmed text starts
-/// with `/*`, never mid-line. That keeps this free of string- and
-/// char-literal lexing (`let s = "/* not a comment */";` cannot open a
-/// comment), at the cost of one accepted false drop: a comment-shaped line
-/// inside a multi-line raw string literal is treated as a comment. The
-/// pre-existing `//` rule has always had exactly that limit; this extends it
-/// symmetrically rather than adding a new class.
-fn line_has_code(line: &str, depth: &mut usize) -> bool {
-    let trimmed = line.trim();
-    if *depth == 0 {
-        if trimmed.is_empty() || trimmed.starts_with("//") {
-            return false;
-        }
-        if !trimmed.starts_with("/*") {
-            return true;
-        }
-    }
-    let bytes = trimmed.as_bytes();
-    let mut idx: usize = 0;
-    while idx < bytes.len() {
+/// The previous rule only entered block-comment state from a line whose
+/// TRIMMED text starts with `/*`. Two things followed, and the doc named only
+/// the first:
+///
+/// 1. false DROP — a comment-shaped line inside a multi-line string literal is
+///    treated as a comment. Loud for a needle-must-be-present gate.
+/// 2. false KEEP — `let x = 1; /* …` never opened a comment at all, so every
+///    continuation line of that comment was ordinary code to every consumer.
+///    Comment prose reached the production half, which is **fail-open** for
+///    `layer_registry.rs`'s daemon gate (a `/* … DaclAncestorTraverse … */`
+///    satisfies it) and a false failure for `output.rs`'s WR-26 gate. No check
+///    in [`ProductionScan::assert_split_is_correct`] can see either.
+///
+/// (2) is closed by lexing the whole line rather than sniffing its first two
+/// bytes, and by returning the code TEXT rather than a yes/no: a trailing
+/// comment on a code line used to travel into the production half attached to
+/// its line, so `let x = 1; /* DaclAncestorTraverse */` satisfied the daemon
+/// gate on the opening line even once its continuation lines were dropped.
+/// The production half is now code, in the sense this module's doc has claimed
+/// since it was written.
+///
+/// Entering mid-line requires knowing where the literals are, so `"`, `'`,
+/// `b"`, `r"` and `r#"…"#` are lexed (see [`literal_len`]) and their contents
+/// are code, not comment openers. `'` is only a literal when it CLOSES like
+/// one, so a lifetime cannot swallow the rest of a line.
+///
+/// # Deliberate limits, in both directions
+///
+/// String state is NOT carried between lines. A string literal left open at
+/// end of line consumes the rest of that line, but the next line is lexed from
+/// depth `0` again, so a `//`- or `/*`-shaped line INSIDE a multi-line string
+/// is read as a comment — limit (1) above, retained deliberately. Carrying
+/// string state would let one mis-lexed quote swallow the rest of the file in
+/// the silent over-claim direction, and unlike
+/// [`ProductionScan::unterminated_block_comment`] there is no cheap check that
+/// can see it.
+fn code_text(line: &str, depth: &mut usize) -> String {
+    let s = line.as_bytes();
+    let mut out = String::new();
+    let mut i = 0usize;
+    // `Some(start)` while collecting code; `None` while inside a comment.
+    let mut seg: Option<usize> = (*depth == 0).then_some(0);
+    let mut stop = s.len();
+    while i < s.len() {
         if *depth > 0 {
-            // Inside a block comment: only `*/` and a nested `/*` matter.
-            if bytes[idx] == b'*' && bytes.get(idx.saturating_add(1)) == Some(&b'/') {
+            // Inside a block comment nothing else is lexical — not a string,
+            // not a char literal. Only `/*` and `*/` matter, and they nest.
+            if s[i] == b'*' && s.get(i.saturating_add(1)) == Some(&b'/') {
                 *depth = depth.saturating_sub(1);
-                idx = idx.saturating_add(2);
-            } else if bytes[idx] == b'/' && bytes.get(idx.saturating_add(1)) == Some(&b'*') {
+                i = i.saturating_add(2);
+                if *depth == 0 {
+                    seg = Some(i);
+                }
+            } else if s[i] == b'/' && s.get(i.saturating_add(1)) == Some(&b'*') {
                 *depth = depth.saturating_add(1);
-                idx = idx.saturating_add(2);
+                i = i.saturating_add(2);
             } else {
-                idx = idx.saturating_add(1);
+                i = i.saturating_add(1);
             }
             continue;
         }
-        // Depth just returned to zero, so `idx` sits on a char boundary
-        // (immediately after a `*/`). Whatever follows decides the line.
-        let Some(tail) = trimmed.get(idx..) else {
-            return false;
-        };
-        let rest = tail.trim_start();
-        if rest.is_empty() || rest.starts_with("//") {
-            return false;
+        if s[i] == b'/' && s.get(i.saturating_add(1)) == Some(&b'/') {
+            stop = i;
+            break;
         }
-        if !rest.starts_with("/*") {
-            return true;
+        if s[i] == b'/' && s.get(i.saturating_add(1)) == Some(&b'*') {
+            if let Some(start) = seg.take() {
+                out.push_str(line.get(start..i).unwrap_or_default());
+            }
+            *depth = 1;
+            i = i.saturating_add(2);
+            continue;
         }
-        *depth = 1;
-        idx = idx
-            .saturating_add(tail.len().saturating_sub(rest.len()))
-            .saturating_add(2);
+        if matches!(s[i], b'"' | b'\'' | b'r' | b'b') {
+            if let Some(len) = literal_len(line, i) {
+                i = i.saturating_add(len);
+                continue;
+            }
+        }
+        i = i.saturating_add(1);
     }
-    false
+    if let Some(start) = seg {
+        out.push_str(line.get(start..stop).unwrap_or_default());
+    }
+    out
 }
 
 /// The production half of a source file, plus the evidence a caller needs to
 /// prove the split actually happened.
-pub struct ProductionScan<'a> {
-    /// Production lines as `(zero-based source index, raw line)`. Comments and
-    /// `#[cfg(test)]` module bodies are absent.
-    pub lines: Vec<(usize, &'a str)>,
+pub struct ProductionScan {
+    /// Production lines as `(zero-based source index, CODE text)`. Comments —
+    /// whole-line, trailing, and block, wherever they open — and
+    /// `#[cfg(test)]`-gated items are absent.
+    ///
+    /// Round-8 WR-02: this used to be the RAW line, so a trailing comment
+    /// travelled into the production half attached to its code. That let a
+    /// comment naming the thing a gate hunts for satisfy the gate, which is
+    /// the failure this module's doc opens by promising to prevent.
+    pub lines: Vec<(usize, String)>,
     /// Skipped `#[cfg(test)]` module regions as `(first_line, last_line)`,
     /// zero-based and inclusive of the `mod` line.
     pub skipped_regions: Vec<(usize, usize)>,
@@ -532,7 +707,7 @@ pub struct ProductionScan<'a> {
     pub unterminated_block_comment: Option<usize>,
 }
 
-impl ProductionScan<'_> {
+impl ProductionScan {
     /// Total source lines dropped as `#[cfg(test)]` module bodies.
     ///
     /// **This is a floor, never a correctness check.** It is monotone in the
@@ -642,7 +817,12 @@ fn attribute_span(lines: &[&str], idx: usize) -> (String, usize) {
     let mut depth: i32 = 0;
     let mut span = 0usize;
     while idx + span < lines.len() && span < MAX_SPAN {
-        let piece = lines[idx + span].trim();
+        // Comments first (round-8 WR-02): brackets inside a trailing comment
+        // are not the attribute's brackets, and counting them extended the
+        // span past the attribute — `#[cfg(test)] // opens the tests (see …`
+        // would have swallowed the gated item's own line.
+        let piece_owned = code_text(lines[idx + span], &mut 0);
+        let piece = piece_owned.trim();
         if !joined.is_empty() {
             joined.push(' ');
         }
@@ -693,24 +873,25 @@ struct CommentState {
 }
 
 impl CommentState {
-    /// Feed the zero-based line `idx`; returns whether it contributes code.
-    fn feed(&mut self, line: &str, idx: usize) -> bool {
+    /// Feed the zero-based line `idx`; returns its CODE text, or `None` when
+    /// the line contributes none.
+    fn feed(&mut self, line: &str, idx: usize) -> Option<String> {
         let was_open = self.depth > 0;
-        let has_code = line_has_code(line, &mut self.depth);
+        let code = code_text(line, &mut self.depth);
         if self.depth == 0 {
             self.opened_at = None;
         } else if !was_open {
             self.opened_at = Some(idx);
         }
-        has_code
+        (!code.trim().is_empty()).then_some(code)
     }
 }
 
 /// Split `src` into its production half per the rule in this module's doc.
 #[must_use]
-pub fn scan_production(src: &str) -> ProductionScan<'_> {
+pub fn scan_production(src: &str) -> ProductionScan {
     let lines: Vec<&str> = src.lines().collect();
-    let mut out: Vec<(usize, &str)> = Vec::new();
+    let mut out: Vec<(usize, String)> = Vec::new();
     let mut skipped_regions: Vec<(usize, usize)> = Vec::new();
     let mut unclosed_regions: Vec<usize> = Vec::new();
     let mut idx = 0usize;
@@ -723,30 +904,43 @@ pub fn scan_production(src: &str) -> ProductionScan<'_> {
         // text — and a non-code line never ENDS a pending attribute window,
         // because between an attribute and the item it gates Rust permits
         // attributes, comments and blank lines and nothing else.
-        if !comments.feed(lines[idx], idx) {
+        let Some(code) = comments.feed(lines[idx], idx) else {
             idx += 1;
             continue;
-        }
+        };
 
-        let t = lines[idx].trim();
+        let t = code.trim();
 
         // Attributes are handled first and as a unit, because a `cfg`
         // attribute may span several lines (WR-01 shape 3).
         if t.starts_with("#[") {
             let (attr, span) = attribute_span(&lines, idx);
-            if is_cfg_test_attr(&attr) {
+            let end = idx.saturating_add(span).min(lines.len());
+            // A production attribute is production text — the `#[test]` leak
+            // check depends on those lines being kept. An intervening
+            // attribute inside a pending window (`#[allow(clippy::unwrap_used)]`)
+            // is consumed and the flag preserved.
+            let is_gate = is_cfg_test_attr(&attr);
+            let keep = !is_gate && !pending_test_attr;
+            if is_gate {
                 pending_test_attr = true;
-            } else if !pending_test_attr {
-                // A production attribute is production text — the `#[test]`
-                // leak check depends on those lines being kept.
-                let end = idx.saturating_add(span).min(lines.len());
-                for (k, line) in lines.iter().enumerate().take(end).skip(idx) {
-                    out.push((k, *line));
+            }
+            if keep {
+                out.push((idx, code));
+            }
+            // The attribute's remaining lines go through the SAME carried
+            // comment state, so a block comment opened inside a multi-line
+            // attribute stays coherent afterwards instead of being skipped
+            // unlexed.
+            let first_rest = idx.saturating_add(1);
+            for (k, line) in lines.iter().enumerate().take(end).skip(first_rest) {
+                if let Some(rest) = comments.feed(line, k) {
+                    if keep {
+                        out.push((k, rest));
+                    }
                 }
             }
-            // else: an intervening attribute inside a pending window
-            // (`#[allow(clippy::unwrap_used)]`) — consumed, flag preserved.
-            idx += span;
+            idx = end;
             continue;
         }
 
@@ -768,7 +962,7 @@ pub fn scan_production(src: &str) -> ProductionScan<'_> {
                     // Comment state is carried THROUGH the region body too, so
                     // it stays coherent afterwards and so a `}` sitting inside
                     // a block comment cannot close the region early.
-                    let has_code = comments.feed(lines[idx], idx);
+                    let has_code = comments.feed(lines[idx], idx).is_some();
                     if has_code && is_region_closer(lines[idx], indent) {
                         closed_at = Some(idx);
                         break;
@@ -796,7 +990,7 @@ pub fn scan_production(src: &str) -> ProductionScan<'_> {
             // production text either way, but it opens no region.
         }
 
-        out.push((idx, lines[idx]));
+        out.push((idx, code));
         idx += 1;
     }
 
@@ -945,7 +1139,7 @@ mod some_tests {
 fn production_b() {}
 ";
         let scan = scan_production(src);
-        let kept: Vec<&str> = scan.lines.iter().map(|(_, l)| *l).collect();
+        let kept: Vec<&str> = scan.lines.iter().map(|(_, l)| l.as_str()).collect();
         assert_eq!(
             kept,
             vec!["fn production_a() {}", "fn production_b() {}"],
@@ -1242,10 +1436,126 @@ fn production() {}
 ";
         let scan = scan_production(src);
         assert_eq!(
-            scan.lines.iter().map(|(_, l)| *l).collect::<Vec<_>>(),
+            scan.lines
+                .iter()
+                .map(|(_, l)| l.as_str())
+                .collect::<Vec<_>>(),
             vec!["fn production() {}"]
         );
         assert!(scan.unterminated_block_comment.is_none());
+    }
+
+    /// Round-8 WR-02: a block comment opened MID-LINE. Comment state used to
+    /// be entered only from a line whose trimmed text starts with `/*`, so
+    /// this comment was never opened at all and every continuation line of it
+    /// was ordinary code to every consumer.
+    ///
+    /// The needle below is `output.rs`'s WR-26 gate's exact one, and the
+    /// direction matters: for `layer_registry.rs`'s daemon gate — which
+    /// asserts the production half NAMES a layer — a comment kept as code is
+    /// **fail-open**. No check in `assert_split_is_correct` can see it.
+    #[test]
+    fn a_block_comment_opened_mid_line_is_comment_text() {
+        let src = "\
+let x = 1; /* NOTE: this mentions the
+   Windows Application event log in prose only */
+#[cfg(test)]
+mod t {
+    #[test]
+    fn q() {}
+}
+fn production_b() {}
+";
+        let scan = scan_production(src);
+        assert_eq!(scan.skipped_regions.len(), 1);
+        assert!(scan.leaked_test_attributes().is_empty());
+        assert!(scan.lines.iter().any(|(_, l)| l.contains("let x = 1")));
+        assert!(
+            !scan
+                .lines
+                .iter()
+                .any(|(_, l)| l.contains("Windows Application event log")),
+            "the continuation line of a mid-line block comment is comment text; keeping it \
+             lets prose satisfy a gate that hunts for that needle"
+        );
+        assert!(
+            !scan.lines.iter().any(|(_, l)| l.contains("NOTE")),
+            "and so is the tail of the line that OPENED it — the production half is code, not \
+             raw lines"
+        );
+    }
+
+    /// Round-8 WR-02: a trailing comment does not travel into the production
+    /// half attached to its code line, in either rendering.
+    ///
+    /// This is the same class one line up from the fixture above:
+    /// `let x = 1; /* DaclAncestorTraverse */` closes on its own line, so no
+    /// continuation-line rule can reach it, and the raw line satisfied the
+    /// daemon gate by itself.
+    #[test]
+    fn a_trailing_comment_is_not_production_text() {
+        let src = "\
+#[cfg(test)]
+mod t {
+    #[test]
+    fn q() {}
+}
+let a = 1; /* DaclAncestorTraverse */
+let b = 2; // DaclPackageSidGrant
+let c = \"DaclSessionSidGrant\"; // and this one IS production
+";
+        let scan = scan_production(src);
+        let kept: Vec<&str> = scan.lines.iter().map(|(_, l)| l.as_str()).collect();
+        assert!(
+            !kept.iter().any(|l| l.contains("DaclAncestorTraverse")),
+            "a closed block comment on a code line is comment text: {kept:?}"
+        );
+        assert!(
+            !kept.iter().any(|l| l.contains("DaclPackageSidGrant")),
+            "and so is a trailing `//` comment: {kept:?}"
+        );
+        assert!(
+            kept.iter().any(|l| l.contains("DaclSessionSidGrant")),
+            "non-vacuity: a STRING LITERAL naming a layer is production text and must survive, \
+             or this rule would have made every needle gate vacuous: {kept:?}"
+        );
+    }
+
+    /// Round-8 WR-02: entering a comment mid-line means knowing where the
+    /// literals are. Each of these lines contains a comment OPENER inside a
+    /// literal, and none of them opens a comment — if one did, the following
+    /// production line would silently vanish from every gate.
+    #[test]
+    fn comment_openers_inside_literals_open_nothing() {
+        for (label, opener) in [
+            ("plain string", "let s = \"/* not a comment\";"),
+            ("escaped quote", "let s = \"a\\\"/* still not\";"),
+            ("raw string", "let s = r\"/* not a comment\";"),
+            ("hashed raw string", "let s = r#\"/* \"not\" a comment\"#;"),
+            ("byte string", "let s = b\"/* not a comment\";"),
+            ("char literal", "let c = '/'; let d = '*';"),
+            // A lifetime is not a char literal. Reading `'a` as one would
+            // consume to the next `'` and swallow the `/*` after it.
+            ("lifetime", "fn f<'a>(x: &'a str) {} // '"),
+            ("windows path", "let p = r\"C:\\x\\\"; let q = 1;"),
+        ] {
+            let src = format!("{opener}\n#[cfg(test)]\nmod t {{\n    #[test]\n    fn q() {{}}\n}}\nfn production_b() {{}}\n");
+            let scan = scan_production(&src);
+            assert_eq!(
+                scan.unterminated_block_comment, None,
+                "{label}: {opener:?} opened a block comment that swallowed the rest of the file"
+            );
+            assert!(
+                scan.lines.iter().any(|(_, l)| l.contains("production_b")),
+                "{label}: {opener:?} made production text vanish — scan kept {:?}",
+                scan.lines
+            );
+            assert_eq!(
+                scan.skipped_regions.len(),
+                1,
+                "{label}: {opener:?} broke the cfg-test region that follows it"
+            );
+        }
     }
 
     /// Round-6 WR-02: an inline `/* label */ value` annotation is CODE. The

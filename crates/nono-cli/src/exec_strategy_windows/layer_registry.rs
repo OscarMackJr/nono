@@ -1467,7 +1467,7 @@ mod tests {
         // region may have run unclosed to EOF.
         let scan = crate::cfg_test_regions::scan_production(DAEMON_GATE_SRC);
         scan.assert_split_is_correct("agent_daemon/launch.rs");
-        let code: Vec<&str> = scan.lines.iter().map(|(_, l)| *l).collect();
+        let code: Vec<&str> = scan.lines.iter().map(|(_, l)| l.as_str()).collect();
 
         let mut checked = 0usize;
         for entry in all_entries() {
