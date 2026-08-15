@@ -5813,13 +5813,15 @@ mod env_filter_tests {
 #[cfg(all(test, target_os = "windows"))]
 #[allow(clippy::unwrap_used)]
 mod write_deny_low_il_broker_no_pty_tests {
+    use crate::exec_strategy::{attestation, layer_registry};
     use std::path::PathBuf;
     use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::Storage::FileSystem::ReadFile;
     use windows_sys::Win32::System::Pipes::CreatePipe;
     use windows_sys::Win32::System::Threading::{
         CreateProcessW, GetExitCodeProcess, ResumeThread, TerminateProcess, WaitForSingleObject,
-        CREATE_SUSPENDED, INFINITE, PROCESS_INFORMATION, STARTUPINFOW,
+        CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, INFINITE, PROCESS_INFORMATION, STARTUPINFOW,
     };
 
     /// REQ-WSRH-03 / D-07: real-spawn integration proof that a Low-IL child
@@ -5914,6 +5916,10 @@ mod write_deny_low_il_broker_no_pty_tests {
         // Child ends, in the same order the production arm passes them:
         // stdin_read, stdout_write, stderr_write.
         let child_ends: [HANDLE; 3] = [stdin_read, stdout_write, stderr_write];
+        // The ends THIS process keeps. Closing our copies of the child ends
+        // after the broker has inherited them is what lets the two read ends
+        // below ever observe EOF.
+        let parent_ends: [HANDLE; 3] = [stdin_write, stdout_read, stderr_read];
 
         // --- Broker command line: --no-pty + a child that writes the fixture ---
         // `cmd.exe /c "echo x > <fixture>"` exits non-zero with "Access is
@@ -5932,10 +5938,49 @@ mod write_deny_low_il_broker_no_pty_tests {
             broker_args.push(std::ffi::OsString::from("--inherit-handle"));
             broker_args.push(std::ffi::OsString::from(format!("0x{:016x}", *h as usize)));
         }
+        // Quick task 260815-gfd: `--no-pty` REQUIRES `--app-container-name`.
+        // The broker has rejected the combination fail-closed since commit
+        // cb341165 (2026-06-02, plan 62-12): a no-PTY child that is not a
+        // per-run AppContainer means the WFP ALE_USER_ID filter keyed on that
+        // package SID matches nothing — silent non-enforcement. This harness
+        // omitted the argument and so drove the broker to `exit 2` at parse
+        // time, never spawning a child; it went unnoticed for 2.5 months
+        // because the two-candidate lookup above preferred a STALE
+        // x86_64-pc-windows-msvc broker built 2026-06-01, one day before the
+        // gate landed. Mirror the production arm (launch.rs:2389-2397), which
+        // resolves the name with `ok_or_else` for the same reason. The broker
+        // registers the profile itself (`create_app_container_profile`), so
+        // minting the moniker here is sufficient.
+        let app_container_name = crate::exec_strategy::generate_app_container_name();
+        broker_args.push(std::ffi::OsString::from("--app-container-name"));
+        broker_args.push(std::ffi::OsString::from(&app_container_name));
         broker_args.push(std::ffi::OsString::from("--cwd"));
         broker_args.push(std::ffi::OsString::from(&cwd));
 
         let mut cmd_buf = super::build_broker_command_line(&broker_path, &broker_args);
+
+        // Quick task 260815-gfd, the SECOND stale-harness defect, found only
+        // once `--app-container-name` let the broker get past parse: the
+        // broker refuses to resume an unattested child unless nono-cli names
+        // the layers it must confirm, via the `NONO_BROKER_REQUIRED_LAYERS`
+        // wire contract (nono-shell-broker/src/main.rs:886 — fail-CLOSED on an
+        // absent variable since Phase 117 review CR-03.3). This harness passed
+        // a null `lpEnvironment`, inheriting the test process's environment,
+        // which does not carry it — so the broker registered the AppContainer,
+        // self-degraded its token, then terminated its own suspended child and
+        // exited 2. Mirror the production `BrokerLaunchNoPty` arm
+        // (launch.rs:1786-1798), which appends exactly this pair to the
+        // inherited environment and derives the value from the SAME registry
+        // query rather than hard-coding a layer list that could drift.
+        let mut broker_env_pairs: Vec<(String, String)> = std::env::vars().collect();
+        broker_env_pairs.push((
+            attestation::BROKER_REQUIRED_LAYERS_ENV_VAR.to_string(),
+            attestation::required_layers_for_broker(
+                layer_registry::all_entries(),
+                super::WindowsTokenArm::BrokerLaunchNoPty,
+            ),
+        ));
+        let mut environment_block = super::build_windows_environment_block(&broker_env_pairs);
 
         let mut si: STARTUPINFOW = unsafe {
             // SAFETY: STARTUPINFOW is a plain Win32 struct safe to zero-init; cb
@@ -5955,14 +6000,17 @@ mod write_deny_low_il_broker_no_pty_tests {
             // inherits the three pipe handles (flagged inheritable above) and can
             // bind them to its Low-IL child. CREATE_SUSPENDED + ResumeThread keeps
             // the spawn shape symmetric with broker_dispatch_tests.
+            // CREATE_UNICODE_ENVIRONMENT pairs with the UTF-16
+            // `environment_block` built above, matching every production
+            // CreateProcessW call site in this module.
             CreateProcessW(
                 std::ptr::null(),
                 cmd_buf.as_mut_ptr(),
                 std::ptr::null(),
                 std::ptr::null(),
                 1,
-                CREATE_SUSPENDED,
-                std::ptr::null(),
+                CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
+                environment_block.as_mut_ptr() as *mut _,
                 std::ptr::null(),
                 &si,
                 &mut pi,
@@ -5984,14 +6032,79 @@ mod write_deny_low_il_broker_no_pty_tests {
             panic!("CreateProcessW(broker --no-pty) failed; GetLastError={err}");
         }
 
+        // The broker inherited its own copies of the three child ends at
+        // CreateProcessW time, so this process must drop ITS copies now.
+        // Otherwise this process remains a writer on the stdout/stderr pipes,
+        // those pipes never reach EOF, and the drain below blocks forever.
+        for h in child_ends {
+            unsafe {
+                // SAFETY: each handle came from CreatePipe above; the broker
+                // holds independent duplicates. Closed exactly once here, and
+                // deliberately excluded from the cleanup block below.
+                let _ = CloseHandle(h);
+            }
+        }
+
+        // Quick task 260815-gfd: drain the broker's stdout/stderr so a
+        // broker-INTERNAL failure surfaces its message. Previously these pipes
+        // were created, handed over, and never read, so when the broker
+        // rejected this test's argument set fail-closed and exited 2, CI
+        // reported only `got exit_code=2` with no explanation — the 2026-08-15
+        // debug session had to re-run the broker by hand to recover the string
+        // "--no-pty requires --app-container-name". A diagnostic written to a
+        // pipe nobody reads is not a diagnostic.
+        let drain = |handle: HANDLE, label: &'static str| -> std::thread::JoinHandle<String> {
+            let raw = handle as usize;
+            std::thread::spawn(move || {
+                let handle = raw as HANDLE;
+                let mut collected: Vec<u8> = Vec::new();
+                let mut buf = [0u8; 512];
+                loop {
+                    let mut read: u32 = 0;
+                    let ok = unsafe {
+                        // SAFETY: `handle` is a valid pipe read end owned by
+                        // this process for the thread's whole lifetime (it is
+                        // closed only after this thread is joined); `buf` and
+                        // `read` are valid for the requested length.
+                        ReadFile(
+                            handle,
+                            buf.as_mut_ptr().cast(),
+                            buf.len() as u32,
+                            &mut read,
+                            std::ptr::null_mut(),
+                        )
+                    };
+                    // ok == 0 is ERROR_BROKEN_PIPE once every writer has gone.
+                    if ok == 0 || read == 0 {
+                        break;
+                    }
+                    collected.extend_from_slice(&buf[..read as usize]);
+                }
+                format!("{label}={:?}", String::from_utf8_lossy(&collected).trim())
+            })
+        };
+        let stdout_drain = drain(stdout_read, "broker stdout");
+        let stderr_drain = drain(stderr_read, "broker stderr");
+
         unsafe {
             // SAFETY: pi.hThread is a valid suspended thread handle; pi.hProcess
             // is valid. Resume the broker, then wait for it (and its child) to
             // finish. The child's only output is a short "Access is denied."
-            // diagnostic, far below the pipe buffer — no relay deadlock.
+            // diagnostic, far below the pipe buffer — and both pipes are being
+            // drained concurrently above regardless, so no relay deadlock.
             let _ = ResumeThread(pi.hThread);
             WaitForSingleObject(pi.hProcess, INFINITE);
         }
+
+        let broker_output = format!(
+            "{}; {}",
+            stdout_drain
+                .join()
+                .unwrap_or_else(|_| "broker stdout=<drain thread panicked>".to_string()),
+            stderr_drain
+                .join()
+                .unwrap_or_else(|_| "broker stderr=<drain thread panicked>".to_string()),
+        );
 
         let mut exit_code: u32 = 0;
         let got = unsafe {
@@ -6015,7 +6128,10 @@ mod write_deny_low_il_broker_no_pty_tests {
             let _ = TerminateProcess(pi.hProcess, 0);
             let _ = CloseHandle(pi.hThread);
             let _ = CloseHandle(pi.hProcess);
-            for h in all_handles {
+            // Only the ends this process still owns: the child ends were
+            // closed right after CreateProcessW, and the drain threads that
+            // used the two read ends have already been joined.
+            for h in parent_ends {
                 let _ = CloseHandle(h);
             }
         }
@@ -6037,12 +6153,15 @@ mod write_deny_low_il_broker_no_pty_tests {
             "write-deny non-vacuous gate FAILED: exit 0 = write succeeded \
              (NO_WRITE_UP breached); exit 2 = broker never spawned the child \
              (vacuous). Either way the Low-IL child did not run-and-get-denied. \
-             got exit_code={exit_code}"
+             got exit_code={exit_code}; broker={broker_path}; \
+             app_container_name={app_container_name}; {broker_output}",
+            broker_path = broker_path.display()
         );
         assert_eq!(
             after, b"sentinel",
             "write-deny FAILED: the Low-IL no-PTY broker child modified the \
-             Medium-IL fixture (NO_WRITE_UP not enforced); broker exit_code={exit_code}"
+             Medium-IL fixture (NO_WRITE_UP not enforced); broker exit_code={exit_code}; \
+             {broker_output}"
         );
     }
 }
