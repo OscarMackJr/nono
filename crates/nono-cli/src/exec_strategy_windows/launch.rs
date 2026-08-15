@@ -1582,6 +1582,17 @@ fn apply_startup_attestation_gate(
         // (D-25, overwhelmingly `Abort`) still governs the decision, so this
         // is not a fail-open gap — only the "can force MORE rows to abort"
         // feature is deferred.
+        //
+        // ⚠ RF-13 OPEN (NOT FIXED — grep `RF-13 OPEN`; recorded in the SPEC's
+        // D-15 "Review-fix pass" ledger, the `RF-13` row): this IS the
+        // consumer end of the unenforced fleet control. `machine_policy.rs`
+        // reads `HKLM\SOFTWARE\Policies\nono\RequiredLayers` and emits a loud
+        // `RequiredLayersNotEnforced` warning precisely because this call site
+        // discards it. The open operator decision is where the already-read
+        // machine policy is carried here, and acceptance that a fleet registry
+        // key can then refuse launches. Fail direction meanwhile: the union is
+        // tighten-only, so the empty slices below cannot fail open — only the
+        // "force MORE rows to abort" capability is deferred.
         required_layers_override: &[],
         machine_required_layers: &[],
     };

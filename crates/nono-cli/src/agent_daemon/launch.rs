@@ -922,6 +922,31 @@ mod windows_impl {
         // `HANDLE` is `Copy`) was already moved into `tenant` above — this
         // probes the real suspended child before its first instruction ever
         // runs (D-21), exactly like step 6/6.5/6.6's fail-secure gates.
+        //
+        // ⚠ CR-02 OPEN (NOT FIXED — grep `CR-02 OPEN`; recorded in the SPEC's
+        // D-15 "Review-fix pass" ledger, the `CR-02 (Iteration 6, code-review
+        // fix pass)` row): this decision is a HAND-WRITTEN MIRROR of
+        // `layer_registry.rs`'s `(EntryPath::Daemon, None)` rows, not a
+        // consumer of them. `nono-agentd` `#[path]`-includes only
+        // `agent_daemon/mod.rs`, `telemetry/mod.rs` and
+        // `agent_daemon/telemetry_init.rs`, never declares
+        // `exec_strategy_windows`, and therefore CANNOT LINK the registry —
+        // so `attest_and_decide` is structurally unreachable on this arm and
+        // every `(Daemon, None)` registry cell drives nothing here. The only
+        // thing binding the two is the source-text drift gate
+        // `daemon_expected_rows_are_all_named_by_the_daemon_gate`, which
+        // requires every attestable `(Daemon, expected: true)` row to be NAMED
+        // by this file outside comments and outside its own `#[cfg(test)]`
+        // modules. That is a naming check, not a wiring.
+        //
+        // The open operator decision is whether the daemon arm consumes the
+        // registry at all (Option A: restructure the daemon's module includes
+        // so it links `layer_registry`/`attestation`; Option B: keep the
+        // mirror and keep the drift gate). It was deliberately not guessed.
+        // Recorded, not resolved, in the same row: `DaclAncestorTraverse` at
+        // `(Daemon, None)` declares `Abort` while this arm warns and proceeds
+        // — deliberate per WR-06, because an absent ancestor traverse
+        // under-grants reach and never widens confinement.
         match daemon_attest_and_decide(
             process_handle_raw,
             job_raw_owned,

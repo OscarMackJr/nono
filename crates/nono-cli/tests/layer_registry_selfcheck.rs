@@ -1066,10 +1066,12 @@ fn token_arm_doc_cites_a_symbol_not_a_raw_line_range() {
 /// deliberately not copied into either — this phase's recurring defect is two
 /// mirrors of one rule drifting apart.
 ///
-/// A listed file with no marker is fine (the list is a SUPERSET, and three
-/// entries are marker-free today). A marker in an UNLISTED file is the
-/// fail-open direction — it is simply never scanned — which is what the
-/// discovery gate closes.
+/// A listed file with no marker is fine (the list is a SUPERSET: 7 entries,
+/// 5 of which carry a marker today, so `attestation.rs` and `output.rs` are
+/// listed-but-marker-free). A marker in an UNLISTED file is the fail-open
+/// direction — it is simply never scanned — which is what the discovery gate
+/// closes. That gate is not decorative: it caught both of this pass's new
+/// marker files before they were added here, naming each by path and line.
 fn marker_sources() -> Vec<(&'static str, PathBuf)> {
     vec![
         (
@@ -1091,6 +1093,14 @@ fn marker_sources() -> Vec<(&'static str, PathBuf)> {
         (
             "crates/nono-cli/src/output.rs",
             manifest_dir().join("src/output.rs"),
+        ),
+        (
+            "crates/nono/src/machine_policy.rs",
+            workspace_root().join("crates/nono/src/machine_policy.rs"),
+        ),
+        (
+            "crates/nono-cli/src/agent_daemon/launch.rs",
+            manifest_dir().join("src/agent_daemon/launch.rs"),
         ),
     ]
 }
@@ -1125,12 +1135,15 @@ fn marker_sources() -> Vec<(&'static str, PathBuf)> {
 /// # Non-vacuity
 ///
 /// A broken pathspec or a detector that stopped firing would make this gate
-/// assert nothing at all, so both the enumeration and the number of DETECTED
-/// marker-carrying files are floored.
+/// assert nothing at all, so the enumeration is floored and the number of
+/// DETECTED marker-carrying files is pinned by EQUALITY. Equality, not a
+/// floor: a floor set to the current truth is a pin only by coincidence and
+/// stops discriminating the moment one more marker appears.
 ///
 /// The detected-file count is a DIFFERENT quantity from [`marker_sources`]'s
 /// entry count and must not be conflated with it: the allow-list is a superset
-/// and legitimately lists marker-free files.
+/// and legitimately lists marker-free files. Today the list has 7 entries and
+/// 5 files carry a marker.
 #[test]
 fn every_marker_carrying_source_file_is_in_marker_sources() {
     let listed: Vec<&str> = marker_sources()
@@ -1180,15 +1193,17 @@ fn every_marker_carrying_source_file_is_in_marker_sources() {
         unprotected.join("\n  ")
     );
 
-    assert!(
-        detected.len() >= 2,
-        "non-vacuity: only {} tracked production source file(s) were DETECTED as carrying a \
-         deferral marker, expected at least 2. This is NOT `marker_sources()`'s entry count (the \
-         allow-list is a superset and legitimately lists marker-free files) — it is what the \
-         per-line detector actually found: {detected:?}. A drop below the floor means a deferral \
-         was closed, or a marker was rewritten into a shape the detector no longer sees, which is \
-         the fail-open direction. Move the floor deliberately, in the same commit as the marker \
-         change.",
+    assert_eq!(
+        detected.len(),
+        5,
+        "the number of tracked production source files DETECTED as carrying a deferral marker \
+         changed from 5 to {}. This is NOT `marker_sources()`'s entry count — that list has 7 \
+         entries and is a superset that legitimately includes marker-free files. It is what the \
+         per-line detector actually found: {detected:?}. An INCREASE means a new deferral was \
+         recorded: add its file to `marker_sources()` (or this gate has already told you to) and \
+         move this pin. A DECREASE means a deferral was closed, or — the fail-open direction — a \
+         marker was rewritten into a shape the detector no longer sees. Move the pin \
+         deliberately, in the same commit as the marker change.",
         detected.len()
     );
 }

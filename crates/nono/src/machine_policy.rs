@@ -713,6 +713,24 @@ mod windows_reader {
     /// direction: "treated as absent" here means *no additional tightening*,
     /// never *less* confinement — every layer's own per-row contract (D-25,
     /// overwhelmingly `Abort`) still governs the decision.
+    ///
+    /// ⚠ RF-13 OPEN (NOT FIXED — grep `RF-13 OPEN`; recorded in the SPEC's
+    /// D-15 "Review-fix pass" ledger, the `RF-13` row): this reader is the
+    /// ONLY thing this build does with
+    /// `HKLM\SOFTWARE\Policies\nono\RequiredLayers`. Nothing consumes
+    /// `RequiredLayersPolicy.required` — the production Windows launch gate
+    /// passes an empty `machine_required_layers` slice (see the matching
+    /// marker at that call site) — so the key is a documented fleet control
+    /// that is read, warned about, and then ignored. The open operator
+    /// decision is WHERE the already-read machine policy is carried to the
+    /// Windows launch path, and acceptance that a fleet registry key can then
+    /// refuse launches.
+    ///
+    /// Fail direction meanwhile: the D-26 union is TIGHTEN-ONLY, so an
+    /// unconsumed (or empty) required-layer set can only fail to add
+    /// tightening — it can never subtract a layer's own per-row contract.
+    /// The deferral therefore cannot fail open; what is deferred is the
+    /// ability to force MORE rows to abort.
     fn read_required_layers(key: &RegKey) -> RequiredLayersPolicy {
         match read_list_subkey(key, "RequiredLayers") {
             Ok(names) if names.is_empty() => RequiredLayersPolicy::default(),
