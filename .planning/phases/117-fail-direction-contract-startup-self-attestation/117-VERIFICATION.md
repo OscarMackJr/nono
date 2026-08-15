@@ -1,9 +1,24 @@
 ---
 phase: 117-fail-direction-contract-startup-self-attestation
 verified: 2026-08-15T00:00:00Z
-status: gaps_found
-score: 2/4 truths fully verified (SC1 VERIFIED, SC2 VERIFIED-with-disclosed-limits, SC3 PARTIAL 10/13, SC4 PARTIAL)
-overrides_applied: 0
+status: passed_with_accepted_risk
+score: >
+  3/4 truths verified on evidence, 4/4 satisfied. SC1 VERIFIED; SC2 VERIFIED-with-disclosed-limits;
+  SC3 ACCEPTED VIA OPERATOR OVERRIDE (factually still 10/13 — the override accepts a disclosed
+  shortfall, it does not erase it); SC4 VERIFIED-with-disclosed-limits — all four of its `missing`
+  bullets were closed on 2026-08-15 by quick task 260815-b0s (commits 511e2ab1, fba34606), AFTER
+  this verification pass. The limits SC4 carries are stated in its gap entry below: the new
+  list-assignment gate verifies 5 module-doc claims and holds 13 further row mentions constant by
+  an equality pin without verifying them, and `every_open_marker_in_code_has_a_ledger_row` still
+  has no ledger->code direction. Residual human verification is unchanged: the WR-20 pin
+  (`non_owned_path_with_a_foreign_label_is_exempt_not_a_coverage_gap`) is host-blocked, and
+  `cargo test --bin nono` is RED at HEAD (1688 passed / 12 failed).
+overrides_applied: 1
+overrides:
+  - must_have: "Every entry in the contract has a test that forces that layer unavailable and asserts the contracted outcome — a contract row without a test is not counted as satisfied"
+    reason: "10/13 rows are automated and verified. The 3 remaining rows are named, justified and SPEC-documented: DaclSessionSidGrant and MinifilterAbsence are rows for layers that do not exist in this tree (nothing to force unavailable), and BrokerAuthenticodeTrustGate is inert outside a signed production install. Accepted in the 2026-08-10 gap-closure session; enforced loud by host_gated_rows_are_loud."
+    accepted_by: "Oscar Mack Jr"
+    accepted_at: "2026-08-15T00:00:00Z"
 re_verification:
   previous_status: gaps_found
   previous_score: 0/4 truths fully verified (SC1 partial-unchanged, SC2 failed-differently, SC3 substantially-improved-but-partial, SC4 failed-freshly)
@@ -15,12 +30,13 @@ re_verification:
     - "Round-8 CR-01 (`every_markdown_file_gated_by_a_test_runs_the_code_jobs` failing in the real repo): CLOSED and re-proved IN THE REAL TREE at `C:\\Users\\OMack\\Nono`, which does carry the defect condition (15 gitignored worktrees under `.claude/worktrees/` plus `.gsd/`). 20 passed / 0 failed."
     - "Round-8 WR-01 (`#[cfg(test)]`-gated non-`mod` items landing in the production half): CLOSED, proved by the decisive two-part perturbation rather than by reading — I injected `#[cfg(test)] pub(crate) fn verifier_probe_helper() -> &'static str { \"DaclAncestorTraverse\" }` into `agent_daemon/launch.rs`'s production region AND renamed the real production site; the daemon gate FAILED, proving the cfg-test helper cannot satisfy it."
   gaps_remaining:
-    - "SC3's literal wording ('a contract row without a test is not counted as satisfied'): 3/13 rows still have no forced-unavailable test. Composition unchanged from iter2, but the rows are now individually justified and SPEC-documented, and I verified the 10 covered rows' test BODIES rather than accepting the name-existence check."
-    - "SC4: no new contract/code divergence of iter2's kind, but the SPEC ledger has not been touched since before the round-4 review, and one live doc/code disagreement is unrecorded (see gaps)."
+    - "SC3's literal wording ('a contract row without a test is not counted as satisfied'): 3/13 rows still have no forced-unavailable test. Composition unchanged from iter2, but the rows are now individually justified and SPEC-documented, and I verified the 10 covered rows' test BODIES rather than accepting the name-existence check. — STILL FACTUALLY TRUE. ACCEPTED 2026-08-15 by operator override (see `overrides` above); the 10/13 finding stands unaltered."
+    - "SC4: no new contract/code divergence of iter2's kind, but the SPEC ledger has not been touched since before the round-4 review, and one live doc/code disagreement is unrecorded (see gaps). — CLOSED 2026-08-15 by quick task 260815-b0s (commits 511e2ab1, fba34606): the doc/code disagreement is corrected and machine-checked, the stale TODO(117-12) is replaced, the SPEC states the D-15 scoping rule and indexes rounds 4/6/8 with finding counts and dispositions, and both operator-deferred items now carry greppable `OPEN` code markers. See the SC4 gap entry below for what is and is not covered."
   regressions: []
 gaps:
   - truth: "SC3 / CINT-03 — every entry in the contract has a test that forces that layer unavailable and asserts the contracted outcome; a contract row without a test is not counted as satisfied"
-    status: partial
+    status: accepted_via_override
+    override_ref: "overrides[0] — accepted_by Oscar Mack Jr, accepted_at 2026-08-15T00:00:00Z. The override ACCEPTS the disclosed 10/13 shortfall; it does not erase it. Every word of the `reason` below is the evidence for that acceptance and is unchanged."
     reason: >
       10 of 13 rows are covered by a real, running, substantive test — I verified this by reading
       every one of the 10 test BODIES rather than trusting the meta-test's name-existence check,
@@ -55,10 +71,58 @@ gaps:
       - path: "crates/nono-cli/src/exec_strategy_windows/labels_guard.rs"
         issue: "`non_owned_path_with_a_foreign_label_is_exempt_not_a_coverage_gap` cannot construct its non-owned + foreign-labelled precondition on a non-elevated account and fails loudly; needs an elevated/CI Windows runner."
     missing:
-      - "Either an automated forced-unavailable test for `BrokerAuthenticodeTrustGate` (the only one of the 3 that is a live layer), or an explicit VERIFICATION override recording the operator's 2026-08-10 acceptance of the 3-row remainder against SC3's un-hedged wording."
-      - "An elevated/CI Windows run of `non_owned_path_with_a_foreign_label_is_exempt_not_a_coverage_gap` to convert WR-20 from authored-but-unverified to verified."
+      - "CLOSED 2026-08-15 (the second alternative was taken): 'Either an automated forced-unavailable test for `BrokerAuthenticodeTrustGate` (the only one of the 3 that is a live layer), or an explicit VERIFICATION override recording the operator's 2026-08-10 acceptance of the 3-row remainder against SC3's un-hedged wording.' — the override is applied in this file's frontmatter, signed by the operator. No test was added for `BrokerAuthenticodeTrustGate`; it remains inert outside a signed production install, and the 3-row remainder (`DaclSessionSidGrant`, `MinifilterAbsence`, `BrokerAuthenticodeTrustGate`) stays named and disclosed."
+      - "STILL OPEN: an elevated/CI Windows run of `non_owned_path_with_a_foreign_label_is_exempt_not_a_coverage_gap` to convert WR-20 from authored-but-unverified to verified. The override does not touch this — it is about SC3's ROW COVERAGE, not about that test, which continues to FAIL loudly on this non-elevated host and keeps `cargo test --bin nono` RED at HEAD."
   - truth: "SC4 — where the contract and the code disagree, the code is changed or the contract is corrected in the same phase, with the discrepancy recorded rather than quietly reconciled"
-    status: partial
+    status: closed_after_verification
+    closure: >
+      All FOUR `missing` bullets below were closed on 2026-08-15 by quick task 260815-b0s
+      (commits 511e2ab1 and fba34606), after this verification pass. The three residuals recorded
+      in `reason` are the finding of record and are left verbatim; what follows is what actually
+      closed each, and — as importantly — what is still NOT covered.
+      (1) CLOSED. `layer_force_unavailable.rs`'s module doc now assigns both rows to
+      `ALSO_AUTOMATED` and names each row's in-process test, and the assignment is machine-checked
+      by a new sibling gate, `module_doc_assigns_each_claimed_row_to_the_list_it_is_on`
+      (`layer_registry_meta_test.rs`). The rule is SENTENCE-scoped with nearest-preceding-list-name
+      association, discovery-based over `LayerId::ALL` (it names no layer literally). Proved by TWO
+      recorded perturbations, not by inspection: flipping the corrected sentence's list name FAILED
+      naming both rows, the claimed list and the real list; rewording the claim back to the
+      anaphoric "both rows" shape FAILED on both pins (verified claims 5 -> 3, unverified mentions
+      13 -> 15). Both reverted.
+      (2) CLOSED, and BOTH alternatives were taken rather than one. The SPEC's
+      `## Contract vs. code discrepancies` section now states the D-15 scoping rule
+      (contract-vs-code divergences here; verification-machinery defects in the committed
+      `117-REVIEW*` / `117-REVIEW-FIX*` artifacts) AND indexes rounds 4, 6 and 8 with their finding
+      COUNTS (8 / 7 / 5, one Critical) and per-finding dispositions read from those artifacts. All
+      20 findings are verification-machinery; none was reclassified as a contract-vs-code
+      divergence, so none earned a ledger row. Round 6's WR-04 — the one with a plausible claim to
+      being production-side — is dispositioned explicitly in the SPEC rather than swept into the
+      index: its `collect_files` is a nested helper inside the `#[test] fn
+      downgrade_marker_files_never_contain_a_layer_name` D-28 leak scan, i.e. the gate, and the
+      round-7 fix report states "No production behaviour changed this round".
+      (3) CLOSED. The stale `TODO(117-12)` is gone; `registry_call_sites_exist`'s doc now describes
+      what it does at HEAD (symbol-form citations, content-verified) and states the narrower
+      residual risk that genuinely remains (a symbol can survive while no longer performing the
+      enforcement its row describes — a semantic claim no source-text scan settles).
+      (4) CLOSED via the marker alternative. `CR-02` and `RF-13` now carry greppable
+      `OPEN (NOT FIXED ...)` markers at the three sites an operator would grep, and both ledger
+      rows carry the literal `OPEN` token, so all FOUR open items (WR-10, WR-14, CR-02, RF-13)
+      resolve through `every_open_marker_in_code_has_a_ledger_row`. Exactly one `| CR-02 ` ledger
+      row carries `OPEN` and it is the Iteration-6 one (the id collides with an Iteration-4 row the
+      gate cannot distinguish). `marker_sources()` was hoisted to module scope (one definition, two
+      callers) and a new discovery gate,
+      `every_marker_carrying_source_file_is_in_marker_sources`, closes the file class: every
+      tracked `crates/*/src/**.rs` file carrying a marker line must be listed. That gate
+      discriminated for real — run before the list was extended, it FAILED naming both new marker
+      files by path and line.
+      WHAT IS STILL NOT COVERED, stated so the record does not overclaim: (a) the new
+      list-assignment gate verifies the 5 module-doc claims made in sentences that name a list; it
+      does NOT verify the 13 further row mentions (10 in the "reasons below cover rows on BOTH
+      lists" sentence, 2 in a section heading, 1 inside a quoted diagnostic). Those make no
+      assignment claim and are held CONSTANT by an equality pin, not checked. (b)
+      `every_open_marker_in_code_has_a_ledger_row` still enforces only the code -> ledger
+      direction: a ledger row marked `OPEN` with no corresponding code marker would still pass.
+      (c) markers placed in `tests/` are out of the discovery gate's reach by design.
     reason: >
       The mechanism is real and strong: the SPEC's D-15 ledger carries ~50 rows through Iteration 6
       with re-runnable evidence, later findings are folded in as in-place addenda (WR-25, WR-27,
@@ -91,16 +155,16 @@ gaps:
       and symbol citations ARE content-verified. Stale record on the gate that carries SC1.
     artifacts:
       - path: "crates/nono-cli/tests/layer_force_unavailable.rs"
-        issue: "Lines 110-112 assign RestrictedToken/JobObjectContainment to MANUALLY_VERIFIED; they are on ALSO_AUTOMATED. No gate can see it."
+        issue: "Lines 110-112 assign RestrictedToken/JobObjectContainment to MANUALLY_VERIFIED; they are on ALSO_AUTOMATED. No gate can see it. — RESOLVED 2026-08-15 (511e2ab1): the claim now names ALSO_AUTOMATED and both rows in ONE sentence, and module_doc_assigns_each_claimed_row_to_the_list_it_is_on can see it."
       - path: "proj/SPEC-windows-fail-direction-contract.md"
-        issue: "Ledger last edited at 860d4772, before the round-4 review (62892678). Rounds 4/6/8 findings — including round-8's Critical — have no ledger row."
+        issue: "Ledger last edited at 860d4772, before the round-4 review (62892678). Rounds 4/6/8 findings — including round-8's Critical — have no ledger row. — RESOLVED 2026-08-15 (fba34606): the section states the D-15 scoping rule and indexes all three rounds with finding counts and per-finding dispositions. No round produced a contract-vs-code divergence, so none earned a row."
       - path: "crates/nono-cli/tests/layer_registry_selfcheck.rs"
-        issue: "Line 354 TODO(117-12) describes a gate that no longer behaves that way (raw file:line citations are gone; symbol content IS verified)."
+        issue: "Line 354 TODO(117-12) describes a gate that no longer behaves that way (raw file:line citations are gone; symbol content IS verified). — RESOLVED 2026-08-15 (511e2ab1): replaced with what the gate does at HEAD plus the narrower residual risk that really remains."
     missing:
-      - "Correct layer_force_unavailable.rs:110-112 to name ALSO_AUTOMATED, and extend coverage_split_accounts_for_every_layer_id (or add a sibling) so the prose's list assignment is machine-checked, not just the totals."
-      - "Either a ledger pass recording rounds 4/6/8 (with their dispositions), or an explicit statement in the SPEC that the D-15 ledger scopes to contract-vs-code divergences and that verification-machinery findings live in the committed 117-REVIEW*/117-REVIEW-FIX* artifacts."
-      - "Refresh or delete the stale TODO(117-12) at layer_registry_selfcheck.rs:354."
-      - "Optional, for symmetry with WR-10/WR-14: greppable `OPEN` markers in code for the two operator-deferred items (CR-02 daemon wiring, RF-13/WR-12 fleet control), or a ledger->code direction on every_open_marker_in_code_has_a_ledger_row. Today an operator grepping the code finds 2 of the 4 open items."
+      - "CLOSED 2026-08-15 (511e2ab1): 'Correct layer_force_unavailable.rs:110-112 to name ALSO_AUTOMATED, and extend coverage_split_accounts_for_every_layer_id (or add a sibling) so the prose's list assignment is machine-checked, not just the totals.' — a sibling was added, not an extension; two perturbation proofs recorded."
+      - "CLOSED 2026-08-15 (fba34606): 'Either a ledger pass recording rounds 4/6/8 (with their dispositions), or an explicit statement in the SPEC that the D-15 ledger scopes to contract-vs-code divergences and that verification-machinery findings live in the committed 117-REVIEW*/117-REVIEW-FIX* artifacts.' — BOTH were done: the scoping rule AND a per-round index carrying finding counts and dispositions."
+      - "CLOSED 2026-08-15 (511e2ab1): 'Refresh or delete the stale TODO(117-12) at layer_registry_selfcheck.rs:354.' — refreshed, not deleted; no TODO( marker remains in that file."
+      - "CLOSED 2026-08-15 (fba34606) via the marker alternative: 'Optional, for symmetry with WR-10/WR-14: greppable `OPEN` markers in code for the two operator-deferred items (CR-02 daemon wiring, RF-13/WR-12 fleet control), or a ledger->code direction on every_open_marker_in_code_has_a_ledger_row. Today an operator grepping the code finds 2 of the 4 open items.' — an operator now finds 4 of 4 (5 marker sites; RF-13 is annotated at both its reader and its gate call site). The ledger->code direction was NOT built and remains absent."
 deferred:
   - truth: "CR-02 — the EntryPath::Daemon half of the registry drives no decision; nono-agentd cannot link the registry"
     addressed_in: "v3.7 carry-forward (operator decision, 2026-08-14)"
@@ -162,36 +226,45 @@ after every perturbation showed only the untracked `117-VERIFICATION.iter2.md`.
 |---|---|---|---|
 | SC1 | One document names every layer, states its behaviour when it cannot be established, citing the enforcing call site | ✓ VERIFIED | `proj/SPEC-windows-fail-direction-contract.md:50-64` + `layer_registry.rs:876-1098` carry all 13 rows, covering every layer SC1 names by name: restricted token, mandatory integrity label, AppContainer profile, package-SID DACL grant (+ 3 more DACL rows), WFP egress filters, and the minifilter's absence (`ContractOutcome::FailOpen { justification: "ADR-65: no minifilter exists; per-file read policy inside one directory is explicitly not claimed" }`). Every row states an explicit `ContractOutcome`. **iter2's headline gap is closed:** zero raw `file:line` citations remain, every citation is `file.rs::Symbol`, and each is CONTENT-verified against a real definition site (definition-line prefix + identifier boundary + enclosing-`impl` scoping). Proved discriminating by perturbation. |
 | SC2 | Forcing a layer unavailable produces abort or a visibly downgraded claim; no path presents a confinement guarantee it did not confirm | ✓ VERIFIED (with disclosed, bounded limits) | The gate is applied unconditionally at all three spawn paths, each fail-closed with `TerminateProcess` **before** resume: `launch.rs:2558` (DirectCli), `agent_daemon/launch.rs:925` (Daemon), `nono-shell-broker/src/main.rs:927` (Broker). Both iter2 BLOCKERs are closed and I re-proved each against source (see below). End-to-end live proof: two real `nono.exe` subprocess launches with a layer forced unavailable both aborted with `LayerAttestationFailed`. `applied_layers()` (`mod.rs:391-449`) derives from each guard's own `coverage().application()` with fail-secure `NotApplied` defaults. Limits, all disclosed in-code: the per-session banner dedup marker is forgeable by a same-user process on the `Null`/`WriteRestricted` arms (`output.rs:75-101` states this explicitly and names two independent channels it does not control); and on the Daemon arm the decision is a hand-written mirror bound to the registry only by a source-text drift gate — an operator-deferred item (CR-02), recorded. |
-| SC3 | Every entry in the contract has a test that forces that layer unavailable and asserts the contracted outcome; a row without a test is not satisfied | ⚠ PARTIAL (10/13) | 2 direct + 8 `ALSO_AUTOMATED` + 3 `MANUALLY_VERIFIED` = 13, arithmetic and disjointness machine-enforced. I read all 10 covered tests' BODIES — every one forces its layer unavailable (or drives the real gate to an Unconfirmed state) and asserts `LayerAttestationFailed` naming that layer. All 10 run in a real gate (default build, the `--features layer-fault-injection` legs, or `-p nono-shell-broker`), and CI job `windows-layer-fault-injection` runs the feature legs. Discovery proved discriminating by perturbation. **The literal bar is still short by 3:** two of those rows are for layers that do not exist in this tree (nothing to force unavailable); one, `BrokerAuthenticodeTrustGate`, is a live layer whose gate is inert outside a signed install. Operator-accepted and SPEC-recorded — a disclosed partial. |
-| SC4 | Contract/code disagreements are fixed or the contract corrected in-phase, with the discrepancy recorded, never quietly reconciled | ⚠ PARTIAL | The mechanism is real: ~50 D-15 ledger rows with re-runnable evidence, in-place addenda for later findings, 2 explicit `OPEN` rows each backed by a greppable code marker enforced by `every_open_marker_in_code_has_a_ledger_row`, and contract↔code sync gates I proved discriminating. iter2's specific gap is closed. Three residuals: a **live unrecorded doc/code disagreement** in `layer_force_unavailable.rs:110-112` (names the wrong coverage list for 2 of 13 rows — the exact class Iteration 4's WR-07 fixed once in this same file, and the gate WR-07 added structurally cannot see it); the SPEC ledger has not been touched since before the round-4 review, so rounds 4/6/8 — including round 8's Critical — have no ledger row; and a stale `TODO(117-12)` at `layer_registry_selfcheck.rs:354` describing a gate that no longer behaves that way. |
+| SC3 | Every entry in the contract has a test that forces that layer unavailable and asserts the contracted outcome; a row without a test is not satisfied | ✓ ACCEPTED VIA OPERATOR OVERRIDE (factually 10/13 — unchanged) | 2 direct + 8 `ALSO_AUTOMATED` + 3 `MANUALLY_VERIFIED` = 13, arithmetic and disjointness machine-enforced. I read all 10 covered tests' BODIES — every one forces its layer unavailable (or drives the real gate to an Unconfirmed state) and asserts `LayerAttestationFailed` naming that layer. All 10 run in a real gate (default build, the `--features layer-fault-injection` legs, or `-p nono-shell-broker`), and CI job `windows-layer-fault-injection` runs the feature legs. Discovery proved discriminating by perturbation. **The literal bar is still short by 3:** two of those rows are for layers that do not exist in this tree (nothing to force unavailable); one, `BrokerAuthenticodeTrustGate`, is a live layer whose gate is inert outside a signed install. Operator-accepted and SPEC-recorded — a disclosed partial. |
+| SC4 | Contract/code disagreements are fixed or the contract corrected in-phase, with the discrepancy recorded, never quietly reconciled | ✓ VERIFIED (with disclosed, bounded limits) — **closed 2026-08-15, after this pass** | The mechanism is real: ~50 D-15 ledger rows with re-runnable evidence, in-place addenda for later findings, `OPEN` rows backed by greppable code markers enforced by `every_open_marker_in_code_has_a_ledger_row`, and contract↔code sync gates I proved discriminating. iter2's specific gap is closed. The three residuals this pass found were closed by quick task 260815-b0s (`511e2ab1`, `fba34606`): the `layer_force_unavailable.rs` module doc now names `ALSO_AUTOMATED` for both rows and its list assignment is machine-checked by a new sentence-scoped sibling gate proved by two perturbations; the SPEC states the D-15 scoping rule and indexes rounds 4/6/8 with finding counts (8/7/5, one Critical) and per-finding dispositions, none of which was a contract-vs-code divergence; and the stale `TODO(117-12)` is replaced with what the gate does at HEAD. **Bounded limits, stated so this row does not overclaim:** the new gate verifies the 5 module-doc claims made in sentences that name a coverage list and does NOT verify 13 further row mentions (it holds them constant by an equality pin instead); and `every_open_marker_in_code_has_a_ledger_row` still has no ledger→code direction, so an `OPEN` ledger row with no code marker would pass. |
 
-**Score:** 2/4 truths fully verified. 0 FAILED. No BLOCKER. This is a substantial, independently
-re-derived improvement over iter2's 0/4 with two live BLOCKERs.
+**Score:** 3/4 truths verified on evidence, 4/4 satisfied — SC1, SC2 and SC4 verified (SC2 and SC4
+with disclosed, bounded limits); SC3 accepted via an explicit operator override that leaves its
+10/13 finding intact. 0 FAILED. No BLOCKER. At the time this pass was written the score was 2/4;
+SC4 was closed the same day by the follow-up quick task, and this row records that rather than
+re-verifying it from scratch.
 
 ### Deferred Items (operator decisions, 2026-08-14 — not counted as gaps)
 
 | # | Item | Addressed In | Rationale still accurate at HEAD? | Greppable `OPEN` marker? | SPEC ledger row |
 |---|---|---|---|---|---|
-| 1 | **CR-02** — `EntryPath::Daemon` registry rows are documentation-only; `nono-agentd` does not link the registry | v3.7 carry-forward | **Yes, re-verified.** `crates/nono-cli/src/bin/nono-agentd.rs:42-57` `#[path]`-includes only `../agent_daemon/mod.rs`, `../telemetry/mod.rs`, `../agent_daemon/telemetry_init.rs` — `exec_strategy_windows` is never declared. Production `attest_and_decide` is never called with `EntryPath::Daemon`. | **No** — the binding is the new source-text gate, not an `OPEN` marker | ✓ `:299`, disposition stated as "Partial: the drift gate is closed; the wiring decision is NOT taken", with Option A / Option B named and deliberately not guessed |
-| 2 | **WR-12 / RF-13** — fleet-control `RequiredLayers` plumbing | v3.7 carry-forward | **Yes, re-verified.** `machine_policy.rs:716-739` reads the sub-key and emits a loud `RequiredLayersNotEnforced` warning; production gate call site `launch.rs:1585-1586` passes `&[]` for both slices, with an in-place comment explaining the union is tighten-only so the deferral cannot fail open. | **No** | ✓ `:262`, "Enforcement is NOT implemented", open operator decision stated |
+| 1 | **CR-02** — `EntryPath::Daemon` registry rows are documentation-only; `nono-agentd` does not link the registry | v3.7 carry-forward | **Yes, re-verified.** `crates/nono-cli/src/bin/nono-agentd.rs:42-57` `#[path]`-includes only `../agent_daemon/mod.rs`, `../telemetry/mod.rs`, `../agent_daemon/telemetry_init.rs` — `exec_strategy_windows` is never declared. Production `attest_and_decide` is never called with `EntryPath::Daemon`. | **Yes, as of 2026-08-15** — `⚠ CR-02 OPEN (NOT FIXED …)` at the `daemon_attest_and_decide` call site in `agent_daemon/launch.rs`. The registry binding is still only the source-text drift gate; the marker records that, it does not change it | ✓ the Iteration-6 row, disposition still "Partial: the drift gate is closed; the wiring decision is NOT taken", with Option A / Option B named and deliberately not guessed — the row now also carries the literal `OPEN` token so the code marker resolves against it, and it is the ONLY `\| CR-02 ` row that does (the Iteration-4 row shares the id and the gate cannot distinguish them) |
+| 2 | **WR-12 / RF-13** — fleet-control `RequiredLayers` plumbing | v3.7 carry-forward | **Yes, re-verified.** `machine_policy.rs:716-739` reads the sub-key and emits a loud `RequiredLayersNotEnforced` warning; production gate call site `launch.rs:1585-1586` passes `&[]` for both slices, with an in-place comment explaining the union is tighten-only so the deferral cannot fail open. | **Yes, as of 2026-08-15** — `⚠ RF-13 OPEN (NOT FIXED …)` at BOTH ends: the reader in `machine_policy.rs` that emits the warning, and the gate call site in `exec_strategy_windows/launch.rs` that passes the empty slices | ✓ the `RF-13` row, "Enforcement is NOT implemented", open operator decision stated — the row now also carries the literal `OPEN` token |
 
-Both rationales are accurate. Neither carries a greppable `OPEN` code marker — that convention was
-applied to WR-10 (`layer_registry.rs:925`) and WR-14 (`error.rs:506`) only. `every_open_marker_in_code_has_a_ledger_row`
-enforces code→ledger but has no ledger→code direction, so an operator grepping the source finds 2
-of the 4 open items. Noted under SC4's `missing`, not scored as a gap.
+Both rationales are accurate. **Updated 2026-08-15 (`fba34606`):** both items now carry greppable
+`OPEN` code markers, so an operator grepping the source finds **4 of the 4** open items (WR-10,
+WR-14, CR-02, RF-13) across 5 marker sites — RF-13 is annotated at both its reader and its gate
+call site. The convention previously covered WR-10 (`layer_registry.rs`) and WR-14 (`error.rs`)
+only. `marker_sources()` is now module-scope with a single definition and 7 entries, and
+`every_marker_carrying_source_file_is_in_marker_sources` makes the file set a closed class over
+`git ls-files`, so a future marker in an unlisted production file fails the build.
+`every_open_marker_in_code_has_a_ledger_row` still enforces only code→ledger and has **no**
+ledger→code direction: a ledger row marked `OPEN` with no code marker would still pass. That
+residual is disclosed, not closed.
 
 ### Required Artifacts
 
 | Artifact | Expected | Status | Details |
 |---|---|---|---|
-| `proj/SPEC-windows-fail-direction-contract.md` (344 lines) | The one document (SC1) + D-15 discrepancy ledger (SC4) | ✓ VERIFIED for SC1, ⚠ PARTIAL for SC4 | 13-row registry table with symbol-form call sites, outcomes, probes; Manual verification (D-31) section; ~50-row ledger. Ledger last edited before the round-4 review. |
+| `proj/SPEC-windows-fail-direction-contract.md` (was 344 lines; 372 after 2026-08-15) | The one document (SC1) + D-15 discrepancy ledger (SC4) | ✓ VERIFIED for SC1, ⚠ PARTIAL for SC4 | 13-row registry table with symbol-form call sites, outcomes, probes; Manual verification (D-31) section; 52-row ledger. **Updated 2026-08-15 (`fba34606`):** the `## Contract vs. code discrepancies` section now states the D-15 scoping rule and indexes rounds 4/6/8 with finding counts and dispositions, and the `RF-13` and `CR-02 (Iteration 6)` rows carry the literal `OPEN` token. |
 | `crates/nono-cli/src/exec_strategy_windows/layer_registry.rs` (1632 lines) | 13-row registry, expectancy matrix, drift gates | ✓ VERIFIED | All 13 `LayerId` rows with explicit `ContractOutcome`; `ALL` const with exhaustive-match drift trap; `daemon_expected_rows_are_all_named_by_the_daemon_gate` (:1425) with `checked >= 5` floor, proved discriminating. |
 | `crates/nono-cli/src/exec_strategy_windows/launch.rs` | D-21 gate + D-27/D-28 downgrade channels | ✓ VERIFIED | `apply_startup_attestation_gate` (:1552), one production call site (:2558) with fail-closed terminate; one shared `layer_detail` D-28 gate (:1617) feeding all three emission sites; `downgrade_detail_pointer` (:1477) is an exhaustive match with no `_` arm. |
 | `crates/nono-cli/src/exec_strategy_windows/labels_guard.rs` | CR-01/WR-01 residue predicate + coverage accessor | ✓ VERIFIED (1 host-blocked test) | Ownership gate first (:292), `INHERIT_ONLY_ACE` rejected (:338), `AlreadyAtRequiredLevel` correctly non-reverting (:422-428), `application()` excludes the contract-exempt category from the denominator (:178-190). `non_owned_path_with_a_foreign_label_is_exempt_not_a_coverage_gap` fails loudly on this host — disclosed, needs an elevated runner. |
 | `crates/nono/src/sandbox/windows.rs` | `AceFlags`-aware SACL reader + class gate | ✓ VERIFIED | `low_integrity_label_ace` returns flags; all 3 production consumers filter `INHERIT_ONLY_ACE`; `every_low_integrity_label_ace_consumer_filters_inherit_only` (:3468) scans the production half of both files with a `checked > 0` non-vacuity floor. |
-| `crates/nono-cli/tests/layer_registry_selfcheck.rs` (2245 lines) | Citation content-verification + CI sync gate + OPEN-marker gate | ✓ VERIFIED (1 stale comment) | 20/20 pass IN THE REAL TREE including the round-8 CR-01 target. `tracked_files()` resolves against `git ls-files -z` and fails CLOSED. Stale `TODO(117-12)` at :354. |
-| `crates/nono-cli/tests/layer_registry_meta_test.rs` (639 lines) | D-32 discovery + coverage-split arithmetic | ✓ VERIFIED as a mechanism, ⚠ 10/13 as coverage | 10/10 pass; discovery reads `LayerId::ALL` fresh from source and names no layer; `coverage_split_accounts_for_every_layer_id` enforces totals AND disjointness. Checks name existence, not test semantics. |
-| `crates/nono-cli/tests/layer_force_unavailable.rs` (207 lines) | 2 external-subprocess forced-unavailable tests | ✓ VERIFIED (stale module doc) | Both pass live under `--features layer-fault-injection`. Module doc :110-112 misassigns 2 rows to `MANUALLY_VERIFIED` — see SC4. |
+| `crates/nono-cli/tests/layer_registry_selfcheck.rs` (2245 lines at this pass; 2418 after 2026-08-15) | Citation content-verification + CI sync gate + OPEN-marker gate | ✓ VERIFIED (stale comment resolved 2026-08-15) | 20/20 pass IN THE REAL TREE including the round-8 CR-01 target. `tracked_files()` resolves against `git ls-files -z` and fails CLOSED. **Updated 2026-08-15 (`511e2ab1`, `fba34606`): 21/21 in the real tree.** The stale `TODO(117-12)` is replaced with what `registry_call_sites_exist` does at HEAD; `marker_sources()` is hoisted to module scope (one definition, 7 entries, two callers); and the new `every_marker_carrying_source_file_is_in_marker_sources` closes the marker file class over `git ls-files`, with the detected-file count pinned by equality at 5. |
+| `crates/nono-cli/tests/layer_registry_meta_test.rs` (639 lines at this pass; 944 after 2026-08-15) | D-32 discovery + coverage-split arithmetic + module-doc list assignment | ✓ VERIFIED as a mechanism, ⚠ 10/13 as coverage (operator-accepted) | 10/10 pass; discovery reads `LayerId::ALL` fresh from source and names no layer; `coverage_split_accounts_for_every_layer_id` enforces totals AND disjointness. Checks name existence, not test semantics. **Updated 2026-08-15 (`511e2ab1`): 11/11.** The new `module_doc_assigns_each_claimed_row_to_the_list_it_is_on` adds what the arithmetic gate is structurally blind to — WHICH list the prose names — sentence-scoped, discovery-based, 5 claims verified and 13 unverifiable mentions pinned by equality. |
+| `crates/nono-cli/tests/layer_force_unavailable.rs` (207 lines at this pass; 216 after 2026-08-15) | 2 external-subprocess forced-unavailable tests | ✓ VERIFIED (module doc corrected 2026-08-15) | Both pass live under `--features layer-fault-injection`. The module doc's misassignment of 2 rows to `MANUALLY_VERIFIED` is **corrected in `511e2ab1`**: both rows are now assigned to `ALSO_AUTOMATED` in one sentence that also names each row's in-process test, and the assignment is machine-checked — see SC4. |
 | `crates/nono-cli/src/cfg_test_regions.rs` (2048 lines, 81 tests) | Shared cfg-test classifier for all 3 gates | ✓ VERIFIED | 3 `scan_production` call sites, all 3 call `assert_split_is_correct`. Round-8 WR-01 fix proved discriminating by the decisive two-part perturbation. No mechanical gate forces a FUTURE consumer to call `assert_split_is_correct` — latent, noted below. |
 | `crates/nono-cli/src/output.rs` | Coarse D-27 banner + D-28 digest marker | ✓ VERIFIED | Banner is count-only on every arm and takes no `silent` parameter; marker content is a domain-separated digest (:361-374); forgeability limit disclosed in the function doc. |
 | `.github/workflows/ci.yml` | Gate that actually runs the fault-injection suites | ✓ VERIFIED | `windows-layer-fault-injection` (:343-388) builds `nono-shell-broker --release` then runs both feature legs with `--test-threads=1`. |
@@ -263,7 +336,7 @@ Windows runner executes it.
 |---|---|---|---|---|
 | CINT-01 | 117-01, 03, 15, 19, 24, 26, 32 | Single fail-direction contract, derived from code, citing call sites | ✓ SATISFIED | SC1 verified. `.planning/REQUIREMENTS.md:119` still shows `[ ]`/Pending and `:186` Pending — the marking now UNDER-states the state; safe direction, worth updating at phase close. |
 | CINT-02 | 117-02, 05, 08–11, 13–17, 20, 21, 23, 27–29 | Startup self-attestation; never presents an unconfirmed guarantee | ✓ SATISFIED (with the two recorded operator deferrals) | SC2 verified. `.planning/REQUIREMENTS.md:187` shows Pending — iter2's recommendation to revert the premature `[x]` was taken, and the underlying defect is now fixed. |
-| CINT-03 | 117-04, 06, 07, 12, 16, 18, 22, 30, 31, 44 | Per-layer forced-unavailable test for every row; untested row = unsatisfied | ⚠ BLOCKED by its own literal wording (10/13) | SC3 partial. `.planning/REQUIREMENTS.md:188` Pending — correct. |
+| CINT-03 | 117-04, 06, 07, 12, 16, 18, 22, 30, 31, 44 | Per-layer forced-unavailable test for every row; untested row = unsatisfied | ✓ SATISFIED VIA OPERATOR OVERRIDE (factually 10/13 by its own literal wording) | SC3's shortfall is accepted in this file's frontmatter `overrides` block (Oscar Mack Jr, 2026-08-15T00:00:00Z); the 10/13 finding and the three named remainder rows are unchanged. `.planning/REQUIREMENTS.md:188` Pending — deliberately not edited by the 2026-08-15 closure task; worth updating at phase close. |
 
 **Orphaned requirements check:** `grep -n "CINT-0" .planning/REQUIREMENTS.md` returns only
 CINT-01/02/03, all mapped to Phase 117. No orphans.
@@ -272,8 +345,8 @@ CINT-01/02/03, all mapped to Phase 117. No orphans.
 
 | File | Line | Pattern | Severity | Impact |
 |---|---|---|---|---|
-| `crates/nono-cli/tests/layer_force_unavailable.rs` | 110-112 | Stale prose: assigns `RestrictedToken`/`JobObjectContainment` to `MANUALLY_VERIFIED` when they are on `ALSO_AUTOMATED` | ⚠ Warning | Under-claim direction (both rows ARE automated), so no security effect — but it is a live doc/code disagreement, in the same file and of the same class Iteration 4's WR-07 already fixed once, and no gate can see it. Counted under SC4. |
-| `crates/nono-cli/tests/layer_registry_selfcheck.rs` | 354-358 | Stale `TODO(117-12)`: "asserts file EXISTENCE … does not verify the cited line NUMBER" | ⚠ Warning | Both halves false at HEAD: no line-number citations remain and symbol citations ARE content-verified. Plan-referenced, so not a blocker marker. Counted under SC4. |
+| `crates/nono-cli/tests/layer_force_unavailable.rs` | 110-112 | Stale prose: assigns `RestrictedToken`/`JobObjectContainment` to `MANUALLY_VERIFIED` when they are on `ALSO_AUTOMATED` | ✓ RESOLVED 2026-08-15 (`511e2ab1`) | Was: under-claim direction (both rows ARE automated), so no security effect — but a live doc/code disagreement, in the same file and of the same class Iteration 4's WR-07 already fixed once, and no gate could see it. Now: the claim names `ALSO_AUTOMATED` first and both rows after it in ONE sentence, cites each row's in-process test by symbol, and is machine-checked by `module_doc_assigns_each_claimed_row_to_the_list_it_is_on`. The "no gate can see it" half is what the new gate closes. |
+| `crates/nono-cli/tests/layer_registry_selfcheck.rs` | 354-358 | Stale `TODO(117-12)`: "asserts file EXISTENCE … does not verify the cited line NUMBER" | ✓ RESOLVED 2026-08-15 (`511e2ab1`) | Both halves were false at HEAD: no line-number citations remain and symbol citations ARE content-verified. Replaced with an accurate description of what `registry_call_sites_exist` does now, plus the narrower residual risk that genuinely remains (a symbol can survive while no longer performing the enforcement its row describes). No `TODO(` marker remains in the file. |
 | `crates/nono-cli/src/cfg_test_regions.rs` | — | No mechanical gate requires a FUTURE `scan_production` consumer to call `assert_split_is_correct` | ℹ Info | All 3 current consumers do (verified). Latent instance of the same "guard narrower than the class" pattern this phase kept producing — in the phase's own verification machinery. Not scored. |
 | `crates/nono/src/sandbox/windows.rs` | 3482-3488 | `every_low_integrity_label_ace_consumer_filters_inherit_only` scans two hardcoded files | ℹ Info | The reader is `pub`, so an out-of-workspace consumer is out of the gate's reach. The SPEC's WR-25 addendum states the enumeration explicitly (1 walk, 3 production consumers, all hardened). Not scored. |
 
@@ -293,10 +366,11 @@ See `human_verification` in frontmatter. Three items:
    workspace extras are the documented pre-existing ones (e.g. `audit_attestation::*` hardcodes
    `/bin/pwd`). The two figures that matter for this phase were measured live here.
 
-### Suggested Override (SC3)
+### Suggested Override (SC3) — APPLIED 2026-08-15
 
-SC3's shortfall is a **recorded operator decision**, not an implementation gap. If the operator
-wants this scored as satisfied, add to this file's frontmatter and re-run verification:
+SC3's shortfall is a **recorded operator decision**, not an implementation gap. The block below is
+the one this report suggested; it is now **applied verbatim** in this file's frontmatter, with
+`accepted_by: "Oscar Mack Jr"` and `accepted_at: "2026-08-15T00:00:00Z"`:
 
 ```yaml
 overrides:
@@ -306,8 +380,16 @@ overrides:
     accepted_at: "<ISO timestamp>"
 ```
 
-I have deliberately **not** applied this myself — SC3's wording is un-hedged in the ROADMAP, and
-inventing the acceptance is the verifier writing its own pass.
+This report deliberately did **not** apply it — SC3's wording is un-hedged in the ROADMAP, and
+inventing the acceptance would have been the verifier writing its own pass. **The operator, Oscar
+Mack Jr, accepted it on 2026-08-15**, and quick task 260815-b0s applied it (the `accepted_by` /
+`accepted_at` fields above are the operator's, not the verifier's). What the override does and does
+not do: it accepts a **disclosed** shortfall against SC3's literal wording. It does not change the
+finding. SC3 is still factually 10/13; the three remaining rows — `DaclSessionSidGrant`,
+`MinifilterAbsence` and `BrokerAuthenticodeTrustGate` — are still named individually here, in the
+SPEC's Manual verification section, and in `MANUALLY_VERIFIED`, and are still kept loud by
+`host_gated_rows_are_loud`. It is also not about the WR-20 pin: that test remains host-blocked and
+`cargo test --bin nono` remains RED at HEAD.
 
 ### Gaps Summary
 
@@ -333,7 +415,9 @@ because this phase's signature failure is machinery that passes by absence. All 
 as required, including the decisive one: a `#[cfg(test)]`-gated helper naming a layer no longer
 satisfies the daemon drift gate, which is precisely what round 8 found it doing.
 
-Two truths remain honestly partial:
+Two truths were honestly partial when this pass was written. Both have since been dispositioned —
+SC3 by an operator override, SC4 by closure work. The original findings are preserved below,
+followed by what happened to each.
 
 1. **SC3 is 10/13 by its own literal bar.** The three remaining rows are named, justified,
    SPEC-documented and kept loud by a test — and two of them are rows for layers that do not exist
@@ -343,6 +427,12 @@ Two truths remain honestly partial:
    stated plainly: `cargo test --bin nono` is RED at HEAD (1688/12), and one of the 12 is a Phase
    117 test that cannot construct its precondition on this non-elevated host. It fails loudly by
    design, it does not reduce SC3's row coverage, and it needs an elevated/CI runner.
+
+   **Disposition (2026-08-15):** the operator, Oscar Mack Jr, accepted the shortfall; the override
+   is applied in this file's frontmatter. Nothing above is retracted. SC3 remains factually 10/13,
+   the three named rows remain named, `cargo test --bin nono` remains RED at HEAD (1688/12), and
+   the elevated/CI run of the WR-20 pin is still outstanding. The override changes the SCORING of
+   a disclosed shortfall, not the shortfall.
 
 2. **SC4's mechanism is strong but has a live instance of the very thing it forbids.** The
    phase's own coverage-declaring file states that two rows are on the manual list when they are
@@ -356,11 +446,26 @@ Two truths remain honestly partial:
    "recorded in the review artifact" is a different claim from "recorded in the standing contract",
    and SC4 names the latter.
 
-Neither gap is a BLOCKER. Neither prevents proceeding to Phase 118, whose dependency on this phase
-is the layer enumeration — which is complete, verified, and mechanically drift-guarded. The
-closure work is small and specific: three prose corrections, one gate extension so the coverage
-prose is machine-checked, a ledger decision for rounds 4/6/8, and an elevated-runner pass for
-WR-20.
+   **Disposition (2026-08-15, quick task 260815-b0s — commits `511e2ab1` and `fba34606`):** all
+   four `missing` bullets are closed. The coverage-declaring file now names the right list and its
+   assignment is machine-checked by a sentence-scoped sibling gate, proved by two perturbations
+   (a wrong claim FAILS naming both rows, the claimed list and the real list; a claim reworded
+   back to the anaphoric "both rows" shape FAILS on both pins). The standing contract now carries
+   the claim SC4 asks for: the SPEC states the D-15 scoping rule and indexes rounds 4, 6 and 8
+   with their finding counts (8 / 7 / 5, one Critical) and per-finding dispositions read from the
+   committed artifacts — all 20 verification-machinery, none reclassified, with round 6's WR-04
+   dispositioned explicitly rather than swept in. The stale `TODO(117-12)` is replaced. And all
+   four open items now carry greppable `OPEN` markers resolving to `OPEN` ledger rows.
+   **What the closure does not claim:** the new gate verifies 5 module-doc claims and holds 13
+   further row mentions constant by an equality pin WITHOUT verifying them (they make no
+   assignment claim); `every_open_marker_in_code_has_a_ledger_row` still has no ledger→code
+   direction; and markers in `tests/` are outside the new discovery gate's reach.
+
+Neither gap was a BLOCKER, and neither prevents proceeding to Phase 118, whose dependency on this
+phase is the layer enumeration — which is complete, verified, and mechanically drift-guarded. The
+closure work this report scoped as "small and specific" was carried out the same day, except for
+the last item: **the elevated-runner pass for WR-20 is still outstanding** and remains the phase's
+one genuinely open verification task.
 
 ---
 
