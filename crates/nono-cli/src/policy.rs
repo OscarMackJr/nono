@@ -1597,6 +1597,24 @@ mod tests {
         }"#
     }
 
+    /// [`sample_policy_json`] with its read grants repointed at a directory
+    /// that genuinely exists on the host running the test.
+    ///
+    /// Quick task 260815-gfd. `resolve_groups` silently drops allow paths that
+    /// do not exist, so any test asserting on a RESOLVED capability needs a
+    /// real directory — unlike the fifteen parse-only callers of
+    /// [`sample_policy_json`], for which the Unix literal `/tmp` is inert text
+    /// and correctly stays a literal. On Windows `/tmp` is a root-relative
+    /// path resolving to `C:\tmp`, which happens to exist on this project's
+    /// dev host as accumulated scratch and does NOT exist on the CI runner —
+    /// so `test_resolve_read_group` was passing here for an accident of the
+    /// filesystem and failing there with `assertion failed: caps.has_fs()`.
+    fn sample_policy_json_reading(dir: &Path) -> String {
+        let quoted =
+            serde_json::to_string(&dir.to_string_lossy()).expect("JSON-encode a filesystem path");
+        sample_policy_json().replace("\"/tmp\"", &quoted)
+    }
+
     #[test]
     fn test_load_policy() {
         let policy = load_policy(sample_policy_json());
@@ -1793,12 +1811,21 @@ mod tests {
 
     #[test]
     fn test_resolve_read_group() {
-        let policy = load_policy(sample_policy_json()).expect("parse failed");
+        // The grant path must EXIST for `resolve_groups` to produce a
+        // capability, so build the fixture around a real directory rather
+        // than the literal `/tmp` (which is not a path on Windows at all).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let json = sample_policy_json_reading(dir.path());
+        let policy = load_policy(&json).expect("parse failed");
         let mut caps = CapabilitySet::new();
         let resolved = resolve_groups(&policy, &["test_read".to_string()], &mut caps);
         assert!(resolved.is_ok());
-        // /tmp should exist on all platforms
-        assert!(caps.has_fs());
+        assert!(
+            caps.has_fs(),
+            "a read group naming an existing directory ({}) must resolve to a filesystem \
+             capability",
+            dir.path().display()
+        );
     }
 
     #[test]
@@ -2336,13 +2363,20 @@ mod tests {
         use nono::FsCapability;
 
         let mut caps = CapabilitySet::new();
-        // Allow /tmp (parent)
-        let cap = FsCapability::new_dir(std::path::Path::new("/tmp"), AccessMode::Read)
-            .expect("/tmp must exist");
+        // Allow a real directory (parent). Quick task 260815-gfd: this used
+        // the literal `/tmp`, which is not a path on Windows — it resolves to
+        // `C:\tmp`, absent on CI, so `new_dir` returned `PathNotFound("/tmp")`.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cap = FsCapability::new_dir(dir.path(), AccessMode::Read)
+            .expect("the temp dir just created must exist");
+        // Build the deny child from the CANONICALIZED grant, not from the raw
+        // tempdir path: `starts_with` below compares against `cap.resolved`,
+        // and on macOS `/tmp` canonicalizes to `/private/tmp`.
+        let allowed = cap.resolved.clone();
         caps.add_fs(cap);
 
-        // Deny /tmp/secret (child of allowed parent)
-        let deny_paths = vec![PathBuf::from("/tmp/secret")];
+        // Deny <allowed>/secret (child of allowed parent)
+        let deny_paths = vec![allowed.join("secret")];
 
         // On macOS: no-op (Seatbelt handles deny-within-allow natively)
         // On Linux: would warn, but we can't assert on warn!() easily
@@ -2356,7 +2390,8 @@ mod tests {
             });
             assert!(
                 has_overlap,
-                "Should detect /tmp/secret overlapping with /tmp"
+                "Should detect <allowed>/secret overlapping with the allowed dir {}",
+                allowed.display()
             );
         }
 
@@ -2379,13 +2414,25 @@ mod tests {
         use nono::FsCapability;
 
         let mut caps = CapabilitySet::new();
-        // Allow /tmp
-        let cap = FsCapability::new_dir(std::path::Path::new("/tmp"), AccessMode::Read)
-            .expect("/tmp must exist");
+        // Allow a real directory. Same `/tmp` → `C:\tmp` defect as the sibling
+        // conflict test above (quick task 260815-gfd).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cap = FsCapability::new_dir(dir.path(), AccessMode::Read)
+            .expect("the temp dir just created must exist");
+        let allowed = cap.resolved.clone();
         caps.add_fs(cap);
 
-        // Deny /home/secret (NOT under /tmp — no overlap)
+        // Deny a path that is NOT under the allowed dir — no overlap. It need
+        // not exist; deny paths are compared, not opened. Asserted below
+        // rather than assumed, so a future temp-dir layout cannot make this
+        // test vacuous.
         let deny_paths = vec![PathBuf::from("/home/secret")];
+        assert!(
+            !deny_paths[0].starts_with(&allowed),
+            "test precondition: the deny path {} must not sit under the allowed dir {}",
+            deny_paths[0].display(),
+            allowed.display()
+        );
 
         // Should not detect overlap
         let has_overlap = deny_paths.iter().any(|deny| {
