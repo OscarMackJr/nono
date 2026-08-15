@@ -1167,10 +1167,7 @@ fn every_open_marker_in_code_has_a_ledger_row() {
         for (n, line) in src.lines().enumerate() {
             // Every occurrence on the line, not just the first: one line may
             // carry two markers, and `find` would silently drop the second.
-            for (pos, _) in line.match_indices(" OPEN") {
-                let Some(id) = finding_id_before(line, pos) else {
-                    continue;
-                };
+            for id in parse_marker_ids(line) {
                 parsed_here = parsed_here.saturating_add(1);
                 if !markers.iter().any(|(seen, _)| seen == &id) {
                     markers.push((id, format!("{label}:{}", n + 1)));
@@ -1933,10 +1930,48 @@ fn is_finding_id(token: &str) -> bool {
             .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
 }
 
+/// Every deferral marker id PARSED out of `line`, in source order.
+///
+/// This is the marker PARSER, and it is the only place its rule is written —
+/// the consumer and the width self-test both call this rather than each
+/// re-spelling `match_indices(" OPEN")` (round-8 WR-03).
+///
+/// The rule is: an `OPEN` **word**, immediately preceded by a finding-id
+/// token. The word half is what round-8 WR-03 added. The trigger was the bare
+/// substring `" OPEN"` — the same over-wide needle round-6 WR-06 raised and
+/// fixed in the DETECTOR while leaving it here — so `// WR-14 OPENING the job
+/// handle`, `// CR-99 OPENS a handle` and `// WR-14 OPEN_EXISTING` all parsed
+/// to a marker id. That is fail-closed (it demands a SPEC ledger row for a
+/// line that is not a deferral marker at all) but it is also the exact
+/// asymmetry that made [`line_carries_marker_tokens`]'s documented "strictly
+/// wider" claim FALSE: those three lines fire the parser and the detector is
+/// blind to every one of them, so the blind-file property had a hole where it
+/// asserted none.
+///
+/// `-` counts as a word character here, not just `[A-Za-z0-9_]`, and that is
+/// load-bearing rather than incidental: the detector trims tokens of
+/// everything except alphanumerics and `-`, so `OPEN-ish` reaches it as the
+/// token `OPEN-ish` and not as `OPEN`. Admitting `-` as a terminator here
+/// would re-open the same hole one character over.
+fn parse_marker_ids(line: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (pos, _) in line.match_indices(" OPEN") {
+        let after = line.get(pos.saturating_add(" OPEN".len())..).unwrap_or("");
+        if after.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+            continue;
+        }
+        if let Some(id) = finding_id_before(line, pos) {
+            out.push(id);
+        }
+    }
+    out
+}
+
 /// The finding id IMMEDIATELY preceding the ` OPEN` occurrence at byte `pos`,
 /// or `None` when what precedes it is not one.
 ///
-/// This is the marker PARSER. Its defining property is adjacency.
+/// The parser's ADJACENCY half. Callers go through [`parse_marker_ids`], which
+/// adds the whole-word half.
 fn finding_id_before(line: &str, pos: usize) -> Option<String> {
     let head = line.get(..pos)?;
     let mut id: Vec<char> = head
@@ -1954,7 +1989,7 @@ fn finding_id_before(line: &str, pos: usize) -> Option<String> {
 ///
 /// This is the marker DETECTOR, and it is deliberately NOT the parser
 /// (round-6 WR-06). It ignores adjacency, so it stays strictly wider than
-/// [`finding_id_before`]: any rewriting of the marker that keeps both tokens
+/// [`parse_marker_ids`]: any rewriting of the marker that keeps both tokens
 /// but breaks their adjacency (`WR-14 (OPEN)`, `WR-14 — OPEN`) trips this and
 /// blinds that, which is precisely the parser-went-blind failure the property
 /// exists to catch. Restating the parser's rule here instead would make the
@@ -1963,6 +1998,18 @@ fn finding_id_before(line: &str, pos: usize) -> Option<String> {
 /// `OPEN` is matched as a WHOLE WORD, which is what keeps ordinary Win32
 /// source out: `dwCreationDisposition: OPEN_EXISTING` contains ` OPEN` as a
 /// substring but no `OPEN` token.
+///
+/// # Why the width relation now holds (round-8 WR-03)
+///
+/// The claim above was asserted on ONE input and was false on three classes:
+/// `WR-14 OPENING`, `CR-99 OPENS` and `WR-14 OPEN_EXISTING` all fired the
+/// parser while this was blind to every one of them, because the parser's
+/// trigger was the substring `" OPEN"` and this one's is the token `OPEN`.
+/// The asymmetry is fixed where it belongs — in the parser, which now requires
+/// the WORD — rather than by widening this to match, which would have made the
+/// blind-file property vacuous by construction. It is asserted over a table in
+/// [`the_open_marker_detector_separates_markers_from_win32_constants`], both
+/// directions, with a non-vacuity floor on each.
 fn line_carries_marker_tokens(line: &str) -> bool {
     let tokens: Vec<&str> = line
         .split_whitespace()
@@ -2003,23 +2050,98 @@ fn the_open_marker_detector_separates_markers_from_win32_constants() {
              fire reports a file 'blind' for a reason unrelated to any deferral record"
         );
     }
-    // The detector must stay strictly WIDER than the parser, or the
-    // discovery-correctness property is vacuous by construction.
-    let broken = "// WR-14 (OPEN)";
-    assert!(line_carries_marker_tokens(broken));
+    // ROUND-8 WR-03: the width relation, asserted as a RULE over a table
+    // rather than on the single input `"// WR-14 (OPEN)"`.
+    //
+    // The property the blind-file check rests on is
+    //
+    //     parser fires  =>  detector fires
+    //
+    // (equivalently: the detector is at least as wide). It was documented as
+    // "strictly wider" and was false on three classes — `WR-14 OPENING`,
+    // `CR-99 OPENS`, `WR-14 OPEN_EXISTING` — every one of which parsed to a
+    // marker id while the detector saw nothing. An instance asserted as a rule
+    // is the shape this round exists to stop, so it is a table now, and the
+    // table carries the counterexamples that broke it.
+    let mut parser_fired = 0usize;
+    let mut detector_only = 0usize;
+    for line in [
+        "/// ⚠ WR-14 OPEN — the remediation is mis-targeted",
+        "// CR-01 OPEN",
+        "    // WR-10 OPEN (operator decision)",
+        "// WR-14 (OPEN)",
+        "// WR-14 — OPEN",
+        "// WR-14 OPENING the job handle",
+        "// CR-99 OPENS a handle",
+        "// WR-14 OPEN_EXISTING",
+        "// WR-14 OPEN-ish",
+        "// WR-14 OPEN, WR-15 OPEN",
+        "    dwCreationDisposition: OPEN_EXISTING,",
+        "        FILE_OPEN,",
+        "// the handle is open for the lifetime of the job",
+        "// WR-14 is deferred",
+        "// leave the door OPEN",
+        "// ABC-12 OPEN",
+        "// WR-14a OPEN",
+        "// 117-WR-14 OPEN",
+        "",
+        " OPEN",
+    ] {
+        let parsed = parse_marker_ids(line);
+        let detected = line_carries_marker_tokens(line);
+        if !parsed.is_empty() {
+            parser_fired = parser_fired.saturating_add(1);
+        } else if detected {
+            detector_only = detector_only.saturating_add(1);
+        }
+        assert!(
+            parsed.is_empty() || detected,
+            "{line:?} parsed to {parsed:?} but the detector cannot see it, so the blind-file \
+             property has a hole exactly where its doc claims none: a file whose only marker \
+             is written this way is parsed but never reported when the parser later goes blind"
+        );
+    }
+    // Non-vacuity, both halves. Without the first the implication is satisfied
+    // by a parser that never fires; without the second, detector and parser
+    // agree on every input and the blind-file check can never fire at all.
     assert!(
-        broken
-            .match_indices(" OPEN")
-            .all(|(pos, _)| finding_id_before(broken, pos).is_none()),
+        parser_fired >= 4,
+        "non-vacuity: only {parser_fired} table row(s) fired the parser, so the implication \
+         above is nearly vacuous"
+    );
+    assert!(
+        detector_only >= 2,
+        "non-vacuity: only {detector_only} table row(s) trip the detector WITHOUT parsing. \
+         Those rows are the whole point — they are the adjacency-broken markers the \
+         blind-file check exists to catch — and if there are none, detector and parser have \
+         converged and the check is vacuous by construction"
+    );
+    // The three classes that made the "strictly wider" claim false, pinned
+    // individually so a future widening of the parser's trigger is a
+    // deliberate decision.
+    for over_wide in [
+        "// WR-14 OPENING the job handle",
+        "// CR-99 OPENS a handle",
+        "// WR-14 OPEN_EXISTING",
+        "// WR-14 OPEN-ish",
+    ] {
+        assert!(
+            parse_marker_ids(over_wide).is_empty(),
+            "{over_wide:?} is not a deferral marker: `OPEN` must be a WORD to the parser as it \
+             already is to the detector, or the parser demands a SPEC ledger row for a line \
+             that records nothing"
+        );
+    }
+    assert_eq!(parse_marker_ids("// WR-14 OPEN"), vec!["WR-14".to_string()]);
+    assert_eq!(
+        parse_marker_ids("// WR-14 OPEN, WR-15 OPEN"),
+        vec!["WR-14".to_string(), "WR-15".to_string()],
+        "both markers on a line must parse — `find` would silently drop the second"
+    );
+    assert!(
+        parse_marker_ids("// WR-14 (OPEN)").is_empty(),
         "the parser must NOT recognise the adjacency-broken form; if it did, detector and \
          parser would agree on every input and the blind-file check could never fire"
-    );
-    let intact = "// WR-14 OPEN";
-    assert_eq!(
-        intact
-            .match_indices(" OPEN")
-            .find_map(|(pos, _)| finding_id_before(intact, pos)),
-        Some("WR-14".to_string())
     );
 }
 
