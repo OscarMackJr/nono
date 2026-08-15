@@ -1,7 +1,7 @@
 ---
 phase: 117-fail-direction-contract-startup-self-attestation
 verified: 2026-08-15T00:00:00Z
-status: passed_with_accepted_risk
+status: human_needed
 score: >
   3/4 truths verified on evidence, 4/4 satisfied. SC1 VERIFIED; SC2 VERIFIED-with-disclosed-limits;
   SC3 ACCEPTED VIA OPERATOR OVERRIDE (factually still 10/13 — the override accepts a disclosed
