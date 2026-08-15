@@ -38,7 +38,7 @@ Sequencing rationale: **115** drains the v3.6 findings first because DRAIN-03 cl
 
 - [x] **Phase 115: v3.6 Carry-Forward Drain** — 6/6 plans (2026-08-09)
 - [x] **Phase 116: Tool-Sandbox Divergence Audit + Disposition ADR** — 6/6 plans (2026-08-09)
-- [ ] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 34/34 plans executed. Gap-closure round 3 EXECUTED 2026-08-11 (waves 12-14), closing CR-03 (BLOCKER) and WR-12..WR-21; D-37 implemented as the three-arm ancestor classification. Full suite 1624 passed / 12 failed = the 11 documented Windows-host baseline + **one intentional host-blocked test** (117-30's WR-20 pin needs an elevated/CI runner — `SeTakeOwnershipPrivilege` absent here, so WR-20 is authored-but-unverified). Awaiting code review iteration 6 + re-verification
+- [x] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 34/34 plans executed. Gap-closure round 3 EXECUTED 2026-08-11 (waves 12-14), closing CR-03 (BLOCKER) and WR-12..WR-21; D-37 implemented as the three-arm ancestor classification. Full suite 1624 passed / 12 failed = the 11 documented Windows-host baseline + **one intentional host-blocked test** (117-30's WR-20 pin needs an elevated/CI runner — `SeTakeOwnershipPrivilege` absent here, so WR-20 is authored-but-unverified). Code review ran to round 9; re-verified 2026-08-15 (117-VERIFICATION.md, status: human_needed): SC1/SC2 VERIFIED, SC3 ACCEPTED via operator override (still factually 10/13), SC4 VERIFIED with disclosed limits — its recording gap closed the same day by quick task 260815-b0s. One human item open: the WR-20 CI run.
 - [ ] **Phase 118: Per-Session Enforcement Receipts** — 0/? plans
 - [ ] **Phase 119: Security-Model Boundary Statement + State-of-the-Art Decision Log** — 0/? plans
 - [ ] **Phase 120: Tool-Sandbox Verdict Execution** — 0/? plans
@@ -432,7 +432,7 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
 | 114. OAuth Capture Absorb (SEC-02) | v3.6 | 11/11 | Complete | 2026-08-07 |
 | 115. v3.6 Carry-Forward Drain | v3.7 | 6/6 | Complete | 2026-08-09 |
 | 116. Tool-Sandbox Divergence Audit + Disposition ADR | v3.7 | 6/6 | Complete (verdict: formalize fork-native) | 2026-08-09 |
-| 117. Fail-Direction Contract + Startup Self-Attestation | v3.7 | 26/34 | Gap-closure round 3 planned | - |
+| 117. Fail-Direction Contract + Startup Self-Attestation | v3.7 | 34/34 | Complete (SC3 via operator override; 1 human item open) | 2026-08-15 |
 | 118. Per-Session Enforcement Receipts | v3.7 | 0/? | Not started | - |
 | 119. Security-Model Boundary Statement + State-of-the-Art Decision Log | v3.7 | 0/? | Not started | - |
 | 120. Tool-Sandbox Verdict Execution | v3.7 | 0/? | Not started | - |
