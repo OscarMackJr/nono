@@ -391,9 +391,9 @@ fn print_connection_info(
     if config.require_auth {
         eprintln!(
             "  [nono] HTTPS_PROXY=http://nono:{}@{}:{}",
-            &*handle.token, args.listen, handle.port
+            *handle.token, args.listen, handle.port
         );
-        eprintln!("  [nono] NONO_PROXY_TOKEN={}", &*handle.token);
+        eprintln!("  [nono] NONO_PROXY_TOKEN={}", *handle.token);
     } else {
         eprintln!(
             "  [nono] WARNING: --no-auth active — every request on this address is accepted \

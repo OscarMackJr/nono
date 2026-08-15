@@ -154,7 +154,7 @@ impl ProxyHandle {
     /// prefer Bearer auth.
     #[must_use]
     pub fn env_vars(&self) -> Vec<(String, String)> {
-        let proxy_url = format!("http://nono:{}@127.0.0.1:{}", &*self.token, self.port);
+        let proxy_url = format!("http://nono:{}@127.0.0.1:{}", *self.token, self.port);
 
         // Build NO_PROXY: include loopback unless a managed credential route
         // targets a loopback upstream (those must traverse the proxy). Add
