@@ -472,6 +472,298 @@ fn coverage_split_accounts_for_every_layer_id() {
     );
 }
 
+/// The two coverage-list identifiers, each paired with the row names actually
+/// on it.
+///
+/// Both halves come from the const itself — `stringify!` for the identifier
+/// the prose has to spell, and the const's own entries for the membership —
+/// in ONE expression, so renaming either const breaks this file's compilation
+/// instead of silently un-scoping
+/// [`module_doc_assigns_each_claimed_row_to_the_list_it_is_on`] (a gate that
+/// scans for a string nobody writes any more passes for the wrong reason).
+fn coverage_lists() -> Vec<(&'static str, Vec<&'static str>)> {
+    vec![
+        (
+            stringify!(MANUALLY_VERIFIED),
+            MANUALLY_VERIFIED.iter().map(|(name, _)| *name).collect(),
+        ),
+        (
+            stringify!(ALSO_AUTOMATED),
+            ALSO_AUTOMATED.iter().map(|(name, _, _)| *name).collect(),
+        ),
+    ]
+}
+
+/// The module-doc (`//!`) region of `src`, one entry per doc line with the
+/// `//!` prefix stripped. A line that is exactly `//!` yields an empty entry,
+/// which is what separates paragraphs in [`doc_paragraphs`].
+fn module_doc_lines(src: &str) -> Vec<&str> {
+    src.lines()
+        .filter_map(|line| line.trim_start().strip_prefix("//!"))
+        .collect()
+}
+
+/// Group [`module_doc_lines`] into paragraphs on blank `//!` lines, joining
+/// each paragraph's lines with a single space. Joining is what lets the
+/// sentence splitter below see a sentence that was hard-wrapped across
+/// several doc lines as one string.
+fn doc_paragraphs(doc_lines: &[&str]) -> Vec<String> {
+    let mut paragraphs = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    for line in doc_lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if !current.is_empty() {
+                paragraphs.push(current.join(" "));
+                current.clear();
+            }
+        } else {
+            current.push(trimmed);
+        }
+    }
+    if !current.is_empty() {
+        paragraphs.push(current.join(" "));
+    }
+    paragraphs
+}
+
+/// Abbreviations whose internal `.` must not end a sentence.
+///
+/// Deliberately short and explicit. An UNLISTED abbreviation over-splits a
+/// sentence, and over-splitting can only move a row mention out of reach of
+/// the list identifier that precedes it — i.e. into the UNVERIFIED count,
+/// where the equality pin in
+/// [`module_doc_assigns_each_claimed_row_to_the_list_it_is_on`] fails loudly.
+/// It can never turn a wrong claim into a passing one.
+const SENTENCE_ABBREVIATIONS: &[&str] = &["e.g", "i.e"];
+
+/// Split one joined paragraph into sentences.
+///
+/// A `.` terminates a sentence only when the character after it is whitespace
+/// or the paragraph ends there — which already excludes `mod.rs`, `nono.exe`,
+/// a `file.rs::Symbol` citation and a trailing `.)`/`."` — and only when the
+/// word ending at that `.` is not in [`SENTENCE_ABBREVIATIONS`]. The end of
+/// the paragraph is always a sentence end too, so a heading paragraph with no
+/// terminal period is still one sentence rather than being dropped.
+fn sentences(paragraph: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    for (idx, ch) in paragraph.char_indices() {
+        if ch != '.' {
+            continue;
+        }
+        let terminates = paragraph[idx + 1..]
+            .chars()
+            .next()
+            .is_none_or(char::is_whitespace);
+        if !terminates {
+            continue;
+        }
+        let mut word: Vec<char> = paragraph[..idx]
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '.')
+            .collect();
+        word.reverse();
+        let word: String = word.into_iter().collect();
+        if SENTENCE_ABBREVIATIONS.contains(&word.as_str()) {
+            continue;
+        }
+        let sentence = paragraph[start..=idx].trim();
+        if !sentence.is_empty() {
+            out.push(sentence);
+        }
+        start = idx + 1;
+    }
+    let tail = paragraph[start..].trim();
+    if !tail.is_empty() {
+        out.push(tail);
+    }
+    out
+}
+
+/// Byte offsets of every occurrence of `word` in `haystack` that sits at
+/// identifier boundaries on BOTH sides.
+///
+/// The trailing boundary is `common::is_ident_boundary` — the same predicate
+/// `contains_fn_exact` above and `layer_registry_selfcheck.rs`'s
+/// `content_defines_symbol` use, so this file grows no second boundary rule.
+/// The leading side applies the same truth table minus the `!` case, which
+/// cannot precede an identifier.
+fn word_occurrences(haystack: &str, word: &str) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut search_start = 0usize;
+    while let Some(rel_pos) = haystack[search_start..].find(word) {
+        let pos = search_start + rel_pos;
+        let before_ok = haystack[..pos]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+        let after_ok = common::is_ident_boundary(haystack[pos + word.len()..].chars().next());
+        if before_ok && after_ok {
+            out.push(pos);
+        }
+        search_start = pos + 1;
+    }
+    out
+}
+
+/// Phase 117 SC4 gap closure: `layer_force_unavailable.rs`'s module doc
+/// DECLARES, in prose, which coverage list each `LayerId` row is on. This
+/// gate checks that declaration against the lists themselves.
+///
+/// `coverage_split_accounts_for_every_layer_id` above enforces the ARITHMETIC
+/// (2 + 8 + 3 = 13) and DISJOINTNESS, and is structurally blind to WHICH list
+/// the prose names — which is precisely how that doc came to state that two
+/// `ALSO_AUTOMATED` rows were on `MANUALLY_VERIFIED`, sending an auditor
+/// hunting for manual reproduction steps that were not those rows' coverage
+/// of record. That is the same class Iteration 4's WR-07 fixed once in this
+/// same file.
+///
+/// # The association rule
+///
+/// > Within the module-doc (`//!`) region, for each occurrence of a `LayerId`
+/// > name at identifier boundaries, look BACKWARDS within the SAME SENTENCE
+/// > for the nearest coverage-list identifier. If one is found, that is a
+/// > CLAIM and the row must actually be on that list. If the sentence names no
+/// > coverage list before the row, the mention makes no assignment claim: it
+/// > is UNVERIFIED, and counted.
+///
+/// It is written once, here, and implemented once, below. This phase has
+/// already shipped two mirrors of one rule with contradictory content that
+/// both passed every gate; a second variant of this rule anywhere is a defect.
+///
+/// # Why SENTENCE-scoped and nearest-preceding, not paragraph-scoped
+///
+/// A paragraph-scoped rule would have to skip any paragraph naming both
+/// lists — and the `Of the 13 LayerId rows` paragraph, which carries 11 of the
+/// doc's 18 row mentions and ALL of its primary per-row assignment claims,
+/// names both. Such a rule would check 2 mentions out of 18 and be blind in
+/// exactly the region WR-07 already had to correct once. Worse, it would hand
+/// an author a silent escape hatch: adding the second list name to a paragraph
+/// makes a failing assertion disappear. Under the sentence-scoped
+/// nearest-preceding rule there is no ambiguity case and therefore no escape
+/// hatch — naming both lists in one sentence binds each row to whichever
+/// identifier precedes it, and moving a row name away from its list name
+/// shows up in the unverified-mention pin below.
+///
+/// # Scope: the `//!` region only
+///
+/// The claim being checked is a MODULE-DOC claim about the coverage split.
+/// Widening the scan to the whole file would sweep in the per-test `///` doc
+/// comments, which describe one test each and make no split claim, plus the
+/// test bodies' own assertion strings.
+///
+/// # Residual, stated rather than hidden
+///
+/// This gate verifies per-row list assignments made in sentences that name a
+/// list. It does NOT verify the row mentions in the "reasons below cover rows
+/// on BOTH lists" sentence (which deliberately enumerates rows from both lists
+/// in one breath and makes no per-row assignment), the two in the
+/// late-checked-seams section HEADING, or the one inside the quoted
+/// `LayerAttestationFailed` diagnostic. Those make no assignment claim; they
+/// are held CONSTANT by the equality pin below, not checked. Task 3's SC4
+/// disposition in `117-VERIFICATION.md` states the same limit, so the record
+/// does not overclaim this gate's reach.
+#[test]
+fn module_doc_assigns_each_claimed_row_to_the_list_it_is_on() {
+    let registry_src = read_layer_registry();
+    let row_names = extract_all_layer_id_names(&registry_src);
+    assert!(
+        row_names.len() >= 13,
+        "expected at least 13 LayerId variants (the 117-01 inventory), found {}: {row_names:?}",
+        row_names.len()
+    );
+
+    let lists = coverage_lists();
+    let doc = read_force_unavailable_tests();
+    let doc_lines = module_doc_lines(&doc);
+    let paragraphs = doc_paragraphs(&doc_lines);
+
+    let mut wrong: Vec<String> = Vec::new();
+    let mut verified: Vec<String> = Vec::new();
+    let mut unverified: Vec<String> = Vec::new();
+
+    for paragraph in &paragraphs {
+        for sentence in sentences(paragraph) {
+            let mut list_positions: Vec<(usize, &str)> = Vec::new();
+            for (list_name, _) in &lists {
+                for pos in word_occurrences(sentence, list_name) {
+                    list_positions.push((pos, list_name));
+                }
+            }
+            for row in &row_names {
+                for pos in word_occurrences(sentence, row) {
+                    let Some((_, claimed)) = list_positions
+                        .iter()
+                        .filter(|(list_pos, _)| *list_pos < pos)
+                        .max_by_key(|(list_pos, _)| *list_pos)
+                    else {
+                        unverified.push(format!("{row} — in sentence: {sentence:?}"));
+                        continue;
+                    };
+                    let actual: Vec<&str> = lists
+                        .iter()
+                        .filter(|(_, members)| members.contains(&row.as_str()))
+                        .map(|(list_name, _)| *list_name)
+                        .collect();
+                    if actual.contains(claimed) {
+                        verified.push(format!("{row} -> {claimed}"));
+                    } else {
+                        let real = if actual.is_empty() {
+                            "NEITHER coverage list (it is covered by this file's own \
+                             `fn force_unavailable_*` convention, or by nothing at all)"
+                                .to_string()
+                        } else {
+                            actual.join(" and ")
+                        };
+                        wrong.push(format!(
+                            "`{row}` is claimed to be on `{claimed}`, but it is on {real}\n    \
+                             offending sentence: {sentence:?}"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        wrong.is_empty(),
+        "the module doc of layer_force_unavailable.rs assigns {} row(s) to a coverage list they \
+         are not on. A coverage declaration that names the wrong list sends an auditor hunting \
+         for a test that does not exist (Iteration 4's WR-07, same file):\n  {}",
+        wrong.len(),
+        wrong.join("\n  ")
+    );
+
+    // TWO PINS. Narrowing the scan is the fail-OPEN direction here, so both
+    // directions are pinned, following this file's existing floor idiom.
+    assert!(
+        verified.len() >= 5,
+        "only {} module-doc list-assignment claim(s) were verifiable, expected at least 5: the \
+         three rows the coverage-split sentence assigns to one list, plus the two rows the \
+         late-checked-seams paragraph assigns to the other. Claims found: {verified:?}. A DROP \
+         means a claim was reworded OUT of this gate's reach — the list identifier moved to a \
+         different sentence, or the row names were replaced by an anaphor such as \"both rows\" \
+         — which is exactly how the defect this gate closes survived unnoticed. Put the row back \
+         in a sentence that names its list.",
+        verified.len()
+    );
+    assert_eq!(
+        unverified.len(),
+        13,
+        "the number of module-doc row mentions this gate cannot verify changed from 13 to {}. \
+         These mentions sit in sentences that name no coverage list before them, so they are \
+         UNVERIFIED — not merely unclaimed. An INCREASE means a new row mention was written \
+         where the gate cannot check it; a DECREASE means a mention was deleted, or a real claim \
+         was demoted into unverifiable prose. Either put the row in a sentence that names its \
+         list (preferred), or move this pin deliberately and say why. Unverified mentions \
+         found:\n  {}",
+        unverified.len(),
+        unverified.join("\n  ")
+    );
+}
+
 /// Phase 117 review WR-03: locate the SPEC's manual-verification section and
 /// return only the text FROM that heading onward.
 ///

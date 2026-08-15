@@ -107,8 +107,17 @@
 //! failed: Windows supervised execution failed during shutting-down
 //! (session: ...): Startup self-attestation failed for layer
 //! RestrictedToken: forced unavailable by test seam`. Both rows are
-//! therefore on the `MANUALLY_VERIFIED` list with their manual reproduction
-//! steps (the exact command above), not silently dropped — D-31's "loud
+//! therefore on the `ALSO_AUTOMATED` list: `RestrictedToken` is covered by
+//! `restricted_token.rs::create_restricted_token_with_sid_fails_when_forced_unavailable`
+//! and `JobObjectContainment` by
+//! `launch.rs::apply_process_handle_to_containment_fails_when_forced_unavailable`
+//! — each an ordinary-host, in-process unit test that calls the guarded
+//! function DIRECTLY, rather than this file's external-subprocess
+//! `fn force_unavailable_<snake>` convention. The two isolated PowerShell
+//! reproductions above remain the supplementary manual evidence for WHY the
+//! in-process shape was used for these two rows and not the subprocess one
+//! (the post-event-loop teardown stall on this host); they are not the rows'
+//! coverage of record, and neither row is silently dropped — D-31's "loud
 //! gap, never a silent skip."
 
 use std::process::{Command, Output};

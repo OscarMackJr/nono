@@ -348,14 +348,44 @@ fn content_defines_symbol(content: &str, symbol: &str) -> bool {
     false
 }
 
-/// CINT-01: every `call_sites` citation in the registry names a file that
-/// actually exists in this tree.
+/// CINT-01: every `call_sites` citation in the registry RESOLVES — raw-form
+/// (`file.rs` + `:` + a line number) citations to a file that exists in this
+/// tree, and symbol-form (`file.rs` + `::` + a symbol) citations to a file
+/// whose CONTENT defines that symbol at a real definition site.
 ///
-/// // TODO(117-12): this asserts file EXISTENCE, the hard gate — it does not
-/// // verify the cited line NUMBER still points at the right code. Line-drift
-/// // is a softer, known risk this test (and the D-32 meta-test) does not
-/// // fully close; a file can still exist while a citation's line number has
-/// // gone stale under it.
+/// # What this gate actually does at HEAD
+///
+/// This doc used to carry a stale, plan-referenced deferral note (117-12)
+/// reading "this asserts file EXISTENCE ... it does not verify the cited line
+/// NUMBER still points at the right code". Both halves are false now — the
+/// note outlived the code it described, which is the defect class this phase
+/// keeps reproducing. A stale record sitting on the gate that carries SC1 is
+/// precisely the class SC4 forbids, so it is replaced with what the code does
+/// rather than deleted silently:
+///
+/// - There is no line number left to go stale. Plan 117-24 converted every
+///   `call_sites` entry to symbol form, and
+///   `no_line_number_citations_remain_in_the_registry_surface` rejects a raw
+///   line-number citation anywhere on the registry surface. The raw-form
+///   branch below is a residual shape-handler, not the working path — which is
+///   why the extraction sanity check looks at the COMBINED total.
+/// - Symbol-form citations are CONTENT-verified, not merely
+///   existence-verified. `content_defines_symbol` requires a definition-line
+///   prefix (empty, or qualifier keywords only), an identifier boundary
+///   immediately after the needle, and — for a `Type::method` citation — that
+///   the match sit inside the nearest preceding `impl Type` block. A renamed,
+///   removed, or prefix-preserving-renamed enforcing function fails the build
+///   here; that was proved by perturbation, not by reading.
+///
+/// The residual risk is real but narrower than the old wording claimed, and is
+/// stated here rather than restated wrongly: a citation can name a symbol that
+/// still exists while no longer performing the enforcement its registry row
+/// describes. No source-text scan can settle that semantic question; the
+/// registry's own per-row evidence prose is what carries it.
+///
+/// Both non-vacuity floors below (`regions >= 13`, `citations >= 20`) exist
+/// because narrowing the region-scoped scan is the fail-OPEN direction: if the
+/// region marker stops matching, the gate resolves nothing and passes.
 #[test]
 fn registry_call_sites_exist() {
     let src = read_layer_registry();
@@ -1026,6 +1056,143 @@ fn token_arm_doc_cites_a_symbol_not_a_raw_line_range() {
     );
 }
 
+/// Source files that may carry an `OPEN` marker. Deliberately explicit: a glob
+/// would silently start scanning generated or vendored trees.
+///
+/// ONE definition, at module scope, with TWO callers:
+/// [`every_open_marker_in_code_has_a_ledger_row`] scans these files for
+/// markers, and [`every_marker_carrying_source_file_is_in_marker_sources`]
+/// asserts the list is a superset of the files that actually carry one. It is
+/// deliberately not copied into either — this phase's recurring defect is two
+/// mirrors of one rule drifting apart.
+///
+/// A listed file with no marker is fine (the list is a SUPERSET, and three
+/// entries are marker-free today). A marker in an UNLISTED file is the
+/// fail-open direction — it is simply never scanned — which is what the
+/// discovery gate closes.
+fn marker_sources() -> Vec<(&'static str, PathBuf)> {
+    vec![
+        (
+            "crates/nono/src/error.rs",
+            workspace_root().join("crates/nono/src/error.rs"),
+        ),
+        (
+            "crates/nono-cli/src/exec_strategy_windows/layer_registry.rs",
+            manifest_dir().join("src/exec_strategy_windows/layer_registry.rs"),
+        ),
+        (
+            "crates/nono-cli/src/exec_strategy_windows/launch.rs",
+            manifest_dir().join("src/exec_strategy_windows/launch.rs"),
+        ),
+        (
+            "crates/nono-cli/src/exec_strategy_windows/attestation.rs",
+            manifest_dir().join("src/exec_strategy_windows/attestation.rs"),
+        ),
+        (
+            "crates/nono-cli/src/output.rs",
+            manifest_dir().join("src/output.rs"),
+        ),
+    ]
+}
+
+/// Phase 117 SC4 gap closure: [`marker_sources`] is a hand-written allow-list,
+/// so a deferral marker landing in a file nobody remembered to add is simply
+/// UNSCANNED — its ledger row goes unenforced and
+/// [`every_open_marker_in_code_has_a_ledger_row`] stays green, satisfied by the
+/// markers that are listed. That is the fail-open direction, and "the author
+/// remembers" is not a mechanism. This turns the allow-list into a CLOSED
+/// CLASS: every tracked production source file that carries a marker line must
+/// be on it.
+///
+/// # Enumeration
+///
+/// `tracked_files("crates/")` — `git ls-files`, which FAILS CLOSED — filtered
+/// to paths containing `/src/` and ending in `.rs`. The question is about the
+/// REPOSITORY, not the working directory (round-8 CR-01: a filesystem walk on
+/// this host also finds the 15 gitignored agent worktrees under
+/// `.claude/worktrees/`, i.e. a whole extra copy of the tree per worktree).
+///
+/// # Scope limit: production `src/` only
+///
+/// `tests/` is excluded on purpose. This very file carries marker-SHAPED
+/// string literals in
+/// [`the_open_marker_detector_separates_markers_from_win32_constants`]'s
+/// table, so scanning `tests/` would assert over test DATA rather than over
+/// markers. Deferral markers are a production-code convention; the consequence
+/// to state plainly is that a marker placed in a test file is out of this
+/// gate's reach.
+///
+/// # Non-vacuity
+///
+/// A broken pathspec or a detector that stopped firing would make this gate
+/// assert nothing at all, so both the enumeration and the number of DETECTED
+/// marker-carrying files are floored.
+///
+/// The detected-file count is a DIFFERENT quantity from [`marker_sources`]'s
+/// entry count and must not be conflated with it: the allow-list is a superset
+/// and legitimately lists marker-free files.
+#[test]
+fn every_marker_carrying_source_file_is_in_marker_sources() {
+    let listed: Vec<&str> = marker_sources()
+        .into_iter()
+        .map(|(label, _)| label)
+        .collect();
+
+    let candidates: Vec<String> = tracked_files("crates/")
+        .into_iter()
+        .filter(|p| p.contains("/src/") && p.ends_with(".rs"))
+        .collect();
+    assert!(
+        candidates.len() >= 50,
+        "non-vacuity: only {} tracked `crates/*/src/**.rs` file(s) enumerated. The pathspec or \
+         the filter has gone quiet, so this gate is asserting over almost nothing.",
+        candidates.len()
+    );
+
+    let root = workspace_root();
+    let mut detected: Vec<String> = Vec::new();
+    let mut unprotected: Vec<String> = Vec::new();
+    for rel in &candidates {
+        let path = root.join(rel);
+        let Ok(src) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some((n, line)) = src
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line_carries_marker_tokens(line))
+        else {
+            continue;
+        };
+        detected.push(rel.clone());
+        if !listed.contains(&rel.as_str()) {
+            unprotected.push(format!("{rel}:{}: {}", n + 1, line.trim()));
+        }
+    }
+
+    assert!(
+        unprotected.is_empty(),
+        "{} tracked production source file(s) carry a deferral marker line but are NOT in \
+         `marker_sources()`, so `every_open_marker_in_code_has_a_ledger_row` never reads them \
+         and the marker's SPEC ledger row is unenforced. Add each file to `marker_sources()`:\n  \
+         {}",
+        unprotected.len(),
+        unprotected.join("\n  ")
+    );
+
+    assert!(
+        detected.len() >= 2,
+        "non-vacuity: only {} tracked production source file(s) were DETECTED as carrying a \
+         deferral marker, expected at least 2. This is NOT `marker_sources()`'s entry count (the \
+         allow-list is a superset and legitimately lists marker-free files) — it is what the \
+         per-line detector actually found: {detected:?}. A drop below the floor means a deferral \
+         was closed, or a marker was rewritten into a shape the detector no longer sees, which is \
+         the fail-open direction. Move the floor deliberately, in the same commit as the marker \
+         change.",
+        detected.len()
+    );
+}
+
 /// Phase 117 review WR-04: every `OPEN` marker in the tree must have a row in
 /// the SPEC's review-fix discrepancy ledger — and that row must actually BE a
 /// row of that table.
@@ -1083,33 +1250,6 @@ fn every_open_marker_in_code_has_a_ledger_row() {
             rows.push((*line).to_string());
         }
         rows
-    }
-
-    // Source files that may carry an `OPEN` marker. Deliberately explicit: a
-    // glob would silently start scanning generated or vendored trees.
-    fn marker_sources() -> Vec<(&'static str, PathBuf)> {
-        vec![
-            (
-                "crates/nono/src/error.rs",
-                workspace_root().join("crates/nono/src/error.rs"),
-            ),
-            (
-                "crates/nono-cli/src/exec_strategy_windows/layer_registry.rs",
-                manifest_dir().join("src/exec_strategy_windows/layer_registry.rs"),
-            ),
-            (
-                "crates/nono-cli/src/exec_strategy_windows/launch.rs",
-                manifest_dir().join("src/exec_strategy_windows/launch.rs"),
-            ),
-            (
-                "crates/nono-cli/src/exec_strategy_windows/attestation.rs",
-                manifest_dir().join("src/exec_strategy_windows/attestation.rs"),
-            ),
-            (
-                "crates/nono-cli/src/output.rs",
-                manifest_dir().join("src/output.rs"),
-            ),
-        ]
     }
 
     let rows = ledger_rows(&read_spec());
