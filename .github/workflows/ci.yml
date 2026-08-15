@@ -391,13 +391,21 @@ jobs:
       # the D-32 `every_registry_row_has_a_test` discovery gate and the four
       # Windows block-net enforcement tests (CR-08) execute in NO gate at
       # all. The SPEC claims these "fail the build"; this is the build.
+      # One cargo command per step, deliberately: a pwsh step's status is the
+      # exit code of its LAST native command, so combining these two legs into
+      # a single `run:` block makes a failing first leg invisible whenever the
+      # second leg passes. Observed live on run 31888431118 (2026-08-15), where
+      # this job logged `test result: FAILED. 1684 passed; 22 failed` and still
+      # reported `conclusion: success`. Do not recombine.
       # `--test-threads=1` is load-bearing: every force-unavailable seam is a
       # process-global AtomicBool, so parallel execution lets one test's armed
       # flag leak into another test's real apply call.
-      - name: Run layer-fault-injection suites
-        run: |
-          cargo test -p nono-sandbox-cli --features layer-fault-injection -- --test-threads=1
-          cargo test -p nono-shell-broker --features layer-fault-injection -- --test-threads=1
+      - name: Run layer-fault-injection suites (nono-sandbox-cli)
+        run: cargo test -p nono-sandbox-cli --features layer-fault-injection -- --test-threads=1
+
+      # Second leg of the CR-10 pair above; same --test-threads=1 rationale.
+      - name: Run layer-fault-injection suites (nono-shell-broker)
+        run: cargo test -p nono-shell-broker --features layer-fault-injection -- --test-threads=1
 
   windows-packaging:
     name: Windows Packaging
@@ -423,13 +431,25 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Build Windows release binaries
+      # These two release builds are one cargo command per step, deliberately.
+      # A pwsh step's status is the exit code of its LAST native command, so a
+      # failed nono-sandbox-cli build would pass the step whenever the broker
+      # build then succeeded, letting a broken nono.exe reach packaging. Same
+      # class as the fail-open observed live in the Windows Layer Fault
+      # Injection job on run 31888431118 (2026-08-15). Do not recombine.
+      # Both steps carry the same RUSTFLAGS block on purpose: dropping it from
+      # either one silently changes what is built.
+      - name: "Build release binary: nono-sandbox-cli"
         shell: pwsh
         env:
           RUSTFLAGS: -Dwarnings -C target-feature=+crt-static
-        run: |
-          cargo build --release -p nono-sandbox-cli
-          cargo build --release -p nono-shell-broker
+        run: cargo build --release -p nono-sandbox-cli
+
+      - name: "Build release binary: nono-shell-broker"
+        shell: pwsh
+        env:
+          RUSTFLAGS: -Dwarnings -C target-feature=+crt-static
+        run: cargo build --release -p nono-shell-broker
 
       - name: Validate Windows MSI contract
         shell: pwsh
