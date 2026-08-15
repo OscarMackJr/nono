@@ -469,6 +469,80 @@ pub fn is_test_attr(trimmed: &str) -> bool {
     last_segment == "test" || matches!(head, "rstest" | "test_case")
 }
 
+/// Every `#[…]` attribute written ON `line`, brackets matched, in source
+/// order.
+///
+/// # Round-8 WR-04: the width of [`is_test_attr`] has to be REACHABLE
+///
+/// [`ProductionScan::leaked_test_attributes`] used to ask [`is_test_attr`] of
+/// the whole trimmed line:
+///
+/// ```text
+/// .filter(|(_, l)| is_test_attr(l.trim()))
+/// ```
+///
+/// so the class that predicate recognises was only reachable when the
+/// attribute was **alone on its line**. `#[cfg_attr(miri, ignore)] #[test]`,
+/// and any single-line item body carrying one, were invisible to the ONLY
+/// check in [`ProductionScan::assert_split_is_correct`] that fires in the
+/// under-claim direction. Widening the predicate without widening its consumer
+/// left the fix unreachable, which is the same shape one level out.
+///
+/// A `#[` inside a string literal is not an attribute, and neither is a `]`
+/// inside one, so both scans skip literals using the same [`literal_len`] rule
+/// [`code_text`] uses. An unterminated `#[` ends the scan: nothing after it on
+/// this line is a complete attribute.
+fn attributes_on_line(line: &str) -> Vec<&str> {
+    let b = line.as_bytes();
+    let mut out: Vec<&str> = Vec::new();
+    let mut i = 0usize;
+    while i < b.len() {
+        if matches!(b[i], b'"' | b'\'' | b'r' | b'b') {
+            if let Some(len) = literal_len(line, i) {
+                i = i.saturating_add(len);
+                continue;
+            }
+        }
+        if b[i] != b'#' || b.get(i.saturating_add(1)) != Some(&b'[') {
+            i = i.saturating_add(1);
+            continue;
+        }
+        let mut depth = 0usize;
+        let mut j = i.saturating_add(1);
+        let mut end = None;
+        while j < b.len() {
+            if matches!(b[j], b'"' | b'\'' | b'r' | b'b') {
+                if let Some(len) = literal_len(line, j) {
+                    j = j.saturating_add(len);
+                    continue;
+                }
+            }
+            match b[j] {
+                b'[' => depth = depth.saturating_add(1),
+                b']' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        end = Some(j);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            j = j.saturating_add(1);
+        }
+        match end {
+            Some(e) => {
+                if let Some(attr) = line.get(i..=e) {
+                    out.push(attr);
+                }
+                i = e.saturating_add(1);
+            }
+            None => break,
+        }
+    }
+    out
+}
+
 /// Is `b` a byte that can appear inside a Rust identifier?
 ///
 /// Used to tell the literal PREFIXES `r`/`b`/`br` from the last letter of an
@@ -738,11 +812,16 @@ impl ProductionScan {
     /// it, so this catches the class directly and without restating the
     /// classifier's own rule — and unlike a line-count floor it can only be
     /// satisfied by a split that is right.
+    /// Round-8 WR-04: the question is asked of every attribute ON the line,
+    /// not only of lines that ARE one. A production line may carry an
+    /// attribute alongside other tokens (`#[cfg_attr(miri, ignore)] #[test]`,
+    /// a single-line item body), and anchoring to the whole line made
+    /// [`is_test_attr`]'s width unreachable for exactly those shapes.
     #[must_use]
     pub fn leaked_test_attributes(&self) -> Vec<usize> {
         self.lines
             .iter()
-            .filter(|(_, l)| is_test_attr(l.trim()))
+            .filter(|(_, l)| attributes_on_line(l).iter().any(|a| is_test_attr(a)))
             .map(|(i, _)| *i)
             .collect()
     }
@@ -1553,6 +1632,89 @@ fn a_leaked_test() {}
                 "{no:?} must NOT classify as a test attribute"
             );
         }
+    }
+
+    /// Round-8 WR-04: the attribute EXTRACTOR, asserted as a rule.
+    ///
+    /// `leaked_test_attributes` is the only under-claim check there is, and it
+    /// can only be as wide as this.
+    #[test]
+    fn attributes_on_a_line_are_found_wherever_they_sit() {
+        for (line, expected) in [
+            ("#[test]", vec!["#[test]"]),
+            ("    #[test]", vec!["#[test]"]),
+            ("#[test] fn x() {}", vec!["#[test]"]),
+            (
+                "#[cfg_attr(miri, ignore)] #[test]",
+                vec!["#[cfg_attr(miri, ignore)]", "#[test]"],
+            ),
+            ("mod t { #[test] fn q(){} }", vec!["#[test]"]),
+            // Brackets inside the argument list are matched, not counted.
+            (
+                "#[cfg_attr(test, allow(a[0]))]",
+                vec!["#[cfg_attr(test, allow(a[0]))]"],
+            ),
+            // A `]` inside a string literal does not end the attribute.
+            ("#[doc = \"a]b\"]", vec!["#[doc = \"a]b\"]"]),
+            // …and a whole attribute inside one is TEXT, not an attribute.
+            ("let s = \"#[test]\";", vec![]),
+            ("let s = r#\"#[test]\"#;", vec![]),
+            // Unterminated: nothing after it is a complete attribute.
+            ("#[cfg(", vec![]),
+            ("fn plain() {}", vec![]),
+        ] {
+            assert_eq!(
+                super::attributes_on_line(line),
+                expected,
+                "attribute extraction on {line:?}"
+            );
+        }
+    }
+
+    /// Round-8 WR-04: a test attribute SHARING a line is a leak.
+    ///
+    /// The consumer was line-anchored, so round 7's widened `is_test_attr` was
+    /// unreachable unless the attribute stood alone. These lines are all in
+    /// the production half — no `#[cfg(test)]` gates them — and each must be
+    /// reported.
+    #[test]
+    fn a_test_attribute_sharing_a_line_is_a_leak() {
+        let src = "\
+#[cfg(test)]
+mod real_tests {
+    #[test]
+    fn inside() {}
+}
+#[cfg_attr(miri, ignore)] #[test]
+fn shares_its_line_with_another_attribute() {}
+mod leaked_by_a_classifier_gap { #[tokio::test(flavor = \"multi_thread\")] fn q() {} }
+let s = \"#[test]\";
+";
+        let scan = scan_production(src);
+        assert_eq!(
+            scan.leaked_test_attributes(),
+            vec![5, 7],
+            "every attribute ON a production line must be asked the question, not only lines \
+             that ARE one; and a `#[test]` inside a STRING literal is text, not a leak — kept \
+             {:?}",
+            scan.lines
+        );
+    }
+
+    /// And the leak must be LOUD, not merely recorded.
+    #[test]
+    #[should_panic(expected = "WR-01/WR-02")]
+    fn assert_split_is_correct_rejects_a_test_attribute_sharing_a_line() {
+        let src = "\
+#[cfg(test)]
+mod real_tests {
+    #[test]
+    fn inside() {}
+}
+#[cfg_attr(miri, ignore)] #[test]
+fn shares_its_line() {}
+";
+        scan_production(src).assert_split_is_correct("fixture.rs");
     }
 
     /// Round-6 WR-02: the pending window is defined POSITIVELY, so a block
