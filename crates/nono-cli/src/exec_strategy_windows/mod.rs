@@ -1463,6 +1463,12 @@ mod rb3_gate_tests {
     #[test]
     fn workspace_owned_by_current_user_passes_write_owner_check() {
         let dir = tempfile::tempdir().expect("tempdir");
+        // `path_has_write_owner` delegates to `path_is_owned_by_current_user`,
+        // i.e. owner-SID == token-user-SID. On an elevated session the
+        // tempdir this test just created is owned by BUILTIN\Administrators,
+        // so the gate's PASS branch — the thing this test exists to validate
+        // — is unreachable without normalising the fixture's owner first.
+        crate::test_ownership_windows::take_ownership_for_current_user(dir.path());
         let result = nono::path_has_write_owner(dir.path());
         assert!(
             result.is_ok(),

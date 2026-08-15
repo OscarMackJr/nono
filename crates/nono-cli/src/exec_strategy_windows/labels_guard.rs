@@ -569,6 +569,14 @@ fn clear_mandatory_label(path: &Path) -> Result<()> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    // Quick task 260815-gfd: the mandatory-label apply gate at line 292 is an
+    // OWNERSHIP gate, and it runs before the label is ever inspected. On an
+    // elevated session every fresh fixture is owned by BUILTIN\Administrators,
+    // so without this normalisation the nine ownership-dependent tests below
+    // short-circuit to `SkipNotOwned` and assert nothing about the logic they
+    // name. The two tests that pin the NON-owned branch deliberately do not
+    // call it.
+    use crate::test_ownership_windows::take_ownership_for_current_user;
     use nono::{AccessMode, CapabilitySource, WindowsFilesystemRule};
     use tempfile::tempdir;
 
@@ -633,6 +641,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let file = dir.path().join("note.txt");
         std::fs::write(&file, "x").expect("write file");
+        take_ownership_for_current_user(&file);
         let policy = single_file_read_rule(file.clone());
 
         // Pre-condition: file has no mandatory-label ACE.
@@ -675,6 +684,10 @@ mod tests {
         let fresh_b = dir.path().join("fresh-b.txt");
         std::fs::write(&fresh_a, "x").expect("write");
         std::fs::write(&fresh_b, "x").expect("write");
+        // "fresh and owned" is this fixture's stated assumption (see the
+        // comment above); make the OWNED half true rather than assumed.
+        take_ownership_for_current_user(&fresh_a);
+        take_ownership_for_current_user(&fresh_b);
         let full_policy = WindowsFilesystemPolicy {
             rules: vec![file_rule(fresh_a.clone()), file_rule(fresh_b.clone())],
             unsupported: vec![],
@@ -702,6 +715,7 @@ mod tests {
         //     might accidentally equal Read's own wanted mask.
         let prelabeled = dir.path().join("prelabeled.txt");
         std::fs::write(&prelabeled, "x").expect("write");
+        take_ownership_for_current_user(&prelabeled);
         let third_party_mask = label_mask_for_access_mode(AccessMode::Write);
         assert_ne!(
             third_party_mask,
@@ -711,6 +725,7 @@ mod tests {
         try_set_mandatory_label(&prelabeled, third_party_mask).expect("pre-label");
         let fresh_c = dir.path().join("fresh-c.txt");
         std::fs::write(&fresh_c, "x").expect("write");
+        take_ownership_for_current_user(&fresh_c);
         let mixed_policy = WindowsFilesystemPolicy {
             rules: vec![file_rule(fresh_c.clone()), file_rule(prelabeled.clone())],
             unsupported: vec![],
@@ -775,6 +790,9 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let file = dir.path().join("note.txt");
         std::fs::write(&file, "x").expect("write file");
+        // Own the fixture BEFORE planting: SetNamedSecurityInfoW(LABEL_…)
+        // requires WRITE_OWNER, and the guard's own gate requires ownership.
+        take_ownership_for_current_user(&file);
         let third_party_mask = label_mask_for_access_mode(AccessMode::Write);
         assert_ne!(
             third_party_mask,
@@ -822,6 +840,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let file = dir.path().join("note.txt");
         std::fs::write(&file, "x").expect("write file");
+        take_ownership_for_current_user(&file);
         let policy = single_file_read_rule(file.clone());
 
         // First "launch": apply, then simulate an abnormal exit by forgetting
@@ -954,6 +973,11 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let file = dir.path().join("note.txt");
         std::fs::write(&file, "x").expect("write file");
+        // CR-01's pin is DOWNSTREAM of the ownership gate at line 292: without
+        // this, `snapshot_and_apply` records `SkipNotOwned` and the
+        // INHERIT_ONLY_ACE rejection at lines 336-339 is never evaluated. The
+        // assertion below would then be satisfied by the wrong mechanism.
+        take_ownership_for_current_user(&file);
         let wanted = label_mask_for_access_mode(AccessMode::Read);
 
         // "OICIIO" = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE.
@@ -984,6 +1008,10 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let file = dir.path().join("note.txt");
         std::fs::write(&file, "x").expect("write file");
+        // WR-02's pin is likewise downstream of the ownership gate: the
+        // `AlreadyAtRequiredLevel` classification at lines 336-348 and the
+        // no-revert set at 422-424 are only reached for an owned path.
+        take_ownership_for_current_user(&file);
         let wanted = label_mask_for_access_mode(AccessMode::Read);
         try_set_mandatory_label(&file, wanted).expect("pre-label apply");
 
@@ -1018,6 +1046,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let file = dir.path().join("note.txt");
         std::fs::write(&file, "x").expect("write file");
+        take_ownership_for_current_user(&file);
 
         // Pre-label at Low IL with the Write-class mask
         // (`NO_READ_UP | NO_EXECUTE_UP`). This launch's rule is
@@ -1464,6 +1493,10 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let owned = dir.path().join("owned.txt");
         std::fs::write(&owned, "x").expect("write");
+        // Only the OWNED half of the mixed fixture is normalised — the whole
+        // point of this test is that the two halves classify differently, so
+        // `system_root` below must stay non-owned.
+        take_ownership_for_current_user(&owned);
 
         // C:\Windows is owned by TrustedInstaller — not labellable by an
         // unprivileged user, so the guard records SkipNotOwned. Same fixture
@@ -1531,6 +1564,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let file = dir.path().join("foreign-labeled.txt");
         std::fs::write(&file, "x").expect("write");
+        take_ownership_for_current_user(&file);
 
         // A third-party label whose mask genuinely differs from what this
         // policy's Read rule would apply — otherwise it would be adopted as

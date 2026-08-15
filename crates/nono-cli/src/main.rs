@@ -155,6 +155,15 @@ mod wiring;
 #[cfg(test)]
 mod test_env;
 
+// Quick task 260815-gfd: the single Windows fixture-ownership normalisation
+// shared by every ownership-gated test in this crate. Test-only. It exists
+// because the elevated `windows-latest` runner owns freshly created objects
+// as BUILTIN\Administrators, which the user-SID equality predicate in
+// `nono::path_is_owned_by_current_user` rejects — see the module docs.
+#[cfg(test)]
+#[cfg(target_os = "windows")]
+mod test_ownership_windows;
+
 // Phase 117 review WR-01: the single `#[cfg(test)]`-region classifier shared
 // by every source-text drift gate in this crate. Test-only — it exists to stop
 // those gates growing divergent private copies of the same predicate, which is

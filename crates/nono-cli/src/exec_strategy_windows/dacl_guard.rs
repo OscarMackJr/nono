@@ -752,6 +752,7 @@ impl Drop for AppliedAncestorReadAttributesGuard {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::test_ownership_windows::take_ownership_for_current_user;
     use nono::{CapabilitySource, NonoError, WindowsFilesystemRule};
     use tempfile::tempdir;
 
@@ -759,36 +760,6 @@ mod tests {
     // `S-1-5-117-...` output. Pre-exists in NO real ACE, so REVOKE removes
     // only what the guard added.
     const TEST_SESSION_SID: &str = "S-1-5-117-5-6-7-8";
-
-    /// Make `path` owned by the CURRENT user so the ancestor-RA / ancestor-traverse
-    /// ownership gate (`path_is_owned_by_current_user`) returns `Ok(true)` for it
-    /// deterministically. In an ELEVATED session, freshly-created tempdirs are owned
-    /// by `BUILTIN\Administrators` (not the user), which would make the ownership
-    /// check return `false`, stop the walk immediately, and leave `applied` empty —
-    /// a session-elevation artifact, not a logic failure. Taking ownership keeps
-    /// these ownership-dependent tests green whether or not the suite runs elevated.
-    fn take_ownership_for_current_user(path: &Path) {
-        // `whoami` prints `domain\user`, which icacls /setowner accepts.
-        let who = std::process::Command::new("whoami")
-            .output()
-            .expect("run whoami");
-        let user = String::from_utf8_lossy(&who.stdout).trim().to_string();
-        assert!(!user.is_empty(), "whoami returned an empty user");
-        let out = std::process::Command::new("icacls")
-            .arg(path)
-            .arg("/setowner")
-            .arg(&user)
-            .arg("/Q")
-            .output()
-            .expect("run icacls /setowner");
-        assert!(
-            out.status.success(),
-            "icacls /setowner {} -> {} failed: {}",
-            path.display(),
-            user,
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
 
     /// Returns true iff `path`'s DACL contains an ACE for `sid`.
     fn dacl_contains_sid(path: &Path, sid: &str) -> bool {
@@ -916,6 +887,13 @@ mod tests {
     fn writable_rule_applies_sid_ace_and_reverts_on_drop() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().to_path_buf();
+        // The writable arm is ownership-gated (dacl_guard.rs's
+        // `path_is_owned_by_current_user` pre-check). Normalise the fixture's
+        // owner so this test exercises the Applied branch on an elevated
+        // session too, instead of short-circuiting to SkipWritableNotOwned —
+        // the near-twin at `ancestor_read_attributes_grants_owned_ancestors_
+        // and_reverts_on_drop` has always done this and has always passed.
+        take_ownership_for_current_user(&path);
         let policy = writable_dir_rule(path.clone());
 
         assert!(
@@ -1058,6 +1036,10 @@ mod tests {
         let leaf = dir.path().join("leaf");
         std::fs::create_dir(&leaf).expect("create leaf");
         let parent = dir.path().to_path_buf();
+        // The ancestor walk stops at the first non-owned ancestor. Normalise
+        // the immediate parent's owner so the walk reaches it on an elevated
+        // session too — otherwise it stops at index 1 and `applied` is empty.
+        take_ownership_for_current_user(&parent);
 
         assert!(
             !dacl_contains_sid(&parent, TEST_PACKAGE_SID),

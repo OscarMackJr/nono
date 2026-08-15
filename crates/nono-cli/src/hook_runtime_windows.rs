@@ -827,6 +827,13 @@ impl Drop for WindowsEnvFileGuard {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    // Quick task 260815-gfd: `validate_hook_script_windows` step 4 is an
+    // ownership gate that runs BEFORE the D-10 world-writable-parent check.
+    // On an elevated session every fresh fixture is owned by
+    // BUILTIN\Administrators, so the three tests below failed with "Hook
+    // script not owned by current user" and the checks they actually pin —
+    // D-10, the CLR/env baseline, CR-02's benign-exit path — were masked.
+    use crate::test_ownership_windows::take_ownership_of_script_and_parent;
     use tempfile::TempDir;
 
     fn isolated_home() -> (
@@ -946,6 +953,10 @@ mod tests {
         let mut f = std::fs::File::create(&script).unwrap();
         writeln!(f, "# test hook").unwrap();
         drop(f);
+        // Own script + parent so validation reaches the D-10 world-writable
+        // check this test asserts on, instead of rejecting at the earlier
+        // owner gate for an unrelated reason.
+        take_ownership_of_script_and_parent(&script);
 
         // Grant Everyone (S-1-1-0) write access on the temp directory.
         let grant_result = nono::grant_sid_write_on_path(dir.path(), "S-1-1-0", true);
@@ -1095,6 +1106,7 @@ mod tests {
             )
             .unwrap();
         }
+        take_ownership_of_script_and_parent(&script_path);
 
         // Build a SessionHook pointing at the script.
         let hook = profile::SessionHook {
@@ -1181,6 +1193,7 @@ mod tests {
             // Hook exits cleanly with code 0 and no env var output.
             writeln!(f, "exit 0").unwrap();
         }
+        take_ownership_of_script_and_parent(&script_path);
 
         let hook = profile::SessionHook {
             script: script_path.clone(),
