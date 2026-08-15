@@ -611,6 +611,18 @@ Proxy CA certificate validity in days (range `1`–`365`, default: `1`). Control
 nono run --allow-cwd --network-profile developer --proxy-ca-validity 7 -- my-agent
 ```
 
+#### `--allow-http2`
+
+Enable HTTP/2 ALPN negotiation on the proxy's pooled connections to upstream servers (default: off, HTTP/1.1 only). When enabled, requests to an upstream that also supports HTTP/2 are multiplexed over a single TLS connection, which reduces connection overhead for APIs driven at high request concurrency.
+
+```bash
+nono run --allow-cwd --network-profile developer --allow-http2 -- my-agent
+```
+
+<Note>
+This flag affects only the proxy's **upstream** connections — it does not change what the sandboxed process is allowed to reach, and it is not a capability grant. It is additive with the profile setting: HTTP/2 is enabled if either `--allow-http2` or the profile's `network.allow_http2` is set, and there is no flag to turn it back off for a profile that opts in.
+</Note>
+
 #### `--listen-port`
 
 Allow the sandboxed process to listen on a TCP port. Required when running server applications (like AI gateways) in proxy mode.
