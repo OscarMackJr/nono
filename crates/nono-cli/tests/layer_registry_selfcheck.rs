@@ -29,7 +29,7 @@
 
 mod common;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// `crates/nono-cli` — the crate this integration test belongs to.
 fn manifest_dir() -> PathBuf {
@@ -1623,25 +1623,58 @@ fn extract_backtick_symbol_citations(line: &str) -> Vec<String> {
 /// by `tests/adr_aipc_unix_futures.rs`) — which is the point: a gate whose
 /// scope is a list finds exactly the things already on the list.
 ///
-/// The scan now walks every `.rs` file under the crate's `src/` and `tests/`,
-/// fails CLOSED if any directory or entry cannot be enumerated (a narrowed walk
-/// is a silently narrowed claim), and resolves each discovered basename by
-/// walking the workspace rather than trying three guessed trees.
+/// # Round-8 CR-01: "real discovery" means enumerating the REPOSITORY
+///
+/// Making the discovery real is right; making it a FILESYSTEM walk was not.
+/// The version this replaces enumerated both halves — the `.rs` sources and
+/// the `.md` resolution set — by walking from `manifest_dir()` and
+/// `workspace_root()`, pruning only `target | node_modules | dist | .git`.
+/// `.claude/` and `.gsd/` are gitignored and both exist on a developer
+/// machine; `.claude/worktrees/` holds a **full copy of the repository per
+/// agent worktree**. Every copy of a guarded `.md` became a candidate, and
+/// because ambiguity is resolved fail-CLOSED the gate then demanded that
+/// `ci.yml` force-include paths that do not exist in the repository — which
+/// is unsatisfiable from the workflow side, since a path that can never
+/// appear in a pull request's changed-file list can never be force-included.
+/// The gate failed deterministically on the real tree and passed only in a
+/// clean checkout: green because of where it was measured.
+///
+/// The code this replaced said so, and its comment was deleted along with it:
+/// *"Explicit rather than a walk: a walk would reach `.planning/` and
+/// `target/`"*. The lesson is not "go back to a list" — a list finds exactly
+/// what is already on it, which is round-6 WR-05. It is that the set being
+/// enumerated must be the set the question is about. This gate's question is
+/// "which files can a pull request change", so both halves now ask **git**
+/// (see [`tracked_files`]) and fail CLOSED if git cannot answer.
+///
+/// Resolution also uses the path the read site already spells out rather than
+/// reducing it to a basename: `.join("..").join("..").join(".planning")
+/// .join("PROJECT.md")` names its directory, one component per quoted
+/// fragment, across several lines. The longest trailing suffix that matches a
+/// tracked file wins; ambiguity within that suffix stays fail-CLOSED.
 #[test]
 fn every_markdown_file_gated_by_a_test_runs_the_code_jobs() {
     let ci = std::fs::read_to_string(workspace_root().join(".github/workflows/ci.yml"))
         .expect("read .github/workflows/ci.yml");
     let classifier = ci_force_include_region(&ci);
 
-    // Discovery, step 1: every `.rs` file in the crate's own tree.
-    let mut rust_sources: Vec<PathBuf> = Vec::new();
-    for sub in ["src", "tests"] {
-        collect_by_extension(&manifest_dir().join(sub), "rs", &mut rust_sources);
-    }
+    // Discovery, step 1: every TRACKED `.rs` file in the crate's own tree.
+    let crate_rel = manifest_dir()
+        .strip_prefix(workspace_root())
+        .expect("the crate manifest dir is under the workspace root")
+        .display()
+        .to_string()
+        .replace('\\', "/");
+    let rust_sources: Vec<String> = [format!("{crate_rel}/src"), format!("{crate_rel}/tests")]
+        .iter()
+        .flat_map(|dir| tracked_files(dir))
+        .filter(|rel| rel.ends_with(".rs"))
+        .collect();
     assert!(
         rust_sources.len() >= 100,
-        "non-vacuity: the crate walk found only {} `.rs` file(s). This gate's coverage IS the \
-         walk, so a walk that has gone quiet is a silently narrowed claim, not a pass.",
+        "non-vacuity: the crate's tracked-source enumeration found only {} `.rs` file(s). This \
+         gate's coverage IS that enumeration, so one that has gone quiet is a silently narrowed \
+         claim, not a pass.",
         rust_sources.len()
     );
 
@@ -1668,16 +1701,12 @@ fn every_markdown_file_gated_by_a_test_runs_the_code_jobs() {
     ];
     const ROOT_LOOKBACK: usize = 8;
 
-    let mut read_markdown: Vec<(String, String)> = Vec::new();
-    for path in &rust_sources {
-        let src = std::fs::read_to_string(path)
-            .unwrap_or_else(|e| panic!("WR-05: failed to read {}: {e}", path.display()));
-        let label = path
-            .strip_prefix(manifest_dir())
-            .unwrap_or(path)
-            .display()
-            .to_string()
-            .replace('\\', "/");
+    let mut read_markdown: Vec<(Vec<String>, String)> = Vec::new();
+    for rel in &rust_sources {
+        let abs = workspace_root().join(rel);
+        let src = std::fs::read_to_string(&abs)
+            .unwrap_or_else(|e| panic!("WR-05: failed to read {}: {e}", abs.display()));
+        let label = rel.strip_prefix(&format!("{crate_rel}/")).unwrap_or(rel);
         // Blank out comment lines rather than dropping them, so the look-back
         // window keeps counting source lines.
         let code: Vec<&str> = src
@@ -1691,27 +1720,58 @@ fn every_markdown_file_gated_by_a_test_runs_the_code_jobs() {
             })
             .collect();
         for (idx, line) in code.iter().enumerate() {
-            let fragments: Vec<&str> = line
-                .split('"')
-                .skip(1)
-                .step_by(2)
-                .filter(|f| f.ends_with(".md") && f.len() > ".md".len())
-                .collect();
-            if fragments.is_empty() {
+            if !line.contains(".md") {
                 continue;
             }
             let window_start = idx.saturating_sub(ROOT_LOOKBACK);
-            let window = code
-                .get(window_start..=idx)
-                .map(|w| w.join("\n"))
-                .unwrap_or_default();
-            if !ROOT_MARKERS.iter().any(|m| window.contains(m)) {
+            let Some(window) = code.get(window_start..=idx) else {
+                continue;
+            };
+            if !ROOT_MARKERS
+                .iter()
+                .any(|m| window.iter().any(|w| w.contains(m)))
+            {
                 continue;
             }
-            for frag in fragments {
-                let base = frag.rsplit('/').next().unwrap_or(frag).to_string();
-                if !read_markdown.iter().any(|(b, _)| b == &base) {
-                    read_markdown.push((base, format!("{label}:{}", idx + 1)));
+            // Quoted fragments across the WHOLE window, in source order, with
+            // the index at which this line's own fragments begin. The house
+            // idiom spells a path out one component per `.join("..")` call,
+            // usually on its own line, so the directory a read site names is
+            // only visible across the window — never within one line.
+            let mut frags: Vec<&str> = Vec::new();
+            let mut line_frags_start = 0usize;
+            for (k, w) in window.iter().enumerate() {
+                if k.saturating_add(1) == window.len() {
+                    line_frags_start = frags.len();
+                }
+                frags.extend(w.split('"').skip(1).step_by(2));
+            }
+            for n in line_frags_start..frags.len() {
+                let frag = frags[n];
+                if !(frag.ends_with(".md") && frag.len() > ".md".len()) {
+                    continue;
+                }
+                // Path components named by the site, `..` applied. A fragment
+                // that is not a path component at all (`env!("OUT_DIR")`)
+                // simply contributes a prefix no tracked file matches, and the
+                // longest-suffix search below discards it.
+                let mut parts: Vec<String> = Vec::new();
+                for f in frags.get(..=n).unwrap_or_default() {
+                    for comp in f.split(['/', '\\']) {
+                        match comp {
+                            "" | "." => {}
+                            ".." => {
+                                parts.pop();
+                            }
+                            _ => parts.push(comp.to_string()),
+                        }
+                    }
+                }
+                if parts.is_empty() {
+                    continue;
+                }
+                if !read_markdown.iter().any(|(p, _)| p == &parts) {
+                    read_markdown.push((parts, format!("{label}:{}", idx + 1)));
                 }
             }
         }
@@ -1724,44 +1784,69 @@ fn every_markdown_file_gated_by_a_test_runs_the_code_jobs() {
          deliberately."
     );
 
-    // Resolution: locate each basename by WALKING the workspace, pruning only
-    // build outputs. The previous three-tree guess (`proj`, `docs`, `.`) could
-    // not see `docs/architecture/` or `.planning/`, so it would have reported
-    // two of the real reads as merely "unresolved" — a narrower claim wearing
-    // a different message.
-    let mut repo_markdown_paths: Vec<PathBuf> = Vec::new();
-    collect_by_extension(&workspace_root(), "md", &mut repo_markdown_paths);
-    let repo_markdown: Vec<String> = repo_markdown_paths
-        .iter()
-        .map(|p| {
-            p.strip_prefix(workspace_root())
-                .unwrap_or(p)
-                .display()
-                .to_string()
-                .replace('\\', "/")
-        })
-        .collect();
+    // Resolution: over the files GIT says the repository contains. A path that
+    // cannot appear in a pull request's changed-file list can never be
+    // force-included by `ci.yml`, so admitting one as a candidate makes this
+    // assertion unsatisfiable rather than strict (round-8 CR-01).
+    let repo_markdown = tracked_files("*.md");
+    assert!(
+        repo_markdown.len() >= 100,
+        "non-vacuity: `git ls-files -- *.md` returned only {} path(s). This gate resolves every \
+         discovered read against that set, so a set that has gone quiet turns real reads into \
+         'unresolved' rather than into a verdict.",
+        repo_markdown.len()
+    );
 
     let mut unguarded: Vec<String> = Vec::new();
     let mut unresolved: Vec<String> = Vec::new();
-    for (base, site) in &read_markdown {
-        let matches: Vec<&String> = repo_markdown
-            .iter()
-            .filter(|rel| rel.rsplit('/').next() == Some(base.as_str()))
-            .collect();
+    let mut classified: Vec<String> = Vec::new();
+    for (parts, site) in &read_markdown {
+        // The LONGEST trailing suffix of the site's own path that names a
+        // tracked file. `.planning/PROJECT.md` resolves to exactly one file
+        // where the bare basename `PROJECT.md` would also have admitted every
+        // other `PROJECT.md` in the repository; an `include_str!(concat!(
+        // env!("OUT_DIR"), "/guide.md"))` site carries no usable directory at
+        // all and correctly falls all the way back to its basename.
+        let mut matches: Vec<&String> = Vec::new();
+        for len in (1..=parts.len()).rev() {
+            let suffix = parts
+                .get(parts.len().saturating_sub(len)..)
+                .unwrap_or_default()
+                .join("/");
+            matches = repo_markdown
+                .iter()
+                .filter(|rel| *rel == &suffix || rel.ends_with(&format!("/{suffix}")))
+                .collect();
+            if !matches.is_empty() {
+                break;
+            }
+        }
         if matches.is_empty() {
-            unresolved.push(format!("{base} (read at {site})"));
+            unresolved.push(format!("{} (read at {site})", parts.join("/")));
             continue;
         }
-        // Ambiguity is resolved fail-CLOSED: EVERY location the basename could
-        // denote must be force-included, because this scan cannot tell which
-        // one the read meant.
+        // Ambiguity WITHIN the longest matching suffix stays fail-CLOSED:
+        // EVERY location it could denote must be force-included, because this
+        // scan cannot tell which one the read meant.
         for rel in matches {
+            classified.push(rel.clone());
             if !force_include_covers(&classifier, rel) {
                 unguarded.push(format!("{rel} (read at {site})"));
             }
         }
     }
+
+    classified.sort();
+    classified.dedup();
+    assert!(
+        classified.len() >= 3,
+        "non-vacuity: only {} repository Markdown file(s) were classified by this gate ({:?}). \
+         Three are known to be read and asserted on today — the embedded profile-authoring \
+         guide, the AIPC ADR and `.planning/PROJECT.md` — so a lower count means the read scan, \
+         not the repository, has changed and the classifier is once more unguarded.",
+        classified.len(),
+        classified
+    );
 
     assert!(
         unresolved.is_empty(),
@@ -1784,43 +1869,57 @@ fn every_markdown_file_gated_by_a_test_runs_the_code_jobs() {
     );
 }
 
-/// Every file under `dir` whose extension is `ext`, recursively.
+/// Every file the REPOSITORY contains under the pathspec `pathspec`, as
+/// forward-slashed paths relative to the workspace root.
 ///
-/// FAILS CLOSED on any enumeration error. A discovery-based gate's coverage IS
-/// its walk, so an unreadable directory silently narrows the claim to whatever
-/// happened to be reachable — the same fail-open shape round 6 found in the
-/// D-28 filesystem gate's `collect_files`.
-fn collect_by_extension(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
-    let entries = std::fs::read_dir(dir).unwrap_or_else(|e| {
-        panic!(
-            "WR-05: cannot enumerate {} ({e}) — this gate's coverage is exactly its walk, so \
-             an unreadable directory must FAIL rather than silently narrow the scan",
-            dir.display()
-        )
-    });
-    for entry in entries {
-        let entry = entry.unwrap_or_else(|e| {
+/// # Why git and not a filesystem walk (round-8 CR-01)
+///
+/// This is the enumeration primitive for both halves of
+/// [`every_markdown_file_gated_by_a_test_runs_the_code_jobs`], and the
+/// question that gate asks — "can a pull request change this file, and if so
+/// does `ci.yml` run the code jobs for it" — is a question about the
+/// *repository*, not about the working directory. A filesystem walk answers a
+/// different question and answers it differently on every machine: on this
+/// host `.claude/worktrees/` (gitignored) holds one full copy of the
+/// repository per agent worktree and `.gsd/` holds a second `PROJECT.md`, so
+/// the walk produced candidate paths that no `ci.yml` clause could ever
+/// match. The gate then failed for an unfixable reason on every developer
+/// tree while passing in a clean checkout.
+///
+/// FAILS CLOSED. If `git` cannot be run, or exits non-zero, this panics
+/// rather than degrading to a walk: a narrowed or widened enumeration is a
+/// silently changed claim, and the walk is precisely the widening that broke
+/// this gate.
+fn tracked_files(pathspec: &str) -> Vec<String> {
+    let root = workspace_root();
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["ls-files", "-z", "--", pathspec])
+        .output()
+        .unwrap_or_else(|e| {
             panic!(
-                "WR-05: unreadable directory entry under {} ({e}) — see above; a skipped entry \
-                 is a skipped claim",
-                dir.display()
+                "WR-05/CR-01: could not run `git ls-files -- {pathspec}` in {} ({e}). This \
+                 gate's file set IS what git reports, so it must FAIL rather than fall back to \
+                 a filesystem walk.",
+                root.display()
             )
         });
-        let path = entry.path();
-        if path.is_dir() {
-            // Build outputs and VCS internals are not source.
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
-            if matches!(name.as_str(), "target" | "node_modules" | "dist" | ".git") {
-                continue;
-            }
-            collect_by_extension(&path, ext, out);
-        } else if path.extension().and_then(|e| e.to_str()) == Some(ext) {
-            out.push(path);
-        }
-    }
+    assert!(
+        out.status.success(),
+        "WR-05/CR-01: `git ls-files -- {pathspec}` in {} exited {:?}: {}",
+        root.display(),
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr).trim()
+    );
+    // `-z` so a path containing a quote, a space or a non-UTF-8 byte is not
+    // reshaped by git's own quoting into something that silently fails to
+    // match a `ci.yml` clause.
+    String::from_utf8_lossy(&out.stdout)
+        .split('\0')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.replace('\\', "/"))
+        .collect()
 }
 
 /// Is `token` a finding id — two uppercase ASCII letters, a dash, then digits
