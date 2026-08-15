@@ -340,6 +340,18 @@ jobs:
           path: ci-logs\windows-regression.log
           if-no-files-found: warn
 
+  # This is the ONLY job in this workflow that runs Rust unit tests on
+  # Windows — the `test` job's matrix is [ubuntu-latest, macos-latest].
+  # Because the cargo invocations below carry no `--bin`/`--test`/`--lib`
+  # target filter, they run every target in the package, including the
+  # `nono` bin's unit tests. That is what covers the Phase 117 WR-20 pin,
+  # labels_guard.rs::non_owned_path_with_a_foreign_label_is_exempt_not_a_coverage_gap,
+  # which asserts that a non-owned + foreign-labelled path is contract-exempt
+  # rather than a coverage gap. That test needs SeTakeOwnershipPrivilege and
+  # is host-blocked on the dev box, where it fails LOUDLY per D-31 rather
+  # than skipping — so what it needs is a RUN here, not extra wiring.
+  # Corollary: because this job runs the whole package suite, it also
+  # inherits the documented Windows-host baseline failures.
   windows-layer-fault-injection:
     name: Windows Layer Fault Injection
     needs: changes
