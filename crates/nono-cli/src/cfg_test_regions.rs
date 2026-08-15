@@ -28,13 +28,18 @@
 //!
 //! A region is skipped when a `#[cfg(...)]` attribute that gates **test-only**
 //! code (see [`is_cfg_test_attr`]) is followed — possibly across
-//! **anything that is not the gated item** — by an INLINE `mod foo {`. The
-//! region ends at the closing brace at the module's own indentation, so test
-//! modules nested inside another module (`agent_daemon/launch.rs`'s live inside
-//! `mod windows_impl`) close correctly. A bare `mod foo;` *declaration* opens
-//! no region — that is `main.rs:155`'s `#[cfg(test)] mod test_env;`, and
-//! treating it as a region start silently truncated the `main.rs` half of a
-//! gate to nothing.
+//! **anything that is not the gated item** — by that item. The item may be of
+//! any kind (round-8 WR-01): an inline `mod foo {`, a `fn`, a `const`, a
+//! `static`, a `use`, a bare `mod foo;` declaration.
+//!
+//! A block item's region ends at the closing brace at the ITEM's own
+//! indentation, so test modules nested inside another module
+//! (`agent_daemon/launch.rs`'s live inside `mod windows_impl`) close
+//! correctly. A self-contained item — one whose code text is brace-balanced
+//! and ends in `;` or `}` — is its own region, which is how a bare
+//! `#[cfg(test)] mod test_env;` declaration (`main.rs:156`) is skipped without
+//! a closer search: treating that as a BLOCK region start silently truncated
+//! the `main.rs` half of a gate to nothing.
 //!
 //! Comments are dropped as well: prose ABOUT a rule is not an instance of it,
 //! and a comment naming the thing a gate hunts for would otherwise satisfy the
@@ -950,44 +955,123 @@ pub fn scan_production(src: &str) -> ProductionScan {
             // the branch above that, so reaching here means this line IS the
             // gated item.
             pending_test_attr = false;
-            // An INLINE `mod foo {` opens a test region; a bare `mod foo;`
-            // declaration opens nothing.
-            if (t.starts_with("mod ") || t.starts_with("pub mod ")) && t.ends_with('{') {
-                let start = idx;
-                let raw = lines[idx];
-                let indent = &raw[..raw.len() - raw.trim_start().len()];
-                idx += 1;
-                let mut closed_at = None;
-                while idx < lines.len() {
-                    // Comment state is carried THROUGH the region body too, so
-                    // it stays coherent afterwards and so a `}` sitting inside
-                    // a block comment cannot close the region early.
-                    let has_code = comments.feed(lines[idx], idx).is_some();
-                    if has_code && is_region_closer(lines[idx], indent) {
-                        closed_at = Some(idx);
+            let start = idx;
+            let raw = lines[idx];
+            let indent = &raw[..raw.len() - raw.trim_start().len()];
+
+            // ROUND-8 WR-01: the gated ITEM is skipped, whatever kind of item
+            // it is — not only an inline `mod`.
+            //
+            // The fall-through this replaces kept a `#[cfg(test)]`-gated
+            // `fn`/`const`/`static`/`use` as production text under a comment
+            // asserting the opposite ("It is not production text either way"),
+            // and kept every line of its body too, because nothing tracked the
+            // item's extent. That is live in two of the four scanned files:
+            // `agent_daemon/launch.rs`'s `WFP_CONTROL_PIPE_NAME_TESTABLE` and
+            // `profile_needs_network_scoping_testable`, and `output.rs`'s
+            // `SESSIONS_ROOT_TEST_LOCK`. Both files are scanned by gates that
+            // ask "does the PRODUCTION half name X", so a `_testable` helper
+            // naming a layer would satisfy the gate on its own — the failure
+            // this module's doc opens with, one granularity below the
+            // module-level case it already closes. All four checks in
+            // `assert_split_is_correct` are blind to it: the region list is
+            // non-empty, nothing is unclosed, and a gated `fn` carries no
+            // `#[test]` to leak.
+            //
+            // The extent rule is the item's own SHAPE, resolved over code text:
+            //
+            //   * balanced and ending in `;` or `}` -> the item is this line
+            //     (`const X: &str = "…";`, `use a::b;`, `mod t { … }`);
+            //   * a line that opens a block -> the item ends at the closer at
+            //     its OWN indent, the same rule `mod` has always used, chosen
+            //     over brace counting because a brace inside a raw string
+            //     closes early in the LOUD direction (a leaked `#[test]`)
+            //     rather than swallowing the rest of the file;
+            //   * neither, for up to `MAX_ITEM_HEADER` lines -> a multi-line
+            //     header (`pub fn f(\n a: u32,\n) -> bool {`) that has not
+            //     resolved yet.
+            //
+            // An item whose extent cannot be resolved at all is recorded in
+            // `unclosed_regions`, so it FAILS loudly instead of picking one of
+            // the two silent directions.
+            const MAX_ITEM_HEADER: usize = 16;
+            let mut header = idx;
+            let mut header_text = t.to_string();
+            let mut resolved: Option<Option<usize>> = None;
+            while header < lines.len() {
+                let braces = header_text.matches('{').count();
+                let closers = header_text.matches('}').count();
+                if braces > closers {
+                    // The header opened a block: find the closer at this
+                    // item's own indent.
+                    resolved = None;
+                    break;
+                }
+                if header_text.ends_with(';') || header_text.ends_with('}') {
+                    resolved = Some(Some(header));
+                    break;
+                }
+                if header.saturating_sub(start) >= MAX_ITEM_HEADER {
+                    resolved = Some(None);
+                    break;
+                }
+                header = header.saturating_add(1);
+                match lines.get(header).and_then(|l| comments.feed(l, header)) {
+                    Some(more) => {
+                        header_text.push(' ');
+                        header_text.push_str(more.trim());
+                    }
+                    None if header >= lines.len() => {
+                        resolved = Some(None);
                         break;
                     }
-                    idx += 1;
+                    None => {}
                 }
-                match closed_at {
-                    Some(end) => {
-                        skipped_regions.push((start, end));
-                        idx = end + 1;
-                    }
-                    None => {
-                        // WR-03: record it AND report it. The region is still
-                        // pushed so `skipped_lines()` stays meaningful, but
-                        // `unclosed_regions` is what the caller must assert
-                        // on — this direction is invisible to every floor.
-                        unclosed_regions.push(start);
-                        skipped_regions.push((start, lines.len().saturating_sub(1)));
-                    }
-                }
-                continue;
             }
-            // Fall through: the cfg-test attribute gated something that is not
-            // an inline module (a bare declaration, a `use`, a fn). It is not
-            // production text either way, but it opens no region.
+            match resolved {
+                // Self-contained: the item is `start..=end`.
+                Some(Some(end)) => {
+                    skipped_regions.push((start, end));
+                    idx = end.saturating_add(1);
+                    continue;
+                }
+                // Unresolvable: loud, per WR-03's rule for the same shape.
+                Some(None) => {
+                    unclosed_regions.push(start);
+                    skipped_regions.push((start, lines.len().saturating_sub(1)));
+                    continue;
+                }
+                None => {}
+            }
+
+            idx = header.saturating_add(1);
+            let mut closed_at = None;
+            while idx < lines.len() {
+                // Comment state is carried THROUGH the region body too, so
+                // it stays coherent afterwards and so a `}` sitting inside
+                // a block comment cannot close the region early.
+                let has_code = comments.feed(lines[idx], idx).is_some();
+                if has_code && is_region_closer(lines[idx], indent) {
+                    closed_at = Some(idx);
+                    break;
+                }
+                idx += 1;
+            }
+            match closed_at {
+                Some(end) => {
+                    skipped_regions.push((start, end));
+                    idx = end + 1;
+                }
+                None => {
+                    // WR-03: record it AND report it. The region is still
+                    // pushed so `skipped_lines()` stays meaningful, but
+                    // `unclosed_regions` is what the caller must assert
+                    // on — this direction is invisible to every floor.
+                    unclosed_regions.push(start);
+                    skipped_regions.push((start, lines.len().saturating_sub(1)));
+                }
+            }
+            continue;
         }
 
         out.push((idx, code));
@@ -1170,22 +1254,108 @@ mod real_impl {
         assert!(scan.lines.iter().any(|(_, l)| l.contains("fn shipped")));
     }
 
-    /// A bare `#[cfg(test)] mod foo;` declaration opens no region — this is
-    /// `main.rs:155`, and treating it as a region start truncated a gate's
-    /// whole scan of that file to nothing.
+    /// A bare `#[cfg(test)] mod foo;` declaration is its OWN region — one
+    /// line, no closer search. This is `main.rs:156`, and treating it as a
+    /// BLOCK region start truncated a gate's whole scan of that file to
+    /// nothing, because the search then ran to the first `}` at column zero.
     #[test]
-    fn bare_module_declaration_opens_no_region() {
+    fn bare_module_declaration_is_its_own_one_line_region() {
         let src = "\
 #[cfg(test)]
 mod test_env;
 fn production_after() {}
 ";
         let scan = scan_production(src);
-        assert!(scan.skipped_regions.is_empty());
+        assert_eq!(
+            scan.skipped_regions,
+            vec![(1, 1)],
+            "the declaration is test-only source and is skipped, but it swallows nothing"
+        );
         assert!(scan
             .lines
             .iter()
             .any(|(_, l)| l.contains("production_after")));
+    }
+
+    /// Round-8 WR-01: a `#[cfg(test)]` attribute gating something that is NOT
+    /// an inline module.
+    ///
+    /// The fall-through this replaces kept the item — and, since nothing
+    /// tracked its extent, every line of its body — in the PRODUCTION half,
+    /// under a comment claiming the opposite. The shapes below are the two
+    /// live ones (`agent_daemon/launch.rs`'s `_testable` wrappers and
+    /// `output.rs`'s `SESSIONS_ROOT_TEST_LOCK`) plus the multi-line header
+    /// that neither of them exercises.
+    ///
+    /// Direction: a `_testable` helper naming a layer would satisfy
+    /// `layer_registry.rs`'s daemon gate on its own, and all four checks in
+    /// `assert_split_is_correct` are blind to it — the region list is
+    /// non-empty, nothing is unclosed, and a gated `fn` carries no `#[test]`.
+    #[test]
+    fn a_cfg_test_gated_non_module_item_is_skipped_whole() {
+        let src = "\
+fn production_a() {}
+#[cfg(test)]
+pub(crate) const WFP_CONTROL_PIPE_NAME_TESTABLE: &str = \"DaclAncestorTraverse\";
+#[cfg(test)]
+pub(crate) static SESSIONS_ROOT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[cfg(test)]
+pub(crate) fn profile_needs_network_scoping_testable(profile_name: &str) -> bool {
+    profile_needs_network_scoping(profile_name)
+}
+#[cfg(test)]
+pub(crate) fn multi_line_header(
+    a: u32,
+) -> bool {
+    a > 0
+}
+#[cfg(test)]
+use std::sync::Mutex;
+#[cfg(test)]
+mod one_line_module { #[test] fn q() {} }
+fn production_b() {}
+";
+        let scan = scan_production(src);
+        let kept: Vec<&str> = scan.lines.iter().map(|(_, l)| l.as_str()).collect();
+        assert_eq!(
+            kept,
+            vec!["fn production_a() {}", "fn production_b() {}"],
+            "every `#[cfg(test)]`-gated item is test-only source, whatever kind of item it is"
+        );
+        assert!(scan.unclosed_regions.is_empty());
+        assert!(scan.unterminated_block_comment.is_none());
+        assert_eq!(
+            scan.skipped_regions.len(),
+            6,
+            "one region per gated item: {:?}",
+            scan.skipped_regions
+        );
+        // The one-line module is the shape `leaked_test_attributes` could not
+        // see either (round-8 WR-04): it opens no block, so no closer search
+        // ever ran, and its `#[test]` shared a line with other tokens.
+        assert!(
+            !kept.iter().any(|l| l.contains("#[test]")),
+            "a one-line `#[cfg(test)] mod t {{ #[test] fn q() {{}} }}` must not reach the \
+             production half: {kept:?}"
+        );
+    }
+
+    /// Round-8 WR-01: an item whose extent cannot be resolved must FAIL, not
+    /// pick one of the two silent directions — the same rule WR-03 established
+    /// for a module whose closer is never found.
+    #[test]
+    fn an_unresolvable_gated_item_is_reported() {
+        let mut src = String::from("#[cfg(test)]\npub(crate) fn never_finishes(\n");
+        for i in 0..40 {
+            src.push_str(&format!("    arg{i}: u32,\n"));
+        }
+        let scan = scan_production(&src);
+        assert_eq!(
+            scan.unclosed_regions,
+            vec![1],
+            "an item header that never resolves to `;`, `}}` or an open block is recorded so \
+             `assert_split_is_correct` fails on it"
+        );
     }
 
     /// Nested test modules close at their own indentation, not at column 0 —
