@@ -1,0 +1,54 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-08-16T14:11:49.953Z",
+  "phase": "118",
+  "phase_name": "Per-Session Enforcement Receipts (NOT STARTED — awaiting discuss-phase)",
+  "phase_dir": ".planning/phases/118-per-session-enforcement-receipts",
+  "plan": null,
+  "task": null,
+  "total_tasks": null,
+  "status": "paused",
+  "context_detection_note": "Auto-detection points at phase 117 because it holds the most recent *PLAN.md. That is STALE — 117 is CLOSED (ROADMAP [x], 34/34 plans, VERIFICATION status human_needed with the one human item now ANSWERED GREEN by CI). The genuinely open work is a quick-task MSI fix plus Phase 118, which has an empty directory. Handoff written to .planning/.continue-here.md, not into 117.",
+  "completed_tasks": [
+    {"id": 1, "name": "Phase 117 SC4 recording gap closed + SC3 operator override applied", "status": "done", "commit": "23d605bd"},
+    {"id": 2, "name": "Phase 117 closed out in ROADMAP + REQUIREMENTS (CINT-01/02/03)", "status": "done", "commit": "f4fd994a"},
+    {"id": 3, "name": "Fail-open Windows CI gate fixed (pwsh multi-command run block) — PROVEN in CI", "status": "done", "commit": "a129369e"},
+    {"id": 4, "name": "19 CI-only test failures diagnosed (3 proven causes, no product defect)", "status": "done", "commit": "94ed5155"},
+    {"id": 5, "name": "19 CI-only test failures fixed — PROVEN in CI (22 failures -> 3 pre-existing)", "status": "done", "commit": "18405fc0"},
+    {"id": 6, "name": "3 mechanical CI causes fixed (clippy lint x3 sites, -p rename, --allow-http2 doc)", "status": "done", "commit": "10d701ba"},
+    {"id": 7, "name": "SIGN-03 recorded GREEN — Azure Trusted Signing confirmed working", "status": "done", "commit": "986af3bb"},
+    {"id": 8, "name": "STATE.md v3.5 pause reason corrected (Azure blocker CLEARED)", "status": "done", "commit": "42a917b7"}
+  ],
+  "remaining_tasks": [
+    {"id": 9, "name": "Conditional MSI POC-cert provisioning — TWO files, fully diagnosed, NOT STARTED", "status": "not_started"},
+    {"id": 10, "name": "Phase 118 — run /gsd:discuss-phase 118, then /gsd:plan-phase 118", "status": "not_started"},
+    {"id": 11, "name": "Push 3 unpushed commits (986af3bb, 42a917b7 + HANDOFF wip)", "status": "not_started"}
+  ],
+  "blockers": [
+    {
+      "description": "MSI conditional fix spans TWO files, not one. build-windows-msi.ps1 gates the emissions; validate-windows-msi-contract.ps1:312/351/353 HARD-ASSERTS all three exist ('unconditional for machine scope', its own comment :300). Gating only the build script relocates the red from build:239 to validator:353. Additionally validator :314-317 null-derefs on $certImportCa.Execute before reporting the missing node.",
+      "type": "technical",
+      "workaround": "Fix both files. Proposed shape: cert PRESENT -> assert all three strictly; cert ABSENT -> assert their ABSENCE (proves coupling both directions rather than going quiet)."
+    },
+    {
+      "description": "Relaxing the validator asserts is a SECURITY CONTRACT decision, not mechanical. It makes CI-built machine MSIs contractually permitted to ship without a trust anchor. Likely the right end state (CLOSE-01/Phase 107 removes it anyway) but it is an operator call.",
+      "type": "human_action",
+      "workaround": null
+    }
+  ],
+  "human_actions_pending": [
+    {"action": "Approve the validator security-contract change (conditional asserts on the three POC emissions)", "context": "Blocks the MSI fix. Machine MSI currently provisions a self-signed POC signing root into a machine cert store on every install via 'nono setup --trust-root' (deferred SYSTEM, Return=ignore).", "blocking": true},
+    {"action": "Decide whether to unpause v3.5", "context": "SIGN-03 is now GREEN so Phase 104 is unblocked at the head. Deliberately NOT unpaused. Phase 104 Plan 03 ends in an irreversible public tag push, v3.7 is mid-flight, and the board is still red (Windows Packaging, 5 Integration suites, ubuntu clippy).", "blocking": false},
+    {"action": "Push 3 unpushed commits", "context": "Records only, no code. They supersede the stale 'Trusted Signing REGRESSED / do NOT push v0.66.1' claims.", "blocking": false}
+  ],
+  "decisions": [
+    {"decision": "SC3 accepted via operator override (10/13 rows), not marked as a clean pass anywhere", "rationale": "3 rows are host/structurally gated; the record must not read as though the literal bar was met", "phase": "117"},
+    {"decision": "Do NOT commit dist/windows/nono-poc-signing.cer and do NOT touch .gitignore", "rationale": "Reverses a deliberate 2026-05-27 code-signing-material exclusion (c22daaa1) in a PUBLIC repo, for an artifact CLOSE-01 retires at Phase 107", "phase": "quick"},
+    {"decision": "Do NOT add libdbus-1-dev to the cross-compile job", "rationale": "The portability gate runs on runner.os == Linux i.e. BOTH targets, so it would only move the failure and would weaken a probable forcing function", "phase": "quick"},
+    {"decision": "Keep the POC test cert until Gate 3, despite Azure signing now working", "rationale": "CLOSE-01 ordering is explicit: retire only after clean-host UAT, never merely after a green release, so a recovery path survives. Azure already regressed silently once for 3 weeks.", "phase": "v3.5"},
+    {"decision": "v3.5 stays PAUSED even though SIGN-03 went green", "rationale": "Only the REASON changed (Azure cleared -> operator tag-push decision + red board). No phase checkbox flipped.", "phase": "v3.5"}
+  ],
+  "uncommitted_files": [],
+  "next_action": "Decide the validator security-contract question (see human_actions_pending[0]), then implement the two-file MSI fix and prove BOTH branches with -EmitOnly. Independently: /gsd:discuss-phase 118.",
+  "context_notes": "Session theme, and it recurred all day: gates that were correct when written and silently stopped covering reality. A CI job green while 22 tests failed; an integration script unrunnable for months hiding 5 real suite failures; an MSI build requiring a gitignored file; a clippy rule pinning targets but not toolchain version. Every one surfaced only by actually RUNNING the gate. Expect fixing a gate to reveal what it was hiding — that happened three separate times today and should be treated as the normal outcome, not a surprise."
+}
