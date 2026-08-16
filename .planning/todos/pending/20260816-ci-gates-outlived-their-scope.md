@@ -96,6 +96,41 @@ allowlist for the deliberately-neutralized release.yml lines. That converts a re
 sweep into a build failure. **Whatever shape this takes, at least one success criterion should be
 about the gates staying true — not merely about these three instances being closed.**
 
+## Addendum — 2026-08-16, CI run 31916670497 (post-fix verdict)
+
+The three mechanical fixes landed: `Clippy (windows-latest)`, `Clippy (macos-latest)` and
+`Docs Checks` all flipped GREEN. Two new data points, both reinforcing this item rather than
+changing it:
+
+**3b — a THIRD toolchain-drift instance, and the worst-positioned one.**
+`Clippy (ubuntu-latest)` still fails, on a *different* lint from the one fixed:
+```
+error: this block may be rewritten with the `?` operator
+  --> crates/nono-cli/src/learn.rs:1385   (clippy::question_mark, rust-1.97.0)
+```
+It sits inside `fn extract_path_from_syscall` (`:1377`), gated `#[cfg(target_os = "linux")]` at
+`:1376` — which is why windows/macos clippy pass: they never compile it. **`git log` shows that
+code is from Initial Commit (2026-02-09), untouched since** — no commit skipped a cross-target
+check, and CLAUDE.md's rule would not have fired anyway because nothing in this milestone touched
+the file. It is newly-linted by 1.97.
+**This is invisible to local verification on TWO independent axes at once** — wrong toolchain
+(1.95 vs 1.97) AND wrong target (Linux-gated, so a Windows-host clippy never compiles it).
+CLAUDE.md's rule addresses only the second. Strongest evidence yet for pinning the toolchain: fix
+the lint if you like, but the lint is the symptom.
+
+**NEW, adjacent — the Integration Tests suite has been failing invisibly.**
+The `-p nono-sandbox-cli` fix (commit `b5d3b1c6`) worked: the `cannot specify features for packages
+outside of workspace` error is gone and the script now actually executes. It reports **16 suites
+passed, 5 FAILED** — e.g. `Trust CLI` fails 1 of 11 on a real assertion (`trust list --json`
+verification of a `SKILLS.md` fixture). These are genuine content failures that were masked for as
+long as the script was unrunnable. **Not yet triaged.** Same shape as the fail-open CI gate: fixing
+the blocker revealed what it was hiding. Scope this separately — it is not part of the libdbus /
+rename / toolchain trio, but it was found by the same sweep and has the same cause-of-invisibility.
+
+**Also still red and NOT yet triaged at all** (out of scope for this item, recorded so they are not
+mistaken for covered): `Test (ubuntu-latest)`, `Test (macos-latest)`, `Windows Build`,
+`Windows Smoke`, `Windows Integration`, `Windows Regression`, `Windows Packaging`.
+
 ## Evidence already on disk — do not re-derive
 
 - `.planning/debug/ci-windows-117-failures.md` — the sibling Windows triage (19 failures, 3 proven
