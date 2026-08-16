@@ -39,7 +39,7 @@ Sequencing rationale: **115** drains the v3.6 findings first because DRAIN-03 cl
 - [x] **Phase 115: v3.6 Carry-Forward Drain** — 6/6 plans (2026-08-09)
 - [x] **Phase 116: Tool-Sandbox Divergence Audit + Disposition ADR** — 6/6 plans (2026-08-09)
 - [x] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 34/34 plans executed. Gap-closure round 3 EXECUTED 2026-08-11 (waves 12-14), closing CR-03 (BLOCKER) and WR-12..WR-21; D-37 implemented as the three-arm ancestor classification. Full suite 1624 passed / 12 failed = the 11 documented Windows-host baseline + **one intentional host-blocked test** (117-30's WR-20 pin needs an elevated/CI runner — `SeTakeOwnershipPrivilege` absent here, so WR-20 is authored-but-unverified). Code review ran to round 9; re-verified 2026-08-15 (117-VERIFICATION.md, status: human_needed): SC1/SC2 VERIFIED, SC3 ACCEPTED via operator override (still factually 10/13), SC4 VERIFIED with disclosed limits — its recording gap closed the same day by quick task 260815-b0s. One human item open: the WR-20 CI run.
-- [ ] **Phase 118: Per-Session Enforcement Receipts** — 0/? plans
+- [ ] **Phase 118: Per-Session Enforcement Receipts** — 0/10 plans
 - [ ] **Phase 119: Security-Model Boundary Statement + State-of-the-Art Decision Log** — 0/? plans
 - [ ] **Phase 120: Tool-Sandbox Verdict Execution** — 0/? plans
 
@@ -376,6 +376,18 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
   3. A receipt's integrity is verifiable on the same terms as the existing HMAC-chained audit events, so an edited receipt is detectable.
   4. A reader can distinguish "confirmed active" from "not expected in this configuration" from "expected but unconfirmed" without out-of-band knowledge — an unattested layer never renders as attested.
 
+**Plans**: 10 plans in 6 waves
+- [ ] 118-01-PLAN.md — Core receipt vocabulary (EnforcementReceipt + promoted LayerId) + keyless receipt chain primitive (D-11/D-25) + content-free type-allowlist scan
+- [ ] 118-02-PLAN.md — Core security primitives: deny-ACE Win32 wrapper (D-08) + require_receipts machine policy field (D-04)
+- [ ] 118-03-PLAN.md — nono.exe full 13-row census (Finding 1a) + receipt assembly + sentinel round-trip + census-completeness meta-test
+- [ ] 118-04-PLAN.md — nono-agentd daemon_attest_and_decide collect-all-then-decide restructure (D-26) with equivalence proof + 8-row expectancy table
+- [ ] 118-05-PLAN.md — Receipt sink infrastructure: DENY-ACE + NO_READ_UP guard, keyless mutex-guarded chain writer, shared by nono.exe and nono-agentd.exe
+- [ ] 118-06-PLAN.md — Broker wire-contract widening (D-27) + nono-shell-broker's own 13-row census, receipt assembly, and sink/chain write
+- [ ] 118-07-PLAN.md — Wire receipt write into nono.exe's DirectCli attestation gate (D-02/D-03/D-04)
+- [ ] 118-08-PLAN.md — Wire receipt write into nono-agentd's Daemon attestation gate + D-16 triage
+- [ ] 118-09-PLAN.md — nono receipt list|show|verify command family (D-10) + four-state rendering discovery test (RCPT-03)
+- [ ] 118-10-PLAN.md — Phase gate: cross-target clippy (D-23), D-17 latency measurement, confined-child sink-guard checkpoint (D-08), discretion-decision recording
+
 ### Phase 119: Security-Model Boundary Statement + State-of-the-Art Decision Log
 **Goal**: What nono governs and what it does not is written down before anyone downstream can over-claim it — and the Windows isolation techniques the fork did *not* adopt become a set of recorded decisions rather than a set of omissions.
 **Depends on**: Phase 117 (the boundary statement can only be truthful once the contract says what each layer actually does)
@@ -433,6 +445,6 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
 | 115. v3.6 Carry-Forward Drain | v3.7 | 6/6 | Complete | 2026-08-09 |
 | 116. Tool-Sandbox Divergence Audit + Disposition ADR | v3.7 | 6/6 | Complete (verdict: formalize fork-native) | 2026-08-09 |
 | 117. Fail-Direction Contract + Startup Self-Attestation | v3.7 | 34/34 | Complete (SC3 via operator override; 1 human item open) | 2026-08-15 |
-| 118. Per-Session Enforcement Receipts | v3.7 | 0/? | Not started | - |
+| 118. Per-Session Enforcement Receipts | v3.7 | 0/10 | Not started | - |
 | 119. Security-Model Boundary Statement + State-of-the-Art Decision Log | v3.7 | 0/? | Not started | - |
 | 120. Tool-Sandbox Verdict Execution | v3.7 | 0/? | Not started | - |
