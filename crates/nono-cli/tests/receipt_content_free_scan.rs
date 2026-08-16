@@ -62,7 +62,8 @@ fn read_receipt_source() -> String {
         .join("nono")
         .join("src")
         .join("receipt.rs");
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()))
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()))
 }
 
 /// Extracts `(field_name, type_text)` pairs from the brace-delimited body
@@ -150,12 +151,22 @@ const SESSION_ID_EXCEPTION_TYPE: &str = "String";
 /// `session_id` exception, returning the violating `(field_name,
 /// type_text)` pairs. An empty return means the scan passes.
 ///
-/// NOTE (RED phase, Phase 118 Plan 01 Task 3): this stub always returns no
-/// violations, so the perturbation-proof test below is EXPECTED TO FAIL
-/// until the real classification body lands in the GREEN commit. This is
-/// the fail-fast RED gate, not a bug left unfixed.
-fn classify_fields(_fields: &[(String, String)]) -> Vec<(String, String)> {
-    Vec::new()
+/// A field passes if EITHER its type is in [`ALLOWED_TYPES`] verbatim, OR
+/// it is named exactly [`SESSION_ID_EXCEPTION_FIELD`] AND typed exactly
+/// [`SESSION_ID_EXCEPTION_TYPE`] — the one D-05-sanctioned owned-`String`
+/// identity field. Any field named something else but typed `String` (or
+/// any other non-allowlisted type, including `PathBuf`) is a violation.
+fn classify_fields(fields: &[(String, String)]) -> Vec<(String, String)> {
+    fields
+        .iter()
+        .filter(|(name, type_text)| {
+            let is_session_id_exception =
+                name == SESSION_ID_EXCEPTION_FIELD && type_text == SESSION_ID_EXCEPTION_TYPE;
+            let is_allowlisted = ALLOWED_TYPES.contains(&type_text.as_str());
+            !(is_session_id_exception || is_allowlisted)
+        })
+        .cloned()
+        .collect()
 }
 
 #[test]
@@ -209,7 +220,11 @@ fn allows_a_synthetic_struct_containing_only_allowlisted_types() {
                       \x20\x20\x20\x20pub layers: Vec<LayerReceiptRow>,\n\
                       }\n";
     let fields = field_types_in_struct(synthetic, "EnforcementReceipt");
-    assert_eq!(fields.len(), 7, "parser did not find all 7 synthetic fields: {fields:?}");
+    assert_eq!(
+        fields.len(),
+        7,
+        "parser did not find all 7 synthetic fields: {fields:?}"
+    );
     let violations = classify_fields(&fields);
     assert!(
         violations.is_empty(),
