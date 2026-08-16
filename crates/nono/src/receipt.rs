@@ -149,6 +149,58 @@ impl LayerId {
     ];
 }
 
+/// Axis 2 of the D-08 expectancy matrix (RESEARCH §B): which *binary*
+/// handled the spawn. Core-promoted mirror of the CLI-side
+/// `pub(crate) enum EntryPath`
+/// (`crates/nono-cli/src/exec_strategy_windows/layer_registry.rs`), same 3
+/// variant names/order — promoted so [`EnforcementReceipt::entry_path`] can
+/// be a content-free, round-trippable enum instead of a `&'static str`
+/// (operator decision, 118-01 corrective). This module never imports the
+/// CLI's own `EntryPath` type; the CLI unifies with this one in a later
+/// plan (118-03).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EntryPath {
+    /// `nono.exe` spawning directly — covers direct `nono run`, the
+    /// PTY/no-PTY broker arms' own spawn of `nono-shell-broker.exe`, and the
+    /// per-tool-call hook path.
+    DirectCli,
+    /// `nono-shell-broker.exe` spawning the real confined grandchild inside
+    /// its own, separate `CREATE_SUSPENDED` window.
+    Broker,
+    /// `nono-agentd.exe`'s daemon-side launch path, structurally independent
+    /// of `exec_strategy_windows/`.
+    Daemon,
+}
+
+/// Axis 1 of the D-08 expectancy matrix: which token-construction strategy
+/// `select_windows_token_arm` chose for this launch. Core-promoted mirror of
+/// the CLI-side `pub(crate) enum WindowsTokenArm`
+/// (`crates/nono-cli/src/exec_strategy_windows/launch.rs`), same 5 variant
+/// names/order — promoted so [`EnforcementReceipt::token_arm`] can be a
+/// content-free, round-trippable enum instead of `Option<&'static str>`
+/// (operator decision, 118-01 corrective). `None` (not a `TokenArm` variant)
+/// still represents "no token arm applies to this entry path"
+/// (`EntryPath::Broker` / `EntryPath::Daemon` bypass the cascade entirely).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TokenArm {
+    /// Caller's identity (`CreateProcessW` with a null token) — the
+    /// detached-launch path or final fallback.
+    Null,
+    /// WRITE_RESTRICTED token + per-session restricting SID — the existing
+    /// non-PTY supervised path.
+    WriteRestricted,
+    /// Low-IL primary token — the legacy Direct-path fallback and the only
+    /// direct runtime exercise of `create_low_integrity_primary_token`.
+    LowIlPrimary,
+    /// Spawn `nono-shell-broker.exe` (Medium IL) as the caller's identity;
+    /// the broker self-degrades to Low IL and spawns the actual PTY-bound
+    /// shell child.
+    BrokerLaunch,
+    /// Non-PTY supervised launch via `nono-shell-broker.exe`, using
+    /// anonymous-pipe stdio instead of ConPTY pipes.
+    BrokerLaunchNoPty,
+}
+
 /// One row of a receipt's per-layer census: which [`LayerId`] this row
 /// names, and the [`LayerAttestationStatus`] the supervisor observed for it
 /// at the D-03 write point.
@@ -203,18 +255,17 @@ pub enum SessionOutcome {
 /// `crates/nono-cli/tests/receipt_content_free_scan.rs` for the
 /// mechanically-enforced allowlist this shape must satisfy.
 ///
-/// **Known follow-up for a later plan (not this one):** `entry_path` and
-/// `token_arm` are `&'static str` fields, so the derived `Deserialize` impl
-/// below is universally quantified but requires its input to be `'static`
-/// — it type-checks (this crate compiles), and `Serialize` is fully
-/// functional (receipt producers only ever write), but a practical
-/// round-trip deserialize from an owned, runtime-allocated buffer (e.g.
-/// `serde_json::from_str` over a `String` read from disk) is not possible
-/// with this exact shape. Plan 118-09 (`nono receipt verify`/`show`/`list`,
-/// D-10) reads receipts back off disk and will need either an owned-string
-/// on-disk DTO that converts into the caller's known `&'static str` set, or
-/// a hand-written `Deserialize` impl — decide there, not here; this plan's
-/// scope is the writer-side shape only.
+/// **`entry_path`/`token_arm` are enums, not strings (operator decision,
+/// 118-01 corrective):** [`EntryPath`] and [`TokenArm`] are promoted the
+/// same way [`LayerId`] already is — content-free by construction (no
+/// runtime path or content is representable by an enum variant), and their
+/// derived `Serialize`/`Deserialize` impls have no `'static` lifetime bound,
+/// so a full round-trip through an owned, runtime-allocated buffer (e.g.
+/// `serde_json::from_str` over a `String` read from disk) works today. This
+/// is exactly the operation Plan 118-09 (`nono receipt verify`/`show`/`list`,
+/// D-10) needs to read receipts back off disk, and it is also what makes
+/// rendering compile-time exhaustive: a new entry path or token arm cannot
+/// silently go unrendered.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnforcementReceipt {
     /// On-disk schema version, for forward-compatible parsing by
@@ -228,20 +279,18 @@ pub struct EnforcementReceipt {
     /// The confined child's process id (D-05) — a bare integer, not a
     /// content-shaped value.
     pub pid: u32,
-    /// `Debug`-format name of the CLI-side `EntryPath` variant
-    /// (`DirectCli` / `Broker` / `Daemon`) that produced this receipt.
-    /// Decoupled per the `ArmExpectancy` precedent
-    /// (`layer_registry.rs::ArmExpectancy.token_arm`): this module never
-    /// imports the CLI's `EntryPath` type directly, so it stays policy-free
-    /// per D-12. The caller (the supervisor binary) produces this string
-    /// via its own `Debug` formatting — never from process-controlled
-    /// input (T-118-03, accepted-and-documented).
-    pub entry_path: &'static str,
-    /// `Debug`-format name of the CLI-side `WindowsTokenArm` variant, if
-    /// one applies to this entry path (`None` for `EntryPath::Broker` and
-    /// `EntryPath::Daemon`, which bypass `select_windows_token_arm`
-    /// entirely). Same decoupling rationale as `entry_path`.
-    pub token_arm: Option<&'static str>,
+    /// Which binary/entry point produced this receipt. Same identity vocab
+    /// as the CLI-side `EntryPath` (`DirectCli` / `Broker` / `Daemon`), now a
+    /// core [`EntryPath`] value rather than a `Debug`-formatted string — see
+    /// the struct doc's "operator decision" note. The caller (the supervisor
+    /// binary) constructs this from its own observed control flow — never
+    /// from process-controlled input (T-118-03, accepted-and-documented).
+    pub entry_path: EntryPath,
+    /// Which token-construction arm applied to this entry path, if any
+    /// (`None` for `EntryPath::Broker` and `EntryPath::Daemon`, which bypass
+    /// `select_windows_token_arm` entirely). Same decoupling rationale as
+    /// `entry_path`.
+    pub token_arm: Option<TokenArm>,
     /// The terminal ran/refused outcome of this session's launch (D-02).
     pub outcome: SessionOutcome,
     /// The full per-layer census — one [`LayerReceiptRow`] per
@@ -263,18 +312,12 @@ mod tests {
 
     #[test]
     fn enforcement_receipt_serializes_a_full_thirteen_row_census() {
-        // Full round-trip (serialize THEN deserialize back into
-        // `EnforcementReceipt`) is not exercised here — see the struct
-        // doc's "Known follow-up" note: `entry_path`/`token_arm` are
-        // `&'static str`, so the derived `Deserialize` impl requires a
-        // `'static` input, which a local `String` buffer never satisfies.
-        // `Serialize` has no such constraint and is exercised fully here.
         let receipt = EnforcementReceipt {
             schema_version: 1,
             session_id: "20260816-000000-1".to_string(),
             pid: 4242,
-            entry_path: "DirectCli",
-            token_arm: Some("WriteRestricted"),
+            entry_path: EntryPath::DirectCli,
+            token_arm: Some(TokenArm::WriteRestricted),
             outcome: SessionOutcome::Ran,
             layers: LayerId::ALL
                 .iter()
