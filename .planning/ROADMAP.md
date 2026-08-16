@@ -377,16 +377,36 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
   4. A reader can distinguish "confirmed active" from "not expected in this configuration" from "expected but unconfirmed" without out-of-band knowledge — an unattested layer never renders as attested.
 
 **Plans**: 10 plans in 6 waves
+
+**Wave 1** *(no dependencies — core primitives, both binaries' foundation)*
 - [ ] 118-01-PLAN.md — Core receipt vocabulary (EnforcementReceipt + promoted LayerId) + keyless receipt chain primitive (D-11/D-25) + content-free type-allowlist scan
 - [ ] 118-02-PLAN.md — Core security primitives: deny-ACE Win32 wrapper (D-08) + require_receipts machine policy field (D-04)
+
+**Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 118-03-PLAN.md — nono.exe full 13-row census (Finding 1a) + receipt assembly + sentinel round-trip + census-completeness meta-test
 - [ ] 118-04-PLAN.md — nono-agentd daemon_attest_and_decide collect-all-then-decide restructure (D-26) with equivalence proof + 8-row expectancy table
 - [ ] 118-05-PLAN.md — Receipt sink infrastructure: DENY-ACE + NO_READ_UP guard, keyless mutex-guarded chain writer, shared by nono.exe and nono-agentd.exe
+
+**Wave 3** *(blocked on Wave 2 completion — needs 118-03's census shape and 118-05's sink envelope)*
 - [ ] 118-06-PLAN.md — Broker wire-contract widening (D-27) + nono-shell-broker's own 13-row census, receipt assembly, and sink/chain write
+
+**Wave 4** *(blocked on Wave 3 completion)*
 - [ ] 118-07-PLAN.md — Wire receipt write into nono.exe's DirectCli attestation gate (D-02/D-03/D-04)
 - [ ] 118-08-PLAN.md — Wire receipt write into nono-agentd's Daemon attestation gate + D-16 triage
+
+**Wave 5** *(blocked on Wave 4 completion)*
 - [ ] 118-09-PLAN.md — nono receipt list|show|verify command family (D-10) + four-state rendering discovery test (RCPT-03)
+
+**Wave 6** *(blocked on Wave 5 completion — **not autonomous**, carries a blocking operator checkpoint)*
 - [ ] 118-10-PLAN.md — Phase gate: cross-target clippy (D-23), D-17 latency measurement, confined-child sink-guard checkpoint (D-08), discretion-decision recording
+
+**Cross-cutting constraints** *(appear in 2+ plans' `must_haves`; violating any one invalidates plans beyond the one being executed)*:
+- **D-25 (amends D-11)** — the receipt chain is a **keyless** domain-separated SHA-256 construction, mirroring `crates/nono/src/audit.rs::hash_chain`, **not** the telemetry `Hmac<Sha256>`. The integrity claim is "nobody edited this without leaving a hash mismatch" — no code, doc, help text, or CLI output may imply the stronger key-holder claim.
+- **D-19** — the supervisor attests; the confined process never does. No receipt field may be populated from a claim made by the process being confined.
+- **D-05 + D-14** — strict identity (opaque session id + pid only) is what makes the content-free claim mechanically provable. Enforced by a type-allowlist source scan **and** a per-producer sentinel round-trip; both carry perturbation proofs.
+- **D-12** — `LayerId` + `LayerAttestationStatus` are policy-free vocabulary in core; per-arm expectancy, contracted outcome, and enforcing call sites stay in `layer_registry.rs`. The ADR-86 boundary argument is a written deliverable, not an assumption.
+- **D-23** — both cross-target clippy gates (`cross` linux-gnu + `cargo-zigbuild` apple-darwin) are required; no PARTIAL→CI fallback.
+- **Test-selector discipline** — `-p nono` / `-p nono-cli` do not resolve (real names: `nono-sandbox`, `nono-sandbox-cli`), `nono-cli` has **no lib target**, and the Windows module is bound as `exec_strategy`, not `exec_strategy_windows`. A wrong selector exits 0 having run **zero** tests. Every verify command must assert a non-zero test count.
 
 ### Phase 119: Security-Model Boundary Statement + State-of-the-Art Decision Log
 **Goal**: What nono governs and what it does not is written down before anyone downstream can over-claim it — and the Windows isolation techniques the fork did *not* adopt become a set of recorded decisions rather than a set of omissions.
@@ -445,6 +465,6 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
 | 115. v3.6 Carry-Forward Drain | v3.7 | 6/6 | Complete | 2026-08-09 |
 | 116. Tool-Sandbox Divergence Audit + Disposition ADR | v3.7 | 6/6 | Complete (verdict: formalize fork-native) | 2026-08-09 |
 | 117. Fail-Direction Contract + Startup Self-Attestation | v3.7 | 34/34 | Complete (SC3 via operator override; 1 human item open) | 2026-08-15 |
-| 118. Per-Session Enforcement Receipts | v3.7 | 0/10 | Not started | - |
+| 118. Per-Session Enforcement Receipts | v3.7 | 0/10 | Planned (10 plans, 6 waves; ready to execute) | - |
 | 119. Security-Model Boundary Statement + State-of-the-Art Decision Log | v3.7 | 0/? | Not started | - |
 | 120. Tool-Sandbox Verdict Execution | v3.7 | 0/? | Not started | - |

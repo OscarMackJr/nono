@@ -1,8 +1,8 @@
 ---
 phase: 118
 slug: per-session-enforcement-receipts
-status: draft
-nyquist_compliant: false
+status: approved
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-08-16
 ---
@@ -217,13 +217,27 @@ failure mode this section exists to prevent.
 
 ## Validation Sign-Off
 
-- [ ] All tasks have an automated verify or a Wave 0 dependency
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all ❌ references above
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 60s at task granularity
-- [ ] Every discovery/self-enforcing test carries its perturbation proof
-- [ ] All three audit questions answered per guard
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have an automated verify or a Wave 0 dependency
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all ❌ references above
+- [x] No watch-mode flags
+- [x] Feedback latency < 60s at task granularity
+- [x] Every discovery/self-enforcing test carries its perturbation proof — confirmed by delta re-verification for the three tests added post-review (118-04 Test 4 daemon sentinel, 118-06 Task 3 name-match, 118-06 broker sentinel)
+- [x] All three audit questions answered per guard
+- [x] Every verify command resolves a real target AND reports a non-zero test count — measured, not assumed (see note below)
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Verify-command correctness (added after the round-2 sweep).** Every `cargo test` form in
+this document and in the 10 plans was executed against the live tree and confirmed to resolve
+a package + target and report a **non-zero** test count. This is a sign-off criterion, not a
+formality: two independent defects were found that each produced `0 tests, 0 benchmarks` with
+**exit 0** — a wrong package name (`-p nono` / `-p nono-cli`; the real names are `nono-sandbox`
+and `nono-sandbox-cli`, and `nono-cli` has no `[lib]` target at all) and a wrong module path
+(the Windows module is bound as `exec_strategy`, not `exec_strategy_windows`). Both would have
+let the phase's two highest-stakes tests — D-26's daemon equivalence proof and the daemon
+sentinel round-trip — report green while never running. A verify command that resolves but
+matches nothing is the same "gate structurally incapable of reporting failure" defect this
+phase exists to eliminate; treat any such command as unfixed.
+
+**Approval:** approved 2026-08-16 — plans verified (0 blockers), delta re-verified, all
+verify commands measured non-empty.
