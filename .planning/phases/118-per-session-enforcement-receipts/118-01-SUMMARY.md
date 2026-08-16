@@ -30,7 +30,7 @@ key-files:
     - crates/nono/src/attestation.rs
 decisions:
   - "LayerAttestationStatus gained Serialize/Deserialize derives (Rule 3) so LayerReceiptRow — its container — can derive them; no behavior change to the existing policy-free vocabulary."
-  - "EnforcementReceipt's own Deserialize impl is left derived-but-practically-non-functional for &'static str fields (entry_path/token_arm); documented as a known follow-up for Plan 118-09's on-disk reader rather than redesigning the writer-side shape this plan owns."
+  - "CORRECTED post-hoc (operator decision, taken at orchestration time, not by this plan's original executor): entry_path/token_arm are now the core EntryPath (3-variant) / TokenArm (5-variant) enums, mirroring LayerId/SessionOutcome, instead of the originally-shipped &'static str / Option<&'static str> fields. The original decision text (left below, struck through in spirit not in fact, for the historical record) proposed deferring the round-trip gap to Plan 118-09; the operator overruled that deferral because 118-09 cannot implement `nono receipt show|list` against a type that cannot deserialize from an owned buffer. See 'Post-Plan Correction' section below for the full record."
 metrics:
   duration: "~45 min"
   completed: 2026-08-16
@@ -128,8 +128,8 @@ before it is trusted) was honored regardless.
 - **Files modified:** `crates/nono/src/attestation.rs`
 - **Commit:** `8a6fb751`
 
-**2. [Rule 1 - Bug] `EnforcementReceipt`'s `&'static str` fields cannot round-trip through an
-owned buffer via derived `Deserialize`**
+**2. [Rule 1 - Bug, SUPERSEDED — see "Post-Plan Correction" below] `EnforcementReceipt`'s
+`&'static str` fields cannot round-trip through an owned buffer via derived `Deserialize`**
 - **Found during:** Task 2 (writing `receipt_chain.rs`'s tests surfaced this via `cargo test`,
   though the root cause is in `receipt.rs` from Task 1)
 - **Issue:** My own (not plan-mandated) round-trip unit test attempted
@@ -138,13 +138,18 @@ owned buffer via derived `Deserialize`**
   `Deserialize<'de>` impl requires `'de: 'static` — a local, runtime-allocated buffer can never
   satisfy that lifetime, so the test failed to *compile* (`E0597`), not merely to pass. `Serialize`
   is unaffected (no lifetime constraint on writing).
-- **Fix:** Narrowed the test to a serialize-only assertion for `EnforcementReceipt` (JSON content
-  checks, no round-trip), and added a separate full round-trip test on `LayerReceiptRow` (which
-  has no `&'static str` fields and round-trips cleanly). Documented the underlying limitation as a
-  "Known follow-up for a later plan (not this one)" note directly on `EnforcementReceipt`'s doc
-  comment, naming Plan 118-09 (`nono receipt verify`/`show`/`list`) as the plan that will need
-  either an owned-string on-disk DTO or a hand-written `Deserialize` impl to actually read receipts
-  back off disk.
+- **Original fix (now superseded):** Narrowed the test to a serialize-only assertion for
+  `EnforcementReceipt` (JSON content checks, no round-trip), and added a separate full round-trip
+  test on `LayerReceiptRow` (which has no `&'static str` fields and round-trips cleanly).
+  Documented the underlying limitation as a "Known follow-up for a later plan (not this one)" note
+  directly on `EnforcementReceipt`'s doc comment, naming Plan 118-09 (`nono receipt
+  verify`/`show`/`list`) as the plan that would need either an owned-string on-disk DTO or a
+  hand-written `Deserialize` impl to actually read receipts back off disk.
+- **Why this was not acceptable as a permanent state:** deferring the fix pushed a *type-shape*
+  problem into a *later plan's task list*, but Plan 118-09 cannot implement `nono receipt
+  show|list` — which reads stored receipts back off disk — against a struct that cannot
+  deserialize from an owned buffer at all. The deferral would have surfaced as a compile error in
+  118-09, several plans and possibly days later, far from the root cause.
 - **Files modified:** `crates/nono/src/receipt.rs`
 - **Commit:** `592dffbe`
 
@@ -157,6 +162,69 @@ which requires `pub mod receipt;` to already be declared. Task 1's commit theref
 single-line `pub mod receipt;` addition to `lib.rs`; Task 2's commit adds `pub mod receipt_chain;`
 plus both modules' flat re-exports. No net difference from the plan's intended end state — only
 the commit boundary within `lib.rs`'s edits shifted by one line.
+
+## Post-Plan Correction (operator decision, taken at orchestration time)
+
+After this plan closed, orchestration-time review of Plan 118-09's dependency on this plan's
+output flagged the "Known follow-up for a later plan" deferral (Deviation #2 above) as
+unacceptable: Plan 118-09 (wave 5) implements `nono receipt show|list`, which renders stored
+receipts read back off disk, and the deferred type shape made that structurally impossible to
+build against.
+
+**Operator-decided fix:** promote both fields to core enums, exactly mirroring how `LayerId` and
+`SessionOutcome` are already modelled in `crates/nono/src/receipt.rs`.
+
+- `pub enum EntryPath { DirectCli, Broker, Daemon }` — core mirror of the CLI-side
+  `pub(crate) enum EntryPath` (`crates/nono-cli/src/exec_strategy_windows/layer_registry.rs`),
+  same 3 variant names/order.
+- `pub enum TokenArm { Null, WriteRestricted, LowIlPrimary, BrokerLaunch, BrokerLaunchNoPty }` —
+  core mirror of the CLI-side `pub(crate) enum WindowsTokenArm`
+  (`crates/nono-cli/src/exec_strategy_windows/launch.rs`), same 5 variant names/order.
+- `EnforcementReceipt::entry_path` changed from `&'static str` to `EntryPath`.
+- `EnforcementReceipt::token_arm` changed from `Option<&'static str>` to `Option<TokenArm>`.
+- Neither enum is `#[cfg(target_os = "windows")]`-gated — `crates/nono` stays cross-platform,
+  same platform-neutral-declaration precedent as `LayerId`/`SessionOutcome`.
+- Deleted the stale "Known follow-up for a later plan" doc block on `EnforcementReceipt` and its
+  matching in-test comment; replaced both with an accurate note that the enum retyping is what
+  makes the round-trip possible today, not a deferred problem.
+- `crates/nono-cli/src/exec_strategy_windows/layer_registry.rs` and `launch.rs` — the CLI's own
+  `EntryPath`/`WindowsTokenArm` definitions — were deliberately left untouched. Unifying the CLI
+  types with these new core enums is Plan 118-03's job (it already does exactly this move for
+  `LayerId`) and Plans 118-07/08's, not this correction's.
+
+**Net effect on the D-14 guarantee:** the content-free property of `entry_path`/`token_arm` is now
+type-enforced (an enum variant cannot carry a runtime path or arbitrary content by construction)
+rather than a documentation-only promise deferred to a later plan's implementation choice. The
+D-14 type-allowlist scan (`crates/nono-cli/tests/receipt_content_free_scan.rs`) was updated to
+allowlist `EntryPath`/`Option<TokenArm>` in place of `&'static str`/`Option<&'static str>`, and
+its perturbation-proof test now additionally asserts that a synthetic `entry_path: &'static str`
+field — the pre-correction shape — is rejected, so a future regression back to string-typed fields
+would fail the scan rather than passing silently. This was verified live: temporarily re-adding
+`&'static str` to the scan's allowlist caused the perturbation test to fail as expected, then the
+allowlist was reverted and the full 4-test suite passed again.
+
+**New test added** (`crates/nono/src/receipt.rs`,
+`enforcement_receipt_round_trips_through_an_owned_buffer`): builds a `Ran` receipt with
+`token_arm: Some(..)` and a `Refused` receipt with `token_arm: None`, serializes each with
+`serde_json::to_string`, deserializes back from an owned, runtime-allocated `String` buffer via
+`serde_json::from_str::<EnforcementReceipt>`, and asserts full equality — the exact operation the
+original `&'static str` typing made impossible to even compile (`E0597`). This test now passes.
+
+**Commits:**
+- `fix(118-01): retype receipt entry_path/token_arm as core enums (operator decision)`
+- `test(118-01): prove EnforcementReceipt round-trips after enum retyping`
+- `test(118-01): allowlist receipt enums in content-free scan + amend summary`
+
+**Verification re-run after the correction:**
+- `cargo test -p nono-sandbox --lib receipt` — 10 passed, 0 failed (substring selector matches
+  both the `receipt` module and the `receipt_chain` module: 5 tests in `receipt` — including the
+  new `enforcement_receipt_round_trips_through_an_owned_buffer` — plus 5 in `receipt_chain`,
+  unchanged by this correction).
+- `cargo test -p nono-sandbox-cli --test receipt_content_free_scan` — 4 passed, 0 failed (same
+  count as before the correction; scan re-targeted, not added to).
+- `cargo clippy -p nono-sandbox -p nono-sandbox-cli --all-targets -- -D warnings -D
+  clippy::unwrap_used` — clean.
+- `cargo fmt --check` — clean.
 
 ## Self-Check: PASSED
 

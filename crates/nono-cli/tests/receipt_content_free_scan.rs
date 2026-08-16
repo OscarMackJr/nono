@@ -129,13 +129,23 @@ fn field_types_in_struct(source: &str, struct_name: &str) -> Vec<(String, String
     fields
 }
 
-/// The exact field types Task 1 used in `EnforcementReceipt`, plus the one
-/// named exception below (`session_id: String`). Anything else fails.
+/// The exact field types `EnforcementReceipt` uses today, plus the one named
+/// exception below (`session_id: String`). Anything else fails.
+///
+/// `entry_path`/`token_arm` were originally `&'static str` /
+/// `Option<&'static str>` (Plan 118-01's first cut); an operator-decided
+/// corrective retyped them as the core [`EntryPath`]/[`TokenArm`] enums —
+/// content-free by construction, same promotion pattern as `LayerId` — so
+/// `&'static str` and `Option<&'static str>` are deliberately NOT in this
+/// list any more. A field typed `&'static str` on `EnforcementReceipt`
+/// today would be a regression back to the pre-corrective shape and must
+/// fail this scan (see `perturbation_proof_rejects_a_pathbuf_field_and_a_misnamed_string_field`,
+/// which asserts exactly that).
 const ALLOWED_TYPES: &[&str] = &[
     "u16",
     "u32",
-    "&'static str",
-    "Option<&'static str>",
+    "EntryPath",
+    "Option<TokenArm>",
     "SessionOutcome",
     "Vec<LayerReceiptRow>",
 ];
@@ -190,6 +200,7 @@ fn perturbation_proof_rejects_a_pathbuf_field_and_a_misnamed_string_field() {
                       \x20\x20\x20\x20pub schema_version: u16,\n\
                       \x20\x20\x20\x20pub workspace: String,\n\
                       \x20\x20\x20\x20pub log_path: PathBuf,\n\
+                      \x20\x20\x20\x20pub entry_path: &'static str,\n\
                       }\n";
     let fields = field_types_in_struct(synthetic, "EnforcementReceipt");
     let violations = classify_fields(&fields);
@@ -206,6 +217,11 @@ fn perturbation_proof_rejects_a_pathbuf_field_and_a_misnamed_string_field() {
         violating_names.contains(&"log_path"),
         "scan must flag `log_path: PathBuf`: {violations:?}"
     );
+    assert!(
+        violating_names.contains(&"entry_path"),
+        "scan must flag `entry_path: &'static str` — the pre-corrective shape is no longer \
+         allowlisted, so a regression back to it must fail: {violations:?}"
+    );
 }
 
 #[test]
@@ -214,8 +230,8 @@ fn allows_a_synthetic_struct_containing_only_allowlisted_types() {
                       \x20\x20\x20\x20pub schema_version: u16,\n\
                       \x20\x20\x20\x20pub session_id: String,\n\
                       \x20\x20\x20\x20pub pid: u32,\n\
-                      \x20\x20\x20\x20pub entry_path: &'static str,\n\
-                      \x20\x20\x20\x20pub token_arm: Option<&'static str>,\n\
+                      \x20\x20\x20\x20pub entry_path: EntryPath,\n\
+                      \x20\x20\x20\x20pub token_arm: Option<TokenArm>,\n\
                       \x20\x20\x20\x20pub outcome: SessionOutcome,\n\
                       \x20\x20\x20\x20pub layers: Vec<LayerReceiptRow>,\n\
                       }\n";
