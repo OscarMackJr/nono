@@ -354,4 +354,58 @@ mod tests {
         let round_tripped: SessionOutcome = serde_json::from_str(&json).expect("must deserialize");
         assert_eq!(round_tripped, SessionOutcome::Refused);
     }
+
+    /// Proves the exact operation the pre-enum `&'static str` typing made
+    /// structurally impossible (see `EnforcementReceipt`'s doc comment): a
+    /// full serialize-then-deserialize round-trip through an OWNED, purely
+    /// local `String` buffer (never a `'static` literal), for both a `Ran`
+    /// receipt with `token_arm: Some(..)` and a `Refused` receipt with
+    /// `token_arm: None`.
+    #[test]
+    fn enforcement_receipt_round_trips_through_an_owned_buffer() {
+        let ran_receipt = EnforcementReceipt {
+            schema_version: 1,
+            session_id: "20260816-000001-2".to_string(),
+            pid: 4343,
+            entry_path: EntryPath::DirectCli,
+            token_arm: Some(TokenArm::BrokerLaunchNoPty),
+            outcome: SessionOutcome::Ran,
+            layers: LayerId::ALL
+                .iter()
+                .map(|id| LayerReceiptRow {
+                    id: *id,
+                    status: LayerAttestationStatus::Confirmed,
+                })
+                .collect(),
+        };
+        // `owned_buffer` is a runtime-allocated `String`, never a `'static`
+        // literal — this is exactly the shape a disk-read receipt file
+        // would take (`std::fs::read_to_string`).
+        let owned_buffer: String =
+            serde_json::to_string(&ran_receipt).expect("ran receipt must serialize");
+        let round_tripped: EnforcementReceipt = serde_json::from_str(&owned_buffer)
+            .expect("ran receipt must deserialize from owned String");
+        assert_eq!(ran_receipt, round_tripped);
+
+        let refused_receipt = EnforcementReceipt {
+            schema_version: 1,
+            session_id: "20260816-000002-3".to_string(),
+            pid: 4444,
+            entry_path: EntryPath::Broker,
+            token_arm: None,
+            outcome: SessionOutcome::Refused,
+            layers: LayerId::ALL
+                .iter()
+                .map(|id| LayerReceiptRow {
+                    id: *id,
+                    status: LayerAttestationStatus::Unconfirmed,
+                })
+                .collect(),
+        };
+        let owned_buffer: String =
+            serde_json::to_string(&refused_receipt).expect("refused receipt must serialize");
+        let round_tripped: EnforcementReceipt = serde_json::from_str(&owned_buffer)
+            .expect("refused receipt must deserialize from owned String");
+        assert_eq!(refused_receipt, round_tripped);
+    }
 }
