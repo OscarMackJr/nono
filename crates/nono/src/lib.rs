@@ -59,6 +59,7 @@ pub mod net_filter;
 pub mod path;
 pub mod query;
 pub mod receipt;
+pub mod receipt_chain;
 pub mod sandbox;
 pub mod scrub;
 pub mod state;
@@ -90,6 +91,10 @@ pub use machine_policy::{
 };
 pub use net_filter::{FilterResult, HostFilter};
 pub use path::try_canonicalize;
+pub use receipt::{EnforcementReceipt, LayerId, LayerReceiptRow, SessionOutcome};
+pub use receipt_chain::{
+    hash_receipt_chain, hash_receipt_event, RECEIPT_CHAIN_DOMAIN, RECEIPT_EVENT_DOMAIN,
+};
 #[cfg(target_os = "windows")]
 pub use sandbox::windows::{
     apply_low_il_label_to_token, create_app_container_profile, create_low_integrity_primary_token,

@@ -202,6 +202,19 @@ pub enum SessionOutcome {
 /// never path-derived, not even salted (D-05) — see
 /// `crates/nono-cli/tests/receipt_content_free_scan.rs` for the
 /// mechanically-enforced allowlist this shape must satisfy.
+///
+/// **Known follow-up for a later plan (not this one):** `entry_path` and
+/// `token_arm` are `&'static str` fields, so the derived `Deserialize` impl
+/// below is universally quantified but requires its input to be `'static`
+/// — it type-checks (this crate compiles), and `Serialize` is fully
+/// functional (receipt producers only ever write), but a practical
+/// round-trip deserialize from an owned, runtime-allocated buffer (e.g.
+/// `serde_json::from_str` over a `String` read from disk) is not possible
+/// with this exact shape. Plan 118-09 (`nono receipt verify`/`show`/`list`,
+/// D-10) reads receipts back off disk and will need either an owned-string
+/// on-disk DTO that converts into the caller's known `&'static str` set, or
+/// a hand-written `Deserialize` impl — decide there, not here; this plan's
+/// scope is the writer-side shape only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnforcementReceipt {
     /// On-disk schema version, for forward-compatible parsing by
@@ -249,7 +262,13 @@ mod tests {
     }
 
     #[test]
-    fn enforcement_receipt_round_trips_through_json() {
+    fn enforcement_receipt_serializes_a_full_thirteen_row_census() {
+        // Full round-trip (serialize THEN deserialize back into
+        // `EnforcementReceipt`) is not exercised here — see the struct
+        // doc's "Known follow-up" note: `entry_path`/`token_arm` are
+        // `&'static str`, so the derived `Deserialize` impl requires a
+        // `'static` input, which a local `String` buffer never satisfies.
+        // `Serialize` has no such constraint and is exercised fully here.
         let receipt = EnforcementReceipt {
             schema_version: 1,
             session_id: "20260816-000000-1".to_string(),
@@ -266,10 +285,24 @@ mod tests {
                 .collect(),
         };
         let json = serde_json::to_string(&receipt).expect("receipt must serialize");
-        let round_tripped: EnforcementReceipt =
-            serde_json::from_str(&json).expect("receipt must deserialize");
-        assert_eq!(receipt, round_tripped);
-        assert_eq!(round_tripped.layers.len(), 13);
+        assert!(json.contains("\"schema_version\":1"));
+        assert!(json.contains("\"session_id\":\"20260816-000000-1\""));
+        assert_eq!(receipt.layers.len(), 13);
+    }
+
+    #[test]
+    fn layer_receipt_row_round_trips_through_json() {
+        // Unlike `EnforcementReceipt`, `LayerReceiptRow` has no `&'static
+        // str` fields, so a full serialize-then-deserialize round-trip is
+        // possible and exercised here.
+        let row = LayerReceiptRow {
+            id: LayerId::WfpEgressFilters,
+            status: LayerAttestationStatus::EstablishedNotIndependentlyObservable,
+        };
+        let json = serde_json::to_string(&row).expect("row must serialize");
+        let round_tripped: LayerReceiptRow =
+            serde_json::from_str(&json).expect("row must deserialize");
+        assert_eq!(row, round_tripped);
     }
 
     #[test]
