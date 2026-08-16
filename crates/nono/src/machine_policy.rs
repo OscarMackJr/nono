@@ -273,6 +273,52 @@ pub struct MachineEgressPolicy {
     /// accidentally flip the daemon to strict deny-all egress.
     #[serde(default)]
     pub required_layers: RequiredLayersPolicy,
+
+    /// Fleet-wide "require receipts" policy (Phase 118 D-04).
+    ///
+    /// Populated from `HKLM\SOFTWARE\Policies\nono\RequireReceipts` (a
+    /// `REG_DWORD`, `0`/absent = not required, nonzero = required) during
+    /// the same single registry read that populates every other field on
+    /// this struct. When `true`, a per-session enforcement receipt (RCPT-01)
+    /// that cannot be emitted must abort the session rather than degrade
+    /// visibly — see [`read_machine_egress_policy`]'s abort-on-unreadable
+    /// contract, which this field's *read* (not its runtime consumption)
+    /// already participates in.
+    ///
+    /// # Read lifecycle: EGRESS (abort), not `required_layers`'/`telemetry`'s
+    /// degrade template — chosen deliberately, not by default
+    ///
+    /// This file has two established, opposite-direction precedents for a
+    /// present-but-broken registry value (see the module-level Fail-Secure
+    /// Taxonomy table): the egress fields (`allowed_suffixes`/
+    /// `allowed_hosts`/`preset_tokens`) **abort** the whole policy read
+    /// (D-07, [`crate::NonoError::PolicyLoadFailed`]); `telemetry` and
+    /// `required_layers` instead **degrade** to a default value plus a
+    /// stderr warning (D-14/D-26).
+    ///
+    /// **This field follows the EGRESS (abort) lifecycle instead.** D-04's
+    /// wording — "machine policy CAN make [receipt emission] fail-closed" —
+    /// is the strict end of the abort-vs-degrade spectrum this file already
+    /// documents, not the lenient end. Unlike `required_layers`/`telemetry`,
+    /// a malformed `RequireReceipts` value must NOT silently fall through to
+    /// "not enforcing" — that would defeat the one knob CONTEXT.md gives an
+    /// operator to force honesty fleet-wide: an admin who explicitly set
+    /// this key gets either the value they configured or a loud abort,
+    /// never a value quietly reinterpreted as "off". See
+    /// [`windows_reader::read_require_receipts`] for the reader that
+    /// implements this by propagating `Err` through `parse_policy`'s `?`
+    /// chain — the same path every egress list field already uses — rather
+    /// than swallowing the error into a default as
+    /// [`windows_reader::read_required_layers`] does.
+    ///
+    /// **INVARIANT:** This field MUST NOT be counted in [`Self::is_unconfigured`],
+    /// for the same reason `telemetry`/`required_layers` are not: an admin
+    /// who has only set `RequireReceipts` must not accidentally flip the
+    /// daemon to strict deny-all egress (that gate is about EGRESS
+    /// enforcement specifically, not about whether any HKLM field at all is
+    /// set).
+    #[serde(default)]
+    pub require_receipts: bool,
 }
 
 impl MachineEgressPolicy {
@@ -333,7 +379,10 @@ impl MachineEgressPolicy {
             && self.allowed_hosts.is_empty()
             && self.preset_tokens.is_empty()
         // NOTE: telemetry config MUST NOT be counted here — see Phase 84 D-12 and
-        // 84-PATTERNS.md invariant 3.
+        // 84-PATTERNS.md invariant 3. `required_layers` and `require_receipts`
+        // (Phase 118 D-04) are excluded for the identical reason: this gate is
+        // specifically about EGRESS enforcement, not about whether any HKLM
+        // field at all is configured.
     }
 
     /// Validate all string-valued fields of this policy for structural sanity (IN-01).
@@ -759,6 +808,38 @@ mod windows_reader {
         }
     }
 
+    /// Read the `RequireReceipts` `REG_DWORD` value into a `bool` (Phase 118
+    /// D-04's fail-closed knob).
+    ///
+    /// # EGRESS lifecycle (abort), not the degrade template
+    ///
+    /// Modeled on [`read_optional_dword`] + the EGRESS abort-on-unreadable
+    /// precedent (D-07), explicitly NOT on [`read_required_layers`]'s
+    /// degrade-to-default template — see
+    /// [`MachineEgressPolicy::require_receipts`]'s doc comment for the full
+    /// rationale. Returning `Err` here (instead of catching it and returning
+    /// a default `bool`, as `read_required_layers` does for its own type)
+    /// lets the `?` in [`parse_policy`] carry a malformed value straight
+    /// through to `read_machine_egress_policy_impl`'s
+    /// `NonoError::PolicyLoadFailed` abort — the exact path every egress
+    /// list field (`allowed_suffixes`/`allowed_hosts`/`preset_tokens`)
+    /// already uses.
+    ///
+    /// | Registry state | Return value |
+    /// |-----------------|-------------|
+    /// | Value **absent** | `Ok(false)` — not fleet-required |
+    /// | Value **present, REG_DWORD, any value** | `Ok(value != 0)` |
+    /// | Value **present but wrong REG_* type** | `Err(reason)` → caller aborts (D-07) |
+    fn read_require_receipts(key: &RegKey) -> std::result::Result<bool, String> {
+        match read_optional_dword(key, "RequireReceipts") {
+            Ok(Some(v)) => Ok(v != 0),
+            Ok(None) => Ok(false),
+            Err(e) => Err(format!(
+                "RequireReceipts is present but malformed (expected REG_DWORD): {e}"
+            )),
+        }
+    }
+
     /// Inner parser: read all sub-keys from an already-opened policy `RegKey`.
     pub(super) fn parse_policy(key: &RegKey) -> std::result::Result<MachineEgressPolicy, String> {
         let allowed_suffixes = read_list_subkey(key, "AllowedSuffixes")?;
@@ -779,12 +860,19 @@ mod windows_reader {
         // unreadable/malformed sub-key warns and is treated as absent — a
         // single admin typo must not brick every confined launch fleet-wide.
         let required_layers = read_required_layers(key);
+        // Phase 118 D-04: EGRESS lifecycle (abort-on-malformed), NOT the
+        // required_layers/telemetry degrade template — see
+        // `read_require_receipts`'s doc comment. The `?` here propagates a
+        // malformed value straight to `read_machine_egress_policy_impl`'s
+        // PolicyLoadFailed abort, the same as every egress list field above.
+        let require_receipts = read_require_receipts(key)?;
         let policy = MachineEgressPolicy {
             allowed_suffixes,
             allowed_hosts,
             preset_tokens,
             telemetry,
             required_layers,
+            require_receipts,
         };
         // IN-01: validate structural sanity of all string fields after construction.
         // Any invalid entry returns Err(reason) which read_machine_egress_policy_impl
@@ -1130,6 +1218,7 @@ mod tests {
                 min_severity: TelemetrySeverity::Debug,
             },
             required_layers: RequiredLayersPolicy::default(),
+            require_receipts: false,
         };
         assert!(
             policy.is_unconfigured(),
@@ -1151,10 +1240,32 @@ mod tests {
             required_layers: RequiredLayersPolicy {
                 required: vec!["AppContainerProfile".to_string()],
             },
+            require_receipts: false,
         };
         assert!(
             policy.is_unconfigured(),
             "is_unconfigured must ignore required_layers; policy: {policy:?}"
+        );
+    }
+
+    /// Phase 118 D-04: a policy that has ONLY `require_receipts` set must
+    /// still return `is_unconfigured()=true` — an admin who sets only the
+    /// fleet-wide "require receipts" knob must not accidentally flip the
+    /// daemon to strict deny-all egress (mirrors the telemetry and
+    /// required_layers invariants above).
+    #[test]
+    fn is_unconfigured_ignores_require_receipts_field() {
+        let policy = MachineEgressPolicy {
+            allowed_suffixes: vec![],
+            allowed_hosts: vec![],
+            preset_tokens: vec![],
+            telemetry: TelemetryConfig::default(),
+            required_layers: RequiredLayersPolicy::default(),
+            require_receipts: true,
+        };
+        assert!(
+            policy.is_unconfigured(),
+            "is_unconfigured must ignore require_receipts; policy: {policy:?}"
         );
     }
 
@@ -1203,6 +1314,7 @@ mod tests {
             required_layers: RequiredLayersPolicy {
                 required: vec!["AppContainerProfile".to_string()],
             },
+            require_receipts: true,
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: MachineEgressPolicy = serde_json::from_str(&json).unwrap();
@@ -1680,6 +1792,235 @@ mod tests {
 
         // Cleanup.
         hkcu.delete_subkey_all(r"SOFTWARE\nono-test\required_layers_test")
+            .unwrap();
+        let _ = hkcu.delete_subkey(r"SOFTWARE\nono-test");
+    }
+
+    // ── Phase 118 D-04: `require_receipts` — EGRESS (abort) lifecycle ─────────
+
+    /// State 1: `RequireReceipts` value ABSENT → `require_receipts` defaults
+    /// to `false` (not fleet-required) and the read succeeds.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_require_receipts_absent_defaults_to_false() {
+        let _regkey_guard = NONO_TEST_REGKEY_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        use winreg::enums::{HKEY_CURRENT_USER, KEY_ALL_ACCESS, KEY_WOW64_64KEY};
+        use winreg::RegKey;
+
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        // Create the policy key with an unrelated value only — no
+        // `RequireReceipts` value at all.
+        let (key, _disp) = hkcu
+            .create_subkey_with_flags(
+                r"SOFTWARE\nono-test\require_receipts_absent_test",
+                KEY_ALL_ACCESS | KEY_WOW64_64KEY,
+            )
+            .unwrap();
+        key.set_value("InstalledByMsi", &"1".to_string()).unwrap();
+        drop(key);
+
+        let policy_key = hkcu
+            .open_subkey_with_flags(
+                r"SOFTWARE\nono-test\require_receipts_absent_test",
+                KEY_ALL_ACCESS | KEY_WOW64_64KEY,
+            )
+            .unwrap();
+
+        let policy = super::windows_reader::parse_policy(&policy_key).unwrap();
+        assert!(
+            !policy.require_receipts,
+            "absent RequireReceipts must default to false (not fleet-required); \
+             policy: {policy:?}"
+        );
+
+        // Cleanup.
+        hkcu.delete_subkey_all(r"SOFTWARE\nono-test\require_receipts_absent_test")
+            .unwrap();
+        let _ = hkcu.delete_subkey(r"SOFTWARE\nono-test");
+    }
+
+    /// State 2: `RequireReceipts` value PRESENT and VALID (`REG_DWORD` 1) →
+    /// `require_receipts` is `true`, and the value round-trips through
+    /// `parse_policy` without error.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_require_receipts_present_valid_dword_is_true() {
+        let _regkey_guard = NONO_TEST_REGKEY_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        use winreg::enums::{HKEY_CURRENT_USER, KEY_ALL_ACCESS, KEY_WOW64_64KEY};
+        use winreg::RegKey;
+
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let (key, _disp) = hkcu
+            .create_subkey_with_flags(
+                r"SOFTWARE\nono-test\require_receipts_valid_test",
+                KEY_ALL_ACCESS | KEY_WOW64_64KEY,
+            )
+            .unwrap();
+        key.set_value("RequireReceipts", &1u32).unwrap();
+        drop(key);
+
+        let policy_key = hkcu
+            .open_subkey_with_flags(
+                r"SOFTWARE\nono-test\require_receipts_valid_test",
+                KEY_ALL_ACCESS | KEY_WOW64_64KEY,
+            )
+            .unwrap();
+
+        let policy = super::windows_reader::parse_policy(&policy_key).unwrap();
+        assert!(
+            policy.require_receipts,
+            "RequireReceipts=1 (REG_DWORD) must parse to true; policy: {policy:?}"
+        );
+
+        // Cleanup.
+        hkcu.delete_subkey_all(r"SOFTWARE\nono-test\require_receipts_valid_test")
+            .unwrap();
+        let _ = hkcu.delete_subkey(r"SOFTWARE\nono-test");
+    }
+
+    /// State 2b (converse of the above, same perturbation class): a valid
+    /// `REG_DWORD` value of `0` parses to `false` — confirms the reader
+    /// distinguishes the value, not just presence-vs-absence.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_require_receipts_present_valid_dword_zero_is_false() {
+        let _regkey_guard = NONO_TEST_REGKEY_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        use winreg::enums::{HKEY_CURRENT_USER, KEY_ALL_ACCESS, KEY_WOW64_64KEY};
+        use winreg::RegKey;
+
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let (key, _disp) = hkcu
+            .create_subkey_with_flags(
+                r"SOFTWARE\nono-test\require_receipts_zero_test",
+                KEY_ALL_ACCESS | KEY_WOW64_64KEY,
+            )
+            .unwrap();
+        key.set_value("RequireReceipts", &0u32).unwrap();
+        drop(key);
+
+        let policy_key = hkcu
+            .open_subkey_with_flags(
+                r"SOFTWARE\nono-test\require_receipts_zero_test",
+                KEY_ALL_ACCESS | KEY_WOW64_64KEY,
+            )
+            .unwrap();
+
+        let policy = super::windows_reader::parse_policy(&policy_key).unwrap();
+        assert!(
+            !policy.require_receipts,
+            "RequireReceipts=0 (REG_DWORD) must parse to false; policy: {policy:?}"
+        );
+
+        // Cleanup.
+        hkcu.delete_subkey_all(r"SOFTWARE\nono-test\require_receipts_zero_test")
+            .unwrap();
+        let _ = hkcu.delete_subkey(r"SOFTWARE\nono-test");
+    }
+
+    /// State 3: `RequireReceipts` value PRESENT but MALFORMED (wrong
+    /// `REG_*` type — a `REG_SZ` instead of `REG_DWORD`) → `parse_policy`
+    /// returns `Err`, matching the EGRESS abort-on-malformed lifecycle
+    /// (D-07), NOT `required_layers`'s degrade-to-default template. This is
+    /// the test that would fail if `read_require_receipts` were rewritten to
+    /// swallow the error the way `read_required_layers` does — the
+    /// perturbation this whole field exists to guard against (D-04).
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_require_receipts_malformed_type_aborts_with_policy_load_failed() {
+        let _regkey_guard = NONO_TEST_REGKEY_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        use winreg::enums::{HKEY_CURRENT_USER, KEY_ALL_ACCESS, KEY_WOW64_64KEY};
+        use winreg::RegKey;
+
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let (key, _disp) = hkcu
+            .create_subkey_with_flags(
+                r"SOFTWARE\nono-test\require_receipts_malformed_test",
+                KEY_ALL_ACCESS | KEY_WOW64_64KEY,
+            )
+            .unwrap();
+        // Wrong type: REG_SZ instead of REG_DWORD.
+        key.set_value("RequireReceipts", &"not-a-dword".to_string())
+            .unwrap();
+        drop(key);
+
+        let policy_key = hkcu
+            .open_subkey_with_flags(
+                r"SOFTWARE\nono-test\require_receipts_malformed_test",
+                KEY_ALL_ACCESS | KEY_WOW64_64KEY,
+            )
+            .unwrap();
+
+        let result = super::windows_reader::parse_policy(&policy_key);
+        assert!(
+            result.is_err(),
+            "malformed RequireReceipts (wrong REG type) must abort parse_policy \
+             with Err, never fall through to a default; got: {result:?}"
+        );
+        let reason = result.unwrap_err();
+        assert!(
+            reason.contains("RequireReceipts"),
+            "error reason must name RequireReceipts; got: {reason}"
+        );
+
+        // Cleanup.
+        hkcu.delete_subkey_all(r"SOFTWARE\nono-test\require_receipts_malformed_test")
+            .unwrap();
+        let _ = hkcu.delete_subkey(r"SOFTWARE\nono-test");
+    }
+
+    /// The abort surfaces all the way through
+    /// [`read_machine_egress_policy_impl`] (not just `parse_policy`) as
+    /// `NonoError::PolicyLoadFailed`, matching every egress list field's
+    /// existing contract — confirms the `?`-propagation wiring in
+    /// `parse_policy`, not just the inner reader function.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_require_receipts_malformed_type_is_policy_load_failed_end_to_end() {
+        let _regkey_guard = NONO_TEST_REGKEY_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        use winreg::enums::{HKEY_CURRENT_USER, KEY_ALL_ACCESS, KEY_WOW64_64KEY};
+        use winreg::RegKey;
+
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let (key, _disp) = hkcu
+            .create_subkey_with_flags(
+                r"SOFTWARE\nono-test\require_receipts_e2e_malformed_test",
+                KEY_ALL_ACCESS | KEY_WOW64_64KEY,
+            )
+            .unwrap();
+        key.set_value("RequireReceipts", &"still-not-a-dword".to_string())
+            .unwrap();
+        drop(key);
+
+        let policy_key = hkcu
+            .open_subkey_with_flags(
+                r"SOFTWARE\nono-test\require_receipts_e2e_malformed_test",
+                KEY_ALL_ACCESS | KEY_WOW64_64KEY,
+            )
+            .unwrap();
+
+        // parse_policy's `String` error, wrapped exactly the way
+        // read_machine_egress_policy_impl does at its own call site.
+        let result: crate::Result<MachineEgressPolicy> =
+            super::windows_reader::parse_policy(&policy_key)
+                .map_err(|reason| NonoError::PolicyLoadFailed { reason });
+        let err = result.expect_err("malformed RequireReceipts must abort end-to-end");
+        assert!(
+            matches!(err, NonoError::PolicyLoadFailed { .. }),
+            "must be PolicyLoadFailed, matching the egress abort contract; got: {err:?}"
+        );
+
+        // Cleanup.
+        hkcu.delete_subkey_all(r"SOFTWARE\nono-test\require_receipts_e2e_malformed_test")
             .unwrap();
         let _ = hkcu.delete_subkey(r"SOFTWARE\nono-test");
     }
