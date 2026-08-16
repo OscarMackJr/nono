@@ -51,16 +51,29 @@ regressions — see the recorded baseline before triaging any red.
 Task IDs are assigned by the planner; this table fixes the requirement → test-type →
 command mapping each task must land in. `File Exists` reflects the tree **before** this phase.
 
+**Reconciliation note (post-checker revision, W7):** this table originally named a single
+consolidated `receipt_census_test.rs` file and a few standalone commands that assumed `nono-cli`
+has a `[lib]` target reachable via bare `cargo test -p nono-cli <name>`. Neither matches how the
+phase's 10 plans actually landed the tests — `nono-cli` has NO `[lib]` target (the cross-binary
+compilation constraint documented in `118-PATTERNS.md`), so census/sentinel/equivalence tests live
+as inline `#[cfg(test)]` modules inside the source files under test, run via `--lib
+<module::path>`, one set per producer binary. The rows below name the actual location and command
+each plan implements.
+
 | Plan area | Requirement | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |-----------|-------------|-----------------|-----------|-------------------|-------------|--------|
-| Census completeness (all 3 binaries) | RCPT-01 | A receipt from a DirectCli / Broker / Daemon session names all 13 `LayerId` rows; none silently dropped | unit + discovery-based meta-test | `cargo test -p nono-cli --test layer_registry_meta_test` (extend) + new `cargo test -p nono-cli --test receipt_census_test` | ❌ W0 | ⬜ pending |
-| Content-free receipt | RCPT-01 | No path / argument / payload bytes anywhere in a serialized receipt | type-allowlist source scan **+** sentinel round-trip (both, each perturbation-proofed) | new `cargo test -p nono-cli --test receipt_content_free_scan` | ❌ W0 | ⬜ pending |
-| Chain construction (keyless, D-25) | RCPT-02 | `SHA256(receipt_domain \|\| prev \|\| leaf_hash)`; own chain domain (D-11 amended) | unit | `cargo test -p nono --lib receipt_chain` | ❌ W0 | ⬜ pending |
-| `nono receipt verify` | RCPT-02 | Fail-closed recompute-and-compare; an edited receipt is detected | integration | `cargo test -p nono-cli receipt_verify` | ❌ W0 | ⬜ pending |
-| Four-state rendering | RCPT-03 | All four states render distinguishably; an unattested layer **never** renders as attested | unit + discovery-based | new `cargo test -p nono-cli receipt_vocabulary_rendering` | ❌ W0 | ⬜ pending |
-| Daemon restructure (D-26) | RCPT-01 | `daemon_attest_and_decide` probes every modelled layer; **decision outcome provably unchanged** for every input | equivalence unit test (perturbation-proofed) | `cargo test -p nono-cli --lib agent_daemon::launch` | ✅ (extend) | ⬜ pending |
-| Broker wire contract (D-27) | RCPT-01 | Broker receives `(EntryPath::Broker)` NotApplicable rows from nono-cli; unrecognised/absent row set fails toward **unconfirmed**, never toward a short census | unit + cross-binary contract test | `cargo test -p nono-shell-broker` + `cargo test -p nono-cli receipt_broker_wire` | ❌ W0 | ⬜ pending |
-| Emitter degrade posture (D-04) | RCPT-01 | Emitter failure degrades **visibly** (`TelemetryDegraded` + operator banner), never silently; `HKLM\SOFTWARE\Policies\nono` can make it fail-closed | unit | `cargo test -p nono --lib machine_policy` (extend) | ✅ (extend) | ⬜ pending |
+| Census completeness — nono.exe (118-03) | RCPT-01 | `census_from_entries` names all 13 `LayerId` rows, no early return; `decide_from_entries`'s existing behavior unchanged | inline unit test + discovery-based meta-test extension | `cargo test -p nono-cli --lib exec_strategy_windows::attestation -- census` + `cargo test -p nono-cli --test layer_registry_meta_test` (extended) | ❌ W2 | ⬜ pending |
+| Census completeness — nono-agentd (118-04) | RCPT-01 | `daemon_census_rows` + `DAEMON_UNMODELLED_LAYER_EXPECTANCY` produce all 13 rows; cross-check drift guard against `layer_registry.rs` | inline unit test + discovery-based cross-check (`include_str!`-based, mirrors `daemon_decision_enum_variants`) | `cargo test -p nono-cli --lib agent_daemon::launch -- daemon_expectancy` | ❌ W2 | ⬜ pending |
+| Census completeness — nono-shell-broker (118-06) | RCPT-01 | `broker_census` builds all 13 rows from the widened wire contract; unrecognized/absent rows fail toward `Unconfirmed` | inline unit test + cross-crate name-match discovery test | `cargo test -p nono-shell-broker` + `cargo test -p nono-shell-broker --test broker_wire_contract_names` | ❌ W3 | ⬜ pending |
+| Content-free receipt — type scan (118-01) | RCPT-01 | No path/argument/payload-shaped field type anywhere in `EnforcementReceipt`, each perturbation-proofed | discovery-based type-allowlist source scan | `cargo test -p nono-cli --test receipt_content_free_scan` | ❌ W1 | ⬜ pending |
+| Content-free receipt — sentinel round-trip, all 3 producers (118-03/118-04/118-06) | RCPT-01 | No path/SID-shaped sentinel value leaks into a serialized receipt from ANY of the three independent producers (class coverage, not just the CLI path) | inline behavioral round-trip test per producer, each with a documented negative control | `cargo test -p nono-cli --lib exec_strategy_windows::attestation -- sentinel` (CLI) + `cargo test -p nono-cli --lib agent_daemon::launch -- daemon_sentinel` (daemon) + `cargo test -p nono-shell-broker` (broker, sentinel case) | ❌ W2/W3 | ⬜ pending |
+| Chain construction (keyless, D-25) | RCPT-02 | `SHA256(receipt_domain \|\| prev \|\| leaf_hash)`; own chain domain (D-11 amended) | unit | `cargo test -p nono --lib receipt_chain` | ❌ W1 | ⬜ pending |
+| Receipt sink guard (D-08) | RCPT-02 | DENY ACE + `NO_READ_UP` label applied to the sink directory | unit (ACL/label read-back) + blocking human checkpoint (real confined child) | `cargo test -p nono-cli --lib receipt_sink` (unit) + Plan 118-10 Task 3 (checkpoint) | ❌ W2/W6 | ⬜ pending |
+| `nono receipt verify` (118-09) | RCPT-02 | Fail-closed recompute-and-compare; an edited receipt is detected | inline unit/integration test | `cargo test -p nono-cli --lib receipt_commands` | ❌ W5 | ⬜ pending |
+| Four-state rendering (118-09) | RCPT-03 | All four states render distinguishably; an unattested layer **never** renders as attested | inline unit + discovery-based exhaustive-match guard | `cargo test -p nono-cli --lib receipt_commands -- rendering` | ❌ W5 | ⬜ pending |
+| Daemon restructure (D-26) | RCPT-01 | `daemon_attest_and_decide` probes every modelled layer; **decision outcome provably unchanged** for every input | equivalence unit test (perturbation-proofed) | `cargo test -p nono-cli --lib agent_daemon::launch -- daemon_attest_and_decide` | ✅ (extend) | ⬜ pending |
+| Broker wire contract (D-27) | RCPT-01 | Broker receives `(EntryPath::Broker)` NotApplicable rows from nono-cli over a widened env-var contract; unrecognised/absent row set fails toward **unconfirmed**, never toward a short census; a build-time name-match test guards the two literal env-var names against drift | unit + cross-crate name-match discovery test | `cargo test -p nono-cli --lib exec_strategy_windows::attestation -- broker_not_applicable` + `cargo test -p nono-shell-broker` + `cargo test -p nono-shell-broker --test broker_wire_contract_names` | ❌ W2/W3 | ⬜ pending |
+| Emitter degrade posture (D-04) | RCPT-01 | `require_receipts` machine-policy field follows the egress abort-on-unreadable lifecycle; emitter failure at the D-03 write point degrades **visibly** by default and aborts when machine policy requires receipts | unit (policy field) + inline unit (wiring) | `cargo test -p nono --lib machine_policy -- require_receipts` (✅ extend) + `cargo test -p nono-cli --lib exec_strategy_windows::launch -- attestation_gate` (❌ W4) | mixed | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -68,10 +81,39 @@ command mapping each task must land in. `File Exists` reflects the tree **before
 
 ## Wave 0 Requirements
 
-- [ ] `crates/nono-cli/tests/receipt_content_free_scan.rs` — D-14's type-allowlist scan **and** sentinel round-trip, in the house source-scan idiom (`env!("CARGO_MANIFEST_DIR")` + `fs::read_to_string`; **no `regex`, no `include_str!`**; discovery-based, never naming its targets)
-- [ ] `crates/nono-cli/tests/receipt_census_test.rs` — 13-row completeness across all three entry paths
-- [ ] Extend `crates/nono-cli/tests/layer_registry_meta_test.rs` — census ↔ registry drift guard: **adding a `LayerId` variant without a census row must fail the build, not a review**
-- [ ] Reuse `crates/nono-cli/tests/layer_force_unavailable.rs`'s per-layer seam to produce non-`Confirmed` rows without mocking the OS
+**Reconciliation note (post-checker revision, W7):** the two file-level items below were
+originally scoped as a `tests/*.rs` pair; `receipt_content_free_scan.rs` landed as planned
+(Plan 118-01, Wave 1), but census completeness landed as three separate inline `#[cfg(test)]`
+modules — one per producer binary (Plans 118-03/118-04/118-06) — rather than a single
+consolidated `receipt_census_test.rs`, because `nono-cli` has no `[lib]` target and a standalone
+`tests/*.rs` integration file cannot call the `pub(crate)` census-building functions directly.
+This is the correct placement per the cross-binary compilation constraint (see
+`118-PATTERNS.md`'s structural-constraint note); no `receipt_census_test.rs` file exists or is
+planned.
+
+- [ ] `crates/nono-cli/tests/receipt_content_free_scan.rs` (Plan 118-01, Wave 1) — D-14's
+      type-allowlist scan, in the house source-scan idiom (`env!("CARGO_MANIFEST_DIR")` +
+      `fs::read_to_string`; **no `regex`, no `include_str!`**; discovery-based, never naming its
+      targets). The D-14 sentinel round-trip is NOT in this file — see the three inline
+      per-producer sentinel tests below.
+- [ ] Inline census-completeness + sentinel-round-trip test in
+      `crates/nono-cli/src/exec_strategy_windows/attestation.rs` (Plan 118-03, Wave 2) —
+      `cargo test -p nono-cli --lib exec_strategy_windows::attestation -- census` and
+      `-- sentinel`.
+- [ ] Inline census-completeness + sentinel-round-trip test in
+      `crates/nono-cli/src/agent_daemon/launch.rs` (Plan 118-04, Wave 2) —
+      `cargo test -p nono-cli --lib agent_daemon::launch -- daemon_expectancy` and
+      `-- daemon_sentinel`.
+- [ ] Inline census-completeness + sentinel-round-trip test in
+      `crates/nono-shell-broker/src/main.rs`, plus the cross-crate name-match discovery test in
+      `crates/nono-shell-broker/tests/broker_wire_contract_names.rs` (Plan 118-06, Wave 3) —
+      `cargo test -p nono-shell-broker` and
+      `cargo test -p nono-shell-broker --test broker_wire_contract_names`.
+- [ ] Extend `crates/nono-cli/tests/layer_registry_meta_test.rs` (Plan 118-03, Wave 2) — census ↔
+      registry drift guard: **adding a `LayerId` variant without a census row must fail the
+      build, not a review**.
+- [ ] Reuse `crates/nono-cli/tests/layer_force_unavailable.rs`'s per-layer seam to produce
+      non-`Confirmed` rows without mocking the OS.
 
 No framework install needed — existing infrastructure covers the runner.
 
@@ -87,9 +129,12 @@ blockers in Phase 117.
    `String`, or any non-allowlisted type is added to the receipt struct.
    **Converse proof (guards against vacuous failure):** an allowlisted type — `u32`, `LayerId`,
    `LayerAttestationStatus` — must NOT trip it.
-2. **Sentinel round-trip (D-14).** Build a receipt from a session seeded with sentinel
-   path / argument / env values; assert those exact bytes are absent from the serialized output.
-   Negative control: leaving a path field in must make the test fail (demonstrated in review, not committed).
+2. **Sentinel round-trip (D-14), all three producers.** Build a receipt from each of the three
+   independent producer pipelines (nono.exe/118-03, nono-agentd/118-04, nono-shell-broker/118-06)
+   seeded with a sentinel path/SID-shaped value; assert those exact bytes are absent from the
+   serialized output, per producer. Negative control: leaving the sentinel-carrying field in must
+   make the corresponding test fail (demonstrated in review, not committed) — recorded separately
+   per producer since each is an independent data flow (class coverage, not just placement).
 3. **Census-completeness meta-test.** Adding a 14th `LayerId` variant with no corresponding
    census row must fail to compile (exhaustive match, no wildcard arm — mirroring
    `assert_all_layer_ids_covered`) or fail the meta-test if the census builder is not itself
@@ -100,10 +145,16 @@ blockers in Phase 117.
    Perturbation: alter one probe's result and assert the aborting layer **and** the
    `DaemonAttestationDecision` are identical pre- and post-restructure. A test that only asserts
    "13 rows present" is blind to the fail-direction change this decision introduces.
-6. **Broker wire-contract guard (D-27).** Adding an expectancy cell to `layer_registry.rs` for
-   `(EntryPath::Broker, …)` without it reaching the broker over the wire must fail the
-   cross-check. Separately: a broker handed an unrecognised or absent row set must produce
-   `Unconfirmed` rows, never a silently short census — assert this, do not assume it.
+6. **Broker wire-contract guard (D-27).** Two complementary build-time checks, since the broker's
+   design deliberately has no static per-LayerId table on its own side (a hardcoded table there
+   was explicitly rejected as a third copy of registry knowledge): (a) on the nono-cli side, a
+   partition test asserting the two wire-contract producer functions' outputs union to exactly
+   `layer_registry::ALL` with zero overlap — a row that fell through both functions would break
+   this invariant; (b) a cross-crate discovery test asserting the broker's source reads both
+   wire-contract env-var names by their exact current literal string value — a rename/typo drift
+   between the two crates fails this test. Separately, at runtime: a broker handed an
+   unrecognised or absent row set must produce `Unconfirmed` rows, never a silently short census
+   — assert this, do not assume it.
 
 ---
 

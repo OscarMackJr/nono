@@ -662,9 +662,21 @@ replace any existing Phase 117 code path.
 
 **If this table is empty:** N/A — see rows above.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Receipt chain key lifecycle (Finding 2)**
+> **All three resolved by operator decision on 2026-08-16**, recorded as D-25 / D-26 / D-27 in the
+> "Resolved During Planning" block of `118-CONTEXT.md`. Those decisions supersede the
+> recommendations below — including Q3, where the operator went **against** this document's
+> recommendation. Each question is annotated inline.
+
+1. **Receipt chain key lifecycle (Finding 2)** — **RESOLVED → D-25.** Neither of the two framings
+   below was taken. The receipt chain is a **keyless SHA-256 hash chain** on the core audit
+   module's `hash_chain` construction (`crates/nono/src/audit.rs:658-669`), not `Hmac<Sha256>` with
+   any key-persistence strategy. D-11's own-chain-domain argument survives unchanged; only the
+   primitive is amended. The persistent-HMAC-key-via-keystore route was considered and rejected —
+   it opens key provisioning, rotation, escrow, and a key-absent fail-direction question inside a
+   phase scoped to receipts. The resulting integrity claim is "nobody edited this without leaving a
+   hash mismatch," and no plan may state the stronger key-holder claim.
    - What we know: the telemetry chain's key is ephemeral/zeroized; the core audit chain is keyless;
      D-09 implies a persistent shared secret; D-11 implies literal reuse of the ephemeral-key
      construction. These are in tension.
@@ -673,7 +685,14 @@ replace any existing Phase 117 code path.
      Phase 119 alongside the deferred asymmetric-receipt item."
    - Recommendation: raise explicitly at plan-discuss time; do not let an executor default this.
 
-2. **Daemon "not-yet-probed" sub-case (Finding 1)**
+2. **Daemon "not-yet-probed" sub-case (Finding 1)** — **RESOLVED → D-26**, which adopts this
+   document's recommendation. `daemon_attest_and_decide` is restructured from stop-at-first-failure
+   to collect-all-then-decide. Folding "not reached" into `Unconfirmed` was rejected (it destroys
+   the distinction the milestone exists to expose) and so was adding a 5th `LayerAttestationStatus`
+   state (permitted by D-13, but it ripples into every 117 consumer for a case the restructure
+   removes outright). Because this is a **fail-direction change to shipped security code**, the
+   decision outcome must be provably unchanged for every input — same aborting layer, same
+   `DaemonAttestationDecision` — under its own perturbation-proofed test.
    - What we know: `daemon_attest_and_decide`'s early-return structure means a receipt built naively
      from it would have some rows silently `Unconfirmed` when they were actually just unreached.
    - What's unclear: whether D-13's four states are meant to absorb this (folding "not reached" into
@@ -682,7 +701,16 @@ replace any existing Phase 117 code path.
    - Recommendation: restructure `daemon_attest_and_decide` to keep probing (Pitfall 4's guidance);
      this is more work but avoids a semantically muddy `Unconfirmed`.
 
-3. **Broker wire-contract extension for the 11 unmodeled rows (Finding 1)**
+3. **Broker wire-contract extension for the 11 unmodeled rows (Finding 1)** — **RESOLVED → D-27,
+   which goes AGAINST this document's recommendation.** The operator chose to **extend the wire
+   contract**, not to hardcode-plus-cross-check. Reason: hardcoding would make a **third** copy of
+   registry knowledge (after `layer_registry.rs` and the daemon's mirror), with a drift guard as the
+   only thing keeping it honest; the wire contract keeps `layer_registry.rs` the single source of
+   truth for expectancy.
+   The lockstep concern raised below is real and is **not** dismissed — D-27 requires the widened
+   contract to carry its own compatibility guard: a broker handed an unrecognised or absent row set
+   must fail toward `Unconfirmed`, **never** toward a silently short census. That is the same
+   fail-closed direction Phase 117 documented for the mixed-version pair.
    - What we know: the broker cannot see `layer_registry.rs`; `NONO_BROKER_REQUIRED_LAYERS` today
      only names the (at most 2) layers that must be Confirmed-or-terminate.
    - What's unclear: whether to extend that env var's shape (e.g., a second var naming which rows are
