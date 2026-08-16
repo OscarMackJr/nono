@@ -58,6 +58,7 @@ pub mod manifest_convert;
 pub mod net_filter;
 pub mod path;
 pub mod query;
+pub mod receipt;
 pub mod sandbox;
 pub mod scrub;
 pub mod state;

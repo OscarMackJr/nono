@@ -34,6 +34,7 @@
 //! (including the calling process's own handle, in this module's tests).
 
 use crate::{NonoError, Result};
+use serde::{Deserialize, Serialize};
 
 /// Platform-neutral process handle passed to every probe function.
 ///
@@ -70,7 +71,13 @@ pub type JobHandle = ();
 /// it", "the apply succeeded and we cannot independently re-check it", "we
 /// checked and it is not there (or the check itself failed)", and "no such
 /// layer exists here" apart, without out-of-band knowledge.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Serialize`/`Deserialize` (Rule 3 auto-fix, Phase 118 Plan 01): this type
+/// is a field of `crate::receipt::LayerReceiptRow`, which must round-trip
+/// through the receipt's on-disk JSON representation (D-12/RCPT-02). No
+/// behavior change — this remains the same policy-free status vocabulary
+/// `LayerAttestationStatus` always was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LayerAttestationStatus {
     /// An independent OS query against the target process succeeded and
     /// matched the expected state — e.g. `IsProcessInJob` returned `true`
