@@ -252,6 +252,62 @@ its verifier, and its content-free source scan are three artifacts that must mov
   active), so `REQUIREMENTS.md` and `ROADMAP.md` are appended to, never overwritten, and
   `phases.clear` must not run. All commits DCO-signed.
 
+### Resolved During Planning (operator call, 2026-08-16)
+
+Phase 118 research (`118-RESEARCH.md`, Findings 1 and 2) verified two of this document's working
+assumptions against the live tree and found them **false**. Three operator decisions were taken to
+resolve them before planning. These supersede RESEARCH.md's Open Questions 1–3.
+
+- **D-25: The receipt chain is a KEYLESS hash chain on the core audit module's construction —
+  `SHA256(domain || prev || leaf_hash)` — NOT the telemetry chain's HMAC.** Research Finding 2:
+  `SecurityEventLayer`'s chain key is generated fresh per-process from `OsRng`
+  (`telemetry/mod.rs:319`) and zeroized on `Drop` (`:96-103`); it is never persisted, exported, or
+  recoverable. Mirroring it literally, as D-11 prescribes, would produce receipts that **nobody —
+  including the operator — can verify once the emitting process exits**, contradicting D-09's
+  "governance consumer = the HMAC key holder" premise and RCPT-02's actual use case.
+
+  **D-11 is amended, not overturned:** its load-bearing argument — receipts get their OWN chain
+  domain, because an interleaved chain landing in two sinks is structurally unverifiable from the
+  receipt sink alone — **stands unchanged and still governs**. What changes is only the primitive:
+  keyless SHA-256 in place of `Hmac<Sha256>`, matching `crates/nono/src/audit.rs`'s `hash_chain`
+  (`:658-669`), which is the construction `nono audit verify`'s fail-closed
+  recompute-and-compare already consumes — the same command family D-10 mirrors verbatim. RCPT-02's
+  literal requirement ("verifiable... so an edited receipt is detectable") is satisfied: the
+  integrity claim is "nobody edited this without leaving a hash mismatch." The stronger claim
+  ("only the key holder could have produced this") is NOT made, and no plan may imply it. The
+  advance-under-mutex discipline from D-11 (WR-21: mutex held across the full build+advance+emit
+  sequence; WR-09: chain fields private behind a single accessor) is retained in full — it is
+  independent of the primitive. A persistent-HMAC-key-via-keystore route was considered and
+  rejected: it opens key provisioning, rotation, escrow, and a key-absent fail-direction question
+  inside a phase scoped to receipts.
+
+- **D-26: `nono-agentd`'s `daemon_attest_and_decide` is restructured from stop-at-first-failure to
+  collect-all-then-decide.** Research Finding 1: it is today a 5-of-13-layer early-return chain
+  (`agent_daemon/launch.rs:1417-1500`, four `Abort` returns at `:1435/:1446/:1455/:1470`) — if
+  `AppContainerProfile` fails, `JobObjectContainment` and every layer after it is **never probed**,
+  so there is no state to record. Every modelled layer is now probed before the decision is
+  computed. Rejected alternatives: mapping unreached layers to `Unconfirmed` (destroys the
+  "expected but not evaluated" vs "evaluated and failed" distinction — the exact honesty gap this
+  milestone exists to close), and adding a 5th `LayerAttestationStatus` state (permitted by D-13,
+  but ripples into every 117 consumer for a case a restructure removes entirely).
+
+  **This is a fail-direction change to shipped security code and must be planned as one.** The
+  decision outcome must be provably unchanged for every input: same aborting layer, same
+  `DaemonAttestationDecision`. That equivalence needs its own perturbation-proofed test — proof the
+  test can FAIL — not an executor self-check. D-37 point 2 is preserved: no `ProceedDowngraded`
+  reintroduction in the daemon's decision shape. The daemon remains two-state.
+
+- **D-27: The broker's 11 unmodelled census rows come from an EXTENDED WIRE CONTRACT, not from
+  hardcoded knowledge.** Research Finding 1: `nono-shell-broker` knows only 2 of 13 layers
+  (`BROKER_ATTESTABLE_LAYERS`, `main.rs:321`) and structurally cannot import `layer_registry.rs`
+  (its `Cargo.toml` depends only on `nono` core, `thiserror`, `tracing`, `windows-sys`). `nono-cli`
+  therefore communicates the `(EntryPath::Broker, …)` `NotApplicable` rows to the broker alongside
+  the existing `NONO_BROKER_REQUIRED_LAYERS` string, keeping `layer_registry.rs` the single source
+  of truth for expectancy. Hardcoding-plus-drift-guard was rejected: it would make a **third** copy
+  of registry knowledge, with a guard as the only thing keeping it honest. The widened wire
+  contract needs its own compatibility guard — a broker handed an unrecognised or absent row set
+  must fail toward "unconfirmed", never toward a silently short census.
+
 ### Claude's Discretion
 
 - **Sink location and layout** — `%PROGRAMDATA%\nono\receipts` (machine-wide) vs
