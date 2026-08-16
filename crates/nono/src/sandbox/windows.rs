@@ -1956,27 +1956,233 @@ pub fn grant_sid_read_attributes_on_path(path: &Path, sid: &str) -> Result<()> {
     )
 }
 
-/// Removes the SDDL SID string `sid`'s ACEs from the DACL of `path`, reverting
-/// the grant made by [`grant_sid_write_on_path`].
+/// Adds a DENY-ACE to the DACL of `path` denying the SDDL SID string `sid` the
+/// rights named in `access_mask`, PRESERVING the existing DACL (including
+/// inherited ACEs). This is D-08's **DACL half** of the receipt-sink guard —
+/// the sibling of [`try_set_mandatory_label`]'s `NO_READ_UP` half (Phase 118,
+/// `crates/nono-cli`'s receipt-sink code calls both). Unlike every existing
+/// `grant_sid_*_on_path` wrapper (all of which pass `SET_ACCESS`), this is the
+/// first `DENY_ACCESS` caller in this file — but it is still a thin sibling
+/// wrapper over [`edit_dacl_for_sid`], not a new ACL code path.
 ///
-/// Uses `SetEntriesInAclW` with `REVOKE_ACCESS`, which removes ALL allow/deny
-/// ACEs for the trustee. This is safe here because the synthetic per-session SID
-/// is unique to nono and pre-existed in NO ACE — so the only ACE it can match is
-/// the one this session added.
+/// # Why BOTH a DENY ACE and a mandatory label are required (D-08)
+///
+/// The supervisor and the confined child run as the **same user**, so an
+/// ordinary allow-only DACL cannot structurally separate them — there is no
+/// "not the supervisor" trustee an allow-list can exclude, only trustees an
+/// explicit DENY can name. Neither mechanism alone covers every arm:
+/// - `WRITE_RESTRICTED` tokens (the Low-IL primary-token broker arm) double-
+///   check restricting SIDs on **write** access only — see
+///   [`grant_sid_write_on_path`]'s doc for the same write-only asymmetry.
+///   Reads go through the token's normal SID list, unchecked by the
+///   restricting-SID pass. A DENY ACE naming the per-session synthetic SID
+///   (or the package SID on the AppContainer arm) closes exactly this
+///   read-bypass; the mandatory label's `NO_READ_UP` half does not, on its
+///   own, guarantee the read-side token is even Low-IL on this arm.
+/// - A Medium-IL broker child (`nono-shell-broker.exe`, Phase 31) is not
+///   covered by ANY per-session SID — there is nothing for a DENY ACE to
+///   name on that arm. The mandatory label's `NO_READ_UP` is what closes it
+///   instead.
+///
+/// Matches CLAUDE.md's defense-in-depth principle: two independent
+/// mechanisms, applied together, because betting on either one alone leaves
+/// an arm uncovered.
+///
+/// # WRITE_OWNER / WRITE_DAC gotcha
+///
+/// Like every other `edit_dacl_for_sid` caller, mutating a path's DACL needs
+/// `WRITE_DAC` that the caller does not always implicitly hold — see
+/// [`path_is_owned_by_current_user`]'s doc for the drive-root-fails,
+/// `%USERPROFILE%`/`%TEMP%`-succeeds story. Sink-directory creation should
+/// check ownership the same way before attempting this call, rather than
+/// re-deriving the WRITE_OWNER story at the call site.
 ///
 /// # Errors
 ///
-/// Returns `NonoError::DaclApplyFailed` if the SID string cannot be parsed, the
-/// current DACL cannot be read, the revoke cannot be applied, or the resulting
-/// DACL cannot be written back.
+/// Returns `NonoError::DaclApplyFailed` if the SID string cannot be parsed,
+/// the current DACL cannot be read, the ACE cannot be merged, or the merged
+/// DACL cannot be written back (fail-closed at every step) — identical
+/// failure shape to every `grant_sid_*_on_path` sibling.
 #[cfg(target_os = "windows")]
-pub fn revoke_sid_on_path(path: &Path, sid: &str) -> Result<()> {
-    use windows_sys::Win32::Security::Authorization::REVOKE_ACCESS;
+pub fn deny_sid_on_path(path: &Path, sid: &str, access_mask: u32) -> Result<()> {
+    use windows_sys::Win32::Security::Authorization::DENY_ACCESS;
     use windows_sys::Win32::Security::NO_INHERITANCE;
 
-    // Inheritance + mask are ignored for REVOKE_ACCESS (the trustee match drives
-    // removal of ALL the SID's ACEs, regardless of the rights they carry).
-    edit_dacl_for_sid(path, sid, 0, REVOKE_ACCESS, NO_INHERITANCE)
+    // NO_INHERITANCE: the deny ACE is scoped to the sink directory object
+    // itself, matching D-08's guard scope. If a future caller needs the deny
+    // to propagate onto files the sink directory contains, that is a
+    // deliberate widening decision to make at the call site, not a default.
+    edit_dacl_for_sid(path, sid, access_mask, DENY_ACCESS, NO_INHERITANCE)
+}
+
+/// Removes every allow-or-deny ACE on `path`'s DACL whose trustee SID equals
+/// `sid`, via a manual `GetAce`/`DeleteAce` walk rather than
+/// `SetEntriesInAclW(REVOKE_ACCESS)`.
+///
+/// # Why not `SetEntriesInAclW(REVOKE_ACCESS)` (Phase 118 fix)
+///
+/// This function used to be `edit_dacl_for_sid(path, sid, 0, REVOKE_ACCESS,
+/// NO_INHERITANCE)`, and its own doc comment claimed that removed "ALL
+/// allow/deny ACEs for the trustee" — a claim inherited from
+/// `SetEntriesInAclW`'s MSDN description ("all existing access-control
+/// information for the trustee is revoked"). That claim was **never
+/// exercised for a deny ACE**, because no `DENY_ACCESS` caller existed
+/// before [`deny_sid_on_path`] (D-08's sink guard). Empirically verified
+/// while implementing it: merging a `REVOKE_ACCESS` entry via
+/// `SetEntriesInAclW` removes a matching `ACCESS_ALLOWED_ACE` for the
+/// trustee but leaves an `ACCESS_DENIED_ACE` for the SAME trustee
+/// completely untouched — confirmed by probing the merged ACL's `AceCount`
+/// immediately after the merge step, before any write-back, which showed no
+/// change at all. A stale deny ACE is fail-secure (it can only keep denying,
+/// never grant something it shouldn't), so this was never a security
+/// vulnerability — but it silently broke the documented cleanup contract:
+/// every per-session synthetic SID's deny ACE would accumulate on the sink
+/// directory's DACL forever, one per session, never revoked. Manually
+/// walking the DACL and calling `DeleteAce` on every index whose ACE type is
+/// `ACCESS_ALLOWED_ACE_TYPE` or `ACCESS_DENIED_ACE_TYPE` and whose trustee
+/// SID matches is the mechanism verified (by this same round-trip test,
+/// `deny_then_revoke_sid_round_trips_on_tempdir`) to remove both.
+///
+/// Walks ACE indices in reverse so deleting one never invalidates a
+/// not-yet-visited lower index (`DeleteAce` shifts every later ACE down by
+/// one slot).
+///
+/// # Errors
+///
+/// Returns `NonoError::DaclApplyFailed` if the SID string cannot be parsed,
+/// the current DACL cannot be read, a matching ACE cannot be deleted, or the
+/// resulting DACL cannot be written back.
+#[cfg(target_os = "windows")]
+pub fn revoke_sid_on_path(path: &Path, sid: &str) -> Result<()> {
+    use windows_sys::Win32::Security::{
+        DeleteAce, EqualSid, ACCESS_ALLOWED_ACE, ACCESS_DENIED_ACE, DACL_SECURITY_INFORMATION, PSID,
+    };
+    use windows_sys::Win32::System::SystemServices::{
+        ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE,
+    };
+
+    let owned_sid = parse_sid(path, sid)?;
+
+    let wide_path: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    // 1. Read the current DACL. We mutate it in place via DeleteAce below —
+    //    DeleteAce only shrinks the ACL within its already-allocated buffer,
+    //    so this is safe on the SD-owned buffer without a merge/reallocate
+    //    step.
+    let mut dacl: *mut ACL = std::ptr::null_mut();
+    let mut security_descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    let status = unsafe {
+        // SAFETY: `wide_path` is a valid nul-terminated UTF-16 buffer; the
+        // two out-pointers refer to live local storage. On success the SD is
+        // heap-allocated and freed via OwnedSecurityDescriptor's Drop.
+        GetNamedSecurityInfoW(
+            wide_path.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut dacl,
+            std::ptr::null_mut(),
+            &mut security_descriptor,
+        )
+    };
+    if status != 0 {
+        return Err(NonoError::DaclApplyFailed {
+            path: path.to_path_buf(),
+            hresult: status,
+            hint: format!(
+                "GetNamedSecurityInfoW(DACL_SECURITY_INFORMATION) returned 0x{status:08X} while \
+                 reading the current DACL for {}",
+                path.display()
+            ),
+        });
+    }
+    let _sd_guard = OwnedSecurityDescriptor(security_descriptor);
+
+    // 2. Walk in reverse, deleting every ALLOW or DENY ACE whose trustee SID
+    //    matches. Non-simple ACE types (object ACEs, audit ACEs, ...) are
+    //    left untouched — this crate never creates those.
+    if !dacl.is_null() {
+        // SAFETY: `dacl` points into the SD we own until the write-back below.
+        let ace_count = unsafe { (*dacl).AceCount };
+        for index in (0..ace_count).rev() {
+            let mut ace = std::ptr::null_mut();
+            // SAFETY: `dacl` is valid; `ace` is a valid out-pointer; `index`
+            // is `< ace_count`, the count read from this same DACL above.
+            let got = unsafe { GetAce(dacl, u32::from(index), &mut ace) };
+            if got == 0 || ace.is_null() {
+                continue;
+            }
+            // SAFETY: every ACE begins with an ACE_HEADER; check AceType
+            // BEFORE any type-specific cast, matching the discipline in
+            // `dacl_contains_sid`/`dacl_contains_deny_ace_for_sid`.
+            let ace_type = unsafe { (*(ace as *const ACE_HEADER)).AceType };
+            let ace_sid: PSID = if u32::from(ace_type) == ACCESS_ALLOWED_ACE_TYPE {
+                // SAFETY: AceType checked above.
+                unsafe { (&(*(ace as *const ACCESS_ALLOWED_ACE)).SidStart) as *const u32 as PSID }
+            } else if u32::from(ace_type) == ACCESS_DENIED_ACE_TYPE {
+                // SAFETY: AceType checked above.
+                unsafe { (&(*(ace as *const ACCESS_DENIED_ACE)).SidStart) as *const u32 as PSID }
+            } else {
+                continue;
+            };
+            // SAFETY: both SIDs are valid for the duration of the call.
+            let matches = unsafe { EqualSid(ace_sid, owned_sid.0) } != 0;
+            if matches {
+                // SAFETY: `dacl` is valid, owned until write-back; `index` is
+                // a currently-valid ACE index just read via GetAce above.
+                let deleted = unsafe { DeleteAce(dacl, u32::from(index)) };
+                if deleted == 0 {
+                    let hresult = unsafe {
+                        // SAFETY: GetLastError has no preconditions.
+                        GetLastError()
+                    };
+                    return Err(NonoError::DaclApplyFailed {
+                        path: path.to_path_buf(),
+                        hresult,
+                        hint: format!(
+                            "DeleteAce returned FALSE (GetLastError=0x{hresult:08X}) while \
+                             removing an ACE for SID {sid:?} on {}",
+                            path.display()
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
+    // 3. Write the (possibly mutated in place) DACL back. No PROTECTED flag
+    //    → inherited ACEs survive.
+    let status = unsafe {
+        // SAFETY: `wide_path` is a valid nul-terminated UTF-16 buffer;
+        // `dacl` is the SD-owned DACL, mutated in place above, still alive
+        // via `_sd_guard`.
+        SetNamedSecurityInfoW(
+            wide_path.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            dacl,
+            std::ptr::null(),
+        )
+    };
+    if status != 0 {
+        return Err(NonoError::DaclApplyFailed {
+            path: path.to_path_buf(),
+            hresult: status,
+            hint: format!(
+                "SetNamedSecurityInfoW(DACL_SECURITY_INFORMATION) returned 0x{status:08X} while \
+                 writing the DACL for {} after removing SID {sid:?}'s ACEs",
+                path.display()
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// Reads back the mandatory-label RID on `path`, or `None` if there is no
@@ -5458,14 +5664,29 @@ mod dacl_grant_tests {
         EqualSid, GetAce, ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
         PSID,
     };
+    use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 
     /// A unique synthetic SID, shaped like `generate_session_sid`'s
     /// `S-1-5-117-...` output but with fixed sub-authorities for a deterministic
     /// round-trip. Pre-exists in NO real ACE, so REVOKE removes only what we add.
     const TEST_SESSION_SID: &str = "S-1-5-117-1-2-3-4";
 
-    /// Returns true iff `path`'s DACL contains at least one ACE whose trustee
-    /// SID equals `sid`. Walks the DACL (vs the SACL the label tests walk).
+    /// Returns true iff `path`'s DACL contains at least one **ALLOW** ACE
+    /// whose trustee SID equals `sid`. Walks the DACL (vs the SACL the label
+    /// tests walk).
+    ///
+    /// Phase 118 D-08 fix: this used to skip the `AceType` check entirely
+    /// (reading `SidStart` directly on the assumption that "we only ever add
+    /// allow-ACEs" — true when every caller in this test module only called
+    /// grant wrappers). That assumption broke the moment `deny_sid_on_path`
+    /// landed in the same module: this reader would report `true` for a
+    /// DENY ACE too, since `ACCESS_ALLOWED_ACE` and `ACCESS_DENIED_ACE` share
+    /// the same `Header`/`Mask`/`SidStart` layout. Explicitly checking
+    /// `AceType == ACCESS_ALLOWED_ACE_TYPE` makes this reader genuinely
+    /// ALLOW-only, which is what every existing caller's assertion already
+    /// assumed, and what `deny_then_revoke_sid_round_trips_on_tempdir`'s
+    /// perturbation proof (a DENY ACE must never satisfy this reader) needs
+    /// to be a real check rather than a vacuous one.
     fn dacl_contains_sid(path: &Path, sid: &str) -> bool {
         let wide_path: Vec<u16> = path
             .as_os_str()
@@ -5507,9 +5728,19 @@ mod dacl_grant_tests {
                 if got == 0 || ace.is_null() {
                     continue;
                 }
-                // SAFETY: allow/deny ACEs share the SidStart layout; we only
-                // ever add allow-ACEs, so reading the SID at that offset is
-                // correct.
+                // SAFETY: every ACE begins with an ACE_HEADER; `GetAce`
+                // guarantees `ace` points at a live ACE of at least header
+                // size. Read AceType via the shared header layout BEFORE any
+                // type-specific cast (see the doc comment above for why this
+                // check is load-bearing, not defensive decoration).
+                let ace_type =
+                    unsafe { (*(ace as *const windows_sys::Win32::Security::ACE_HEADER)).AceType };
+                if u32::from(ace_type) != ACCESS_ALLOWED_ACE_TYPE {
+                    continue;
+                }
+                // SAFETY: AceType checked above == ACCESS_ALLOWED_ACE_TYPE,
+                // so this cast matches the ACE's real layout. allow/deny ACEs
+                // share the SidStart offset, but only allow-ACEs reach here.
                 let ace_sid = unsafe {
                     (&(*(ace as *const ACCESS_ALLOWED_ACE)).SidStart) as *const u32 as PSID
                 };
@@ -5742,6 +5973,154 @@ mod dacl_grant_tests {
 
         let dir = tempdir().expect("tempdir");
         let err = grant_sid_read_attributes_on_path(dir.path(), "not-a-sid")
+            .expect_err("malformed SID must fail closed");
+        assert!(
+            matches!(err, NonoError::DaclApplyFailed { .. }),
+            "malformed SID must yield DaclApplyFailed; got {err:?}"
+        );
+    }
+
+    // ── deny_sid_on_path tests (Phase 118 D-08 DACL half) ──────────────────
+
+    /// Returns true iff `path`'s DACL contains a **DENY** (not allow) ACE
+    /// whose trustee SID equals `sid`. `ACCESS_DENIED_ACE` shares
+    /// `ACCESS_ALLOWED_ACE`'s layout (`Header`, `Mask`, `SidStart`) but this
+    /// walk checks `ACE_HEADER::AceType` FIRST so a passing assertion cannot
+    /// be satisfied by an accidentally-added ALLOW entry — the exact
+    /// distinction D-08 depends on (see `deny_then_revoke_sid_round_trips`'s
+    /// converse assertion against [`dacl_contains_sid`]).
+    fn dacl_contains_deny_ace_for_sid(path: &Path, sid: &str) -> bool {
+        use windows_sys::Win32::Security::{ACCESS_DENIED_ACE, ACE_HEADER};
+        use windows_sys::Win32::System::SystemServices::ACCESS_DENIED_ACE_TYPE;
+
+        let wide_path: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let wide_sid: Vec<u16> = sid.encode_utf16().chain(std::iter::once(0)).collect();
+
+        let mut want_sid: PSID = std::ptr::null_mut();
+        // SAFETY: valid nul-terminated UTF-16 SID string + valid out-pointer.
+        let ok = unsafe { ConvertStringSidToSidW(wide_sid.as_ptr(), &mut want_sid) };
+        assert!(ok != 0 && !want_sid.is_null(), "parse test SID");
+
+        let mut dacl: *mut ACL = std::ptr::null_mut();
+        let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        // SAFETY: valid path buffer + valid out-pointers; SD freed below.
+        let status = unsafe {
+            GetNamedSecurityInfoW(
+                wide_path.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut dacl,
+                std::ptr::null_mut(),
+                &mut sd,
+            )
+        };
+        assert_eq!(status, 0, "GetNamedSecurityInfoW(DACL) must succeed");
+
+        let mut found = false;
+        if !dacl.is_null() {
+            // SAFETY: `dacl` points into the SD we own until LocalFree below.
+            let ace_count = unsafe { (*dacl).AceCount };
+            for index in 0..ace_count {
+                let mut ace = std::ptr::null_mut();
+                // SAFETY: `dacl` is valid; `ace` is a valid out-pointer.
+                let got = unsafe { GetAce(dacl, u32::from(index), &mut ace) };
+                if got == 0 || ace.is_null() {
+                    continue;
+                }
+                // SAFETY: every ACE begins with an ACE_HEADER; reading it
+                // here to check AceType before ANY type-specific cast is the
+                // whole point of this helper.
+                let header = unsafe { *(ace as *const ACE_HEADER) };
+                if u32::from(header.AceType) != ACCESS_DENIED_ACE_TYPE {
+                    continue;
+                }
+                // SAFETY: AceType checked above == ACCESS_DENIED_ACE_TYPE, so
+                // this cast matches the ACE's real layout.
+                let ace_sid = unsafe {
+                    (&(*(ace as *const ACCESS_DENIED_ACE)).SidStart) as *const u32 as PSID
+                };
+                // SAFETY: both SIDs are valid for the duration of the call.
+                if unsafe { EqualSid(ace_sid, want_sid) } != 0 {
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        // SAFETY: both allocations came from Win32 and must be LocalFree'd.
+        unsafe {
+            if !want_sid.is_null() {
+                let _ = LocalFree(want_sid as _);
+            }
+            if !sd.is_null() {
+                let _ = LocalFree(sd as _);
+            }
+        }
+        found
+    }
+
+    /// `deny_sid_on_path` adds a DENY (not allow) ACE for the SID and
+    /// `revoke_sid_on_path` removes it — the round-trip shape shared with
+    /// every grant wrapper, but checked against the DENY-specific reader.
+    /// Carries D-08's perturbation proof: a deny ACE must never be
+    /// satisfiable by [`dacl_contains_sid`] (the ALLOW-only reader every
+    /// grant test above uses), or this guard would be silently vacuous.
+    #[test]
+    fn deny_then_revoke_sid_round_trips_on_tempdir() {
+        use super::deny_sid_on_path;
+
+        const TEST_DENY_SID: &str = "S-1-5-117-9-8-7-6";
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path();
+
+        assert!(
+            !dacl_contains_sid(path, TEST_DENY_SID),
+            "precondition: no pre-existing allow ACE for the test SID"
+        );
+        assert!(
+            !dacl_contains_deny_ace_for_sid(path, TEST_DENY_SID),
+            "precondition: no pre-existing deny ACE for the test SID"
+        );
+
+        deny_sid_on_path(path, TEST_DENY_SID, super::SESSION_SID_WRITE_MASK).expect("deny");
+
+        assert!(
+            dacl_contains_deny_ace_for_sid(path, TEST_DENY_SID),
+            "after deny_sid_on_path, the DACL must contain a DENY ace for the SID"
+        );
+        assert!(
+            !dacl_contains_sid(path, TEST_DENY_SID),
+            "perturbation proof: a deny ACE must NOT be readable as an allow \
+             ACE — if this assertion ever fails, dacl_contains_deny_ace_for_sid \
+             is not actually distinguishing ACE type and the guard is vacuous"
+        );
+
+        revoke_sid_on_path(path, TEST_DENY_SID).expect("revoke");
+        assert!(
+            !dacl_contains_deny_ace_for_sid(path, TEST_DENY_SID),
+            "after revoke, the deny ACE must be gone (Phase 118 fix: revoke_sid_on_path \
+             now manually walks and deletes ALLOW+DENY ACEs instead of relying on \
+             SetEntriesInAclW(REVOKE_ACCESS), which was empirically found to skip \
+             DENY-type ACEs for the trustee)"
+        );
+    }
+
+    /// A malformed SID string fails the deny ACE closed with
+    /// `DaclApplyFailed` (never a silent no-op), mirroring every other
+    /// `grant_*_invalid_sid_fails_closed` sibling in this module.
+    #[test]
+    fn deny_invalid_sid_fails_closed() {
+        use super::deny_sid_on_path;
+
+        let dir = tempdir().expect("tempdir");
+        let err = deny_sid_on_path(dir.path(), "not-a-sid", super::SESSION_SID_WRITE_MASK)
             .expect_err("malformed SID must fail closed");
         assert!(
             matches!(err, NonoError::DaclApplyFailed { .. }),
