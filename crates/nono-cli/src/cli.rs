@@ -260,6 +260,7 @@ const ROOT_HELP_TEMPLATE: &str = "\
   session    Manage runtime session storage (cleanup)
   rollback   Manage rollback sessions (browse, restore, cleanup)
   audit      View audit trail of sandboxed commands
+  receipt    View per-session enforcement receipts (Windows-only, D-18)
   trust      Manage file trust and attestation
 
 \x1b[1mDAEMON & AGENTS\x1b[0m
@@ -564,6 +565,7 @@ const ROOT_HELP_TEMPLATE: &str = "\
   session    Manage runtime session storage (cleanup)
   rollback   Manage rollback sessions (browse, restore, cleanup)
   audit      View audit trail of sandboxed commands
+  receipt    View per-session enforcement receipts (Windows-only, D-18)
   trust      Manage file trust and attestation
 
 \x1b[1mDAEMON & AGENTS\x1b[0m
@@ -905,6 +907,28 @@ pub enum Commands {
   nono audit show <id> --json                  # Export as JSON
 ")]
     Audit(AuditArgs),
+
+    // Phase 118 (RCPT-01/02/03, D-10): a receipt is a full census of every
+    // composed sandbox layer's observed state at the moment one confined
+    // session's launch was decided, plus the terminal ran/refused outcome.
+    // A separate, dedicated chain domain from `nono audit` (D-11) — this
+    // command family never touches the audit ledger.
+    /// View per-session enforcement receipts (Windows-only, D-18)
+    #[command(subcommand_help_heading = "COMMANDS", disable_help_subcommand = true)]
+    #[command(help_template = "\
+{about}
+
+\x1b[1mUSAGE\x1b[0m
+  nono receipt <command>
+
+{all-args}
+{after-help}")]
+    #[command(after_help = "\x1b[1mEXAMPLES\x1b[0m
+  nono receipt list                            # List every receipt segment
+  nono receipt show <id>                       # Show one session's receipt(s)
+  nono receipt verify <id>                     # Fail-closed tamper-evidence check
+")]
+    Receipt(ReceiptArgs),
 
     /// Manage file trust and attestation
     #[command(subcommand_help_heading = "COMMANDS", disable_help_subcommand = true)]
@@ -3618,6 +3642,100 @@ pub struct AuditCleanupArgs {
     pub help: Option<bool>,
 }
 
+// ---------------------------------------------------------------------------
+// Receipt command args (Phase 118 Plan 09, D-10)
+// ---------------------------------------------------------------------------
+//
+// Mirrors `AuditArgs`/`AuditCommands`' shape verbatim (D-10), with one
+// deliberate divergence: `ReceiptVerifyArgs` carries NO `public_key_file`
+// field. `AuditVerifyArgs` accepts one because the audit attestation bundle
+// supports asymmetric (signed) verification; the receipt chain is keyless
+// by construction (D-25 — see `crates/nono/src/receipt_chain.rs`'s module
+// doc) and third-party-verifiable receipts are explicitly deferred (D-09),
+// so there is no key file for this command to ever accept.
+//
+// No `#[cfg(target_os = "windows")]` gate anywhere in this block — the
+// command surface compiles on every target (D-18's
+// cross-platform-command-surface, Windows-only-data pattern, the same one
+// `AuditCommands` already follows): the underlying receipt data is simply
+// empty/absent on non-Windows.
+
+/// Arguments for `nono receipt` (D-10).
+#[derive(Parser, Debug)]
+#[command(disable_help_flag = true)]
+pub struct ReceiptArgs {
+    #[command(subcommand)]
+    pub command: ReceiptCommands,
+
+    /// Print help
+    #[arg(long, short = 'h', action = clap::ArgAction::Help, help_heading = "OPTIONS")]
+    pub help: Option<bool>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ReceiptCommands {
+    /// List every enforcement receipt segment on this host
+    List(ReceiptListArgs),
+    /// Show one session's enforcement receipt(s)
+    Show(ReceiptShowArgs),
+    /// Verify a session's receipt chain (fail-closed recompute-and-compare)
+    ///
+    /// Re-reads the session's receipt segment(s) from genesis, recomputes
+    /// each record's leaf hash and rolling chain head via the same keyless
+    /// SHA-256 construction the sink writer used
+    /// (`nono::hash_receipt_event`/`nono::hash_receipt_chain`, D-25), and
+    /// fail-closes if any commitment does not match. Tamper-evident only:
+    /// an edit is detectable — this is NOT a claim that only an authorized
+    /// party could have produced the receipt (D-25's keyless chain makes no
+    /// authorship claim; the sink's ACL, not the hash, is what bounds who
+    /// could write it).
+    Verify(ReceiptVerifyArgs),
+}
+
+#[derive(Parser, Debug)]
+#[command(disable_help_flag = true)]
+pub struct ReceiptListArgs {
+    /// Output as JSON
+    #[arg(long)]
+    pub json: bool,
+
+    /// Print help
+    #[arg(long, short = 'h', action = clap::ArgAction::Help, help_heading = "OPTIONS")]
+    pub help: Option<bool>,
+}
+
+#[derive(Parser, Debug)]
+#[command(disable_help_flag = true)]
+pub struct ReceiptShowArgs {
+    /// Session ID whose receipt(s) to show
+    pub session_id: String,
+
+    /// Output as JSON
+    #[arg(long)]
+    pub json: bool,
+
+    /// Print help
+    #[arg(long, short = 'h', action = clap::ArgAction::Help, help_heading = "OPTIONS")]
+    pub help: Option<bool>,
+}
+
+/// Arguments for `nono receipt verify <session-id>` (D-10/D-25). Deliberately
+/// has NO `public_key_file` field — see this section's module-level doc.
+#[derive(Parser, Debug)]
+#[command(disable_help_flag = true)]
+pub struct ReceiptVerifyArgs {
+    /// Session ID to verify
+    pub session_id: String,
+
+    /// Output as JSON
+    #[arg(long)]
+    pub json: bool,
+
+    /// Print help
+    #[arg(long, short = 'h', action = clap::ArgAction::Help, help_heading = "OPTIONS")]
+    pub help: Option<bool>,
+}
+
 /// Arguments for `nono session` (Plan 22-05b Task 2, upstream `4f9552ec`).
 /// Hosts `nono session cleanup` as the renamed entry point for the prune
 /// semantics. The inner `SessionCommands::Cleanup` reuses the existing
@@ -5776,6 +5894,8 @@ mod tests {
         "session",
         "rollback",
         "audit",
+        // Phase 118 Plan 09 (D-10): per-session enforcement receipts.
+        "receipt",
         "trust",
         "policy",
         "profile",
