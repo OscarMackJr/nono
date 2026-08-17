@@ -42,11 +42,11 @@ decisions:
   - "required_not_applicable_for_broker(entries, spawn_arm) takes the SAME (entries, spawn_arm) signature as required_layers_for_broker, not the plan's literal 0-arg/Vec-only interfaces text — AppContainerProfile's Broker-role classification genuinely differs between the two broker spawn arms (BrokerLaunch vs BrokerLaunchNoPty per CR-03.1), so a spawn-arm-agnostic function could not classify it correctly."
   - "broker_census gained an expected_app_container_sid parameter beyond the plan's literal 4-argument signature — without it, AppContainerProfile would classify Confirmed merely because SOME AppContainer SID was present, never verifying it is the SAME per-run SID broker_resume_gate itself requires. This would let the receipt claim a layer active more strongly than the gate's own security decision verified — the exact 'claims success while structurally incapable of reporting failure' anti-pattern named in 118-CONTEXT.md's pause-handoff framing."
   - "NONO_SESSION_ID (the existing house env-var convention documented in nono::supervisor::aipc_sdk and used by hook_runtime.rs/hook_runtime_windows.rs) is threaded to the broker's spawn environment for D-15's session-id correlation between nono.exe's own DirectCli receipt for broker.exe and the broker's own Broker receipt for the real confined grandchild — read 'audit-correlation only; accept empty', never fail-closed on absence."
-  - "Only 3 of the broker's 5 TerminateProcess branches are receipt-instrumented (required-layers-absent, gate-fail, resume-fail) plus the Ran write before ResumeThread. The two label-application failures (OpenProcessToken / apply_low_il_label_to_token, which occur BEFORE the wire contract is even read) are left uninstrumented — a documented, reasoned scope decision, not an oversight; see Deviations."
+  - "All 5 of the broker's TerminateProcess branches are now receipt-instrumented, closing an orchestrator-flagged RCPT-01 gap: the two label-application failures (OpenProcessToken / apply_low_il_label_to_token) that occur BEFORE the wire-contract env vars are read for gate purposes still emit a Refused receipt, using best-effort (never fail-closed) EARLY reads of the wire contract + session id and genuine read-only re-probes (probe_app_container_sid/probe_integrity_level open their own token handle internally, independent of the failed OpenProcessToken call in the first branch) — never fabricated statuses."
   - "A ResumeThread failure after a successful gate produces TWO appended receipts for the same session (Ran, then a correcting Refused) rather than one — SessionOutcome::Ran is written before ResumeThread per the plan's literal D-03 instruction, but Ran's own doc says it means 'was resumed'; if ResumeThread then fails, a second truthful Refused record is appended rather than leaving a false Ran record uncorrected. A consumer reads the LAST record per session_id as authoritative (D-15's append-only, per-writer segment design)."
 
 metrics:
-  duration: "~2h30m"
+  duration: "~3h10m"
   completed: 2026-08-17
 ---
 
@@ -165,6 +165,48 @@ unit tests) passing again unchanged post-revert.
     per-`LayerId` reachability proof — Task 1's partition test already proves that against the real
     compiled registry data, more reliably than a text scan could.
 
+**Gap closure (`c7a237ef`, orchestrator follow-up, post-Task-3)** — `feat(118-06): instrument the two
+pre-gate label-application refuse branches (RCPT-01 gap closure)`
+
+The orchestrator flagged that the two label-application failure branches inside `run()`'s
+`if is_app_container { .. }` block (`OpenProcessToken` failing, `apply_low_il_label_to_token`
+failing) were NOT receipt-instrumented — each terminates the suspended child and returns `Err`, i.e.
+each is a confined session that REFUSED, and RCPT-01 requires "every confined session emits a
+receipt." Closed by:
+
+- Hoisting best-effort (never fail-closed) reads of `NONO_BROKER_REQUIRED_LAYERS` (a SEPARATE,
+  `.unwrap_or_default()` read from the fail-closed one the gate still uses further down — this one is
+  for CENSUS purposes only and never affects the resume/terminate decision),
+  `NONO_BROKER_NOT_APPLICABLE_LAYERS`, `NONO_SESSION_ID`, and `pid` (`process_info.dwProcessId`) to
+  immediately after `child_process`/`child_thread` are wrapped — before the `if is_app_container`
+  block, so both early branches have real wire-contract data available.
+- At each branch: genuinely RE-PROBING (`nono::attestation::probe_app_container_sid`/
+  `probe_integrity_level`, which open their own token handle internally, independent of whichever
+  handle the failing branch itself was trying to open/label) rather than fabricating a status —
+  `broker_census` then classifies from these REAL probe results exactly as it does everywhere else in
+  this file, so a layer whose true state is unknown at that moment lands `Unconfirmed` (never a
+  fabricated `Confirmed`), per D-13's four-state floor and RCPT-03.
+- Building the receipt with `record_broker_receipt` — the SAME function the other 3 branches use,
+  which takes no error-string parameter at all, so the `GetLastError`/`apply_low_il_label_to_token`
+  error text can never reach the receipt (D-14 content-free) — and which already degrades VISIBLY on
+  any sink failure (`tracing::warn!`, D-04) rather than propagating an `Err`, so a receipt-write
+  problem can never mask or replace the branch's own `TerminateProcess` + `return Err(...)`
+  (unchanged, still the very next lines after the new `record_broker_receipt` call).
+- Removed the now-redundant later re-reads of `not_applicable_raw`/`session_id`/`pid` (they were
+  originally read a second time right before the fail-closed `NONO_BROKER_REQUIRED_LAYERS` gate read;
+  now read once, early, and reused).
+
+No new file was added; the change lives entirely in `crates/nono-shell-broker/src/main.rs`'s existing
+`run()` function. Verified: `cargo test -p nono-shell-broker` still reports **44 passed, 0 failed**
+(unchanged count — no NEW unit test was added for this gap closure, since the wiring inside these two
+branches is exercised the same way the other three branches' wiring already is: by code review plus
+the unaffected `broker_census`/`record_broker_receipt`/`broker_receipt_sink_dir` unit tests covering
+every constituent piece these branches now call — no existing branch in this file has a dedicated
+live-spawn-failure test either, since simulating a real `OpenProcessToken`/`apply_low_il_label_to_token`
+failure requires OS-level fault injection this crate's test harness does not have).
+`cargo fmt --all -- --check` clean; `cargo clippy -p nono-shell-broker --all-targets -- -D warnings -D
+clippy::unwrap_used` clean.
+
 ## Deviations from Plan
 
 ### Auto-fixed / Rule 2 (missing critical functionality)
@@ -222,18 +264,24 @@ unit tests) passing again unchanged post-revert.
   `crates/nono-shell-broker/src/main.rs`
 - **Commits:** `a5c06abb`, `70ebe6ee`
 
-### Scope decision (documented, not a deviation from a stated instruction)
+### Resolved (was a scope decision in the initial submission, closed on orchestrator follow-up)
 
-**5. Only 3 of 5 `TerminateProcess` branches are receipt-instrumented**
-- The plan's `<interfaces>` text says "`SessionOutcome::Refused` on each `TerminateProcess`
-  fail-closed branch." `run()` has 5 such branches. The 3 instrumented ones (required-layers-absent,
-  gate-fail, resume-fail) are the branches inside the documented "Plan 117-11: the broker's own
-  attestation gate" section — the D-03 write point this plan's interfaces block names explicitly. The
-  2 NOT instrumented (`OpenProcessToken` failure, `apply_low_il_label_to_token` failure) occur BEFORE
-  the wire contract is even read, structurally analogous to `CreateProcessW`/`CreateProcessAsUserW`
-  itself failing (also not instrumented) — no census-relevant data (env vars, probe results) has been
-  gathered yet at that point, and instrumenting them would require restructuring the label-application
-  block ahead of this plan's stated file scope. Named here as a residual, not silently assumed solved.
+**5. All 5 of 5 `TerminateProcess` branches are now receipt-instrumented**
+- The initial submission of this plan instrumented only 3 of `run()`'s 5 `TerminateProcess`
+  branches (required-layers-absent, gate-fail, resume-fail — the ones inside the documented "Plan
+  117-11: the broker's own attestation gate" section) and left the two label-application failures
+  (`OpenProcessToken`, `apply_low_il_label_to_token`) as a named, documented scope decision, reasoning
+  they occurred "before the wire contract is even read."
+- **Orchestrator correction:** that reasoning was wrong on the requirement, not just the framing —
+  both branches still terminate a confined suspended child and return `Err`, i.e. both are a confined
+  session that REFUSED, and RCPT-01 ("every confined session emits a receipt") makes no exception for
+  early-vs-late refusal. The wire contract being unread at that point in the ORIGINAL code order was a
+  self-imposed constraint (nothing prevents reading it earlier), not a structural one.
+- **Fix:** see "Gap closure" under Task 3 above — both branches now build a genuine, non-fabricated
+  census from hoisted early wire-contract reads + fresh read-only re-probes, and call the SAME
+  `record_broker_receipt` the other 3 branches use.
+- **Files modified:** `crates/nono-shell-broker/src/main.rs`
+- **Commit:** `c7a237ef`
 
 ## TDD Gate Compliance
 
@@ -280,6 +328,17 @@ silently claiming full compliance.
   `profile_cmd::tests::test_init_allowed_when_pack_has_same_short_name`, 3× `protected_paths::tests::*`)
   — zero regressions.
 
+**Re-verification after the RCPT-01 gap-closure commit (`c7a237ef`):**
+- `cargo check -p nono-shell-broker` — exit 0, no warnings.
+- `cargo test -p nono-shell-broker` — **44 passed**, 0 failed (unchanged count — see "Gap closure"
+  above for why no new test was added; `cargo test -p nono-shell-broker --test
+  broker_wire_contract_names` isolated re-run also **2 passed**, 0 failed).
+- `cargo test -p nono-sandbox-cli --bin nono exec_strategy::attestation` — **49 passed**, 0 failed
+  (unaffected by this round's `nono-shell-broker`-only changes).
+- `cargo fmt --all -- --check` — clean (after `cargo fmt --all` auto-applied formatting to the new
+  code).
+- `cargo clippy -p nono-shell-broker --all-targets -- -D warnings -D clippy::unwrap_used` — clean.
+
 ## Cross-Target Clippy Inventory (for Plan 118-10)
 
 | File | Gate(s) present | What this plan changed there |
@@ -305,6 +364,7 @@ FOUND: crates/nono-shell-broker/tests/broker_wire_contract_names.rs
 FOUND commit: a5c06abb
 FOUND commit: 70ebe6ee
 FOUND commit: a74ed575
+FOUND commit: c7a237ef
 ```
 
 ## Threat Flags
@@ -328,5 +388,5 @@ None. `broker_census`, `BrokerReceiptWriter`, `ensure_broker_receipt_sink_guarde
 `record_broker_receipt` are complete, functioning implementations, live-wired into `run()`'s real
 control flow (not deferred to a later plan, unlike 118-03/118-04's `build_enforcement_receipt`/
 `build_daemon_receipt`, which were assembly functions proven correct but not yet call-site-wired).
-The two uninstrumented `TerminateProcess` branches (Deviation 5) are a documented, reasoned scope
-boundary, not an unfinished stub.
+All 5 of `run()`'s `TerminateProcess` branches are receipt-instrumented as of the gap-closure commit
+(`c7a237ef`) — no remaining uninstrumented refuse path.
