@@ -2753,6 +2753,482 @@ mod windows_impl {
             );
         }
     }
+
+    /// Phase 118 Plan 04, Task 2 — drift guard between
+    /// `DAEMON_UNMODELLED_LAYER_EXPECTANCY`/`DAEMON_MODELLED_LAYER_IDS` and
+    /// `layer_registry.rs`'s own `(EntryPath::Daemon, ..)` expectancy
+    /// cells, plus the D-16 representability test and the daemon's own
+    /// D-14 sentinel round-trip (Test 4).
+    #[cfg(test)]
+    mod daemon_expectancy_cross_check {
+        use super::*;
+
+        // ── Discovery-based source scanner ──────────────────────────────
+        //
+        // `layer_registry.rs` uses ONLY `//`/`///` line comments (verified
+        // by grep before writing this scanner — no `/* */` block comments
+        // anywhere in the file), so stripping everything from the first
+        // `//` on each line to end-of-line removes every comment-embedded
+        // brace/keyword without disturbing real code structure. This is
+        // what makes the balanced-brace extraction below safe against a
+        // comment that happens to mention a struct literal in prose (the
+        // file has several, e.g. the `AppContainerProfile` row's own
+        // comment block).
+
+        /// Strips `//`-prefixed line comments from `source`, line by line.
+        fn strip_line_comments(source: &str) -> String {
+            source
+                .lines()
+                .map(|line| match line.find("//") {
+                    Some(idx) => &line[..idx],
+                    None => line,
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+
+        /// Returns the substring of `source` strictly BETWEEN the matching
+        /// `open`/`close` delimiters, given `open_pos` (the byte offset of
+        /// the opening delimiter itself). Operates on comment-stripped
+        /// text, so nested delimiters are counted correctly regardless of
+        /// what they represent (a `[` inside a `{ }` field, or vice versa).
+        fn balanced_body(source: &str, open_pos: usize, open: char, close: char) -> &str {
+            assert_eq!(
+                source[open_pos..].chars().next(),
+                Some(open),
+                "open_pos must point at the opening delimiter"
+            );
+            let mut depth: i32 = 0;
+            let mut i = open_pos;
+            loop {
+                let c = source[i..].chars().next().unwrap_or_else(|| {
+                    panic!("unterminated balanced region starting at {open_pos}")
+                });
+                if c == open {
+                    depth += 1;
+                } else if c == close {
+                    depth -= 1;
+                    if depth == 0 {
+                        return &source[open_pos + open.len_utf8()..i];
+                    }
+                }
+                i += c.len_utf8();
+            }
+        }
+
+        /// Resolves an expectancy identifier (a `const` name referenced via
+        /// `expectancy: &NAME`) to the raw text of its `ArmExpectancy { .. }`
+        /// literal body — following BOTH `const X: [ArmExpectancy; N] = Y;`
+        /// const-to-const aliases (e.g. `WFP_EGRESS_FILTERS_EXPECTANCY` ->
+        /// `DACL_PACKAGE_SID_SCOPED_EXPECTANCY`) and `const X = some_fn();`
+        /// function-call indirection (e.g. `ALL_DIRECT_CLI_ARMS_EXPECTANCY`
+        /// -> `all_direct_cli_arms_expectancy()`), since `layer_registry.rs`
+        /// uses both. `stripped` must already be comment-stripped.
+        fn resolve_expectancy_literal_text<'a>(
+            stripped: &'a str,
+            name: &str,
+            depth: u32,
+        ) -> Option<&'a str> {
+            if depth > 8 {
+                return None; // cycle guard
+            }
+            let const_marker = format!("const {name}:");
+            if let Some(marker_pos) = stripped.find(&const_marker) {
+                let eq_pos = stripped[marker_pos..].find('=')? + marker_pos;
+                let semi_pos = stripped[eq_pos..].find(';')? + eq_pos;
+                let rhs = &stripped[eq_pos + 1..semi_pos];
+                let rhs_trimmed = rhs.trim_start();
+                if rhs_trimmed.starts_with('[') {
+                    let bracket_offset_within_rhs = rhs.len() - rhs_trimmed.len();
+                    let abs_open = eq_pos + 1 + bracket_offset_within_rhs;
+                    return Some(balanced_body(stripped, abs_open, '[', ']'));
+                }
+                let ident: String = rhs_trimmed
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if ident.is_empty() || ident == name {
+                    return None;
+                }
+                return resolve_expectancy_literal_text(stripped, &ident, depth + 1);
+            }
+            let fn_marker = format!("fn {name}(");
+            if let Some(marker_pos) = stripped.find(&fn_marker) {
+                let brace_pos = stripped[marker_pos..].find('{')? + marker_pos;
+                let fn_body = balanced_body(stripped, brace_pos, '{', '}');
+                let bracket_rel = fn_body.find('[')?;
+                let abs_open = brace_pos + 1 + bracket_rel;
+                return Some(balanced_body(stripped, abs_open, '[', ']'));
+            }
+            None
+        }
+
+        /// `true` iff `body` (an `ArmExpectancy` literal's text) contains at
+        /// least one `(entry_path: EntryPath::Daemon, expected: true)` cell.
+        fn body_has_daemon_expected_true(body: &str) -> bool {
+            let marker = "entry_path: EntryPath::Daemon";
+            let mut search_from = 0usize;
+            while let Some(rel) = body[search_from..].find(marker) {
+                let pos = search_from + rel;
+                let window_end = (pos + 200).min(body.len());
+                let window = &body[pos..window_end];
+                let true_pos = window.find("expected: true");
+                let false_pos = window.find("expected: false");
+                let polarity = match (true_pos, false_pos) {
+                    (Some(t), Some(f)) => t < f,
+                    (Some(_), None) => true,
+                    (None, Some(_)) => false,
+                    (None, None) => panic!(
+                        "found `entry_path: EntryPath::Daemon` with no `expected:` field within \
+                         200 bytes of byte {pos} — ArmExpectancy literal shape changed, update \
+                         this scanner"
+                    ),
+                };
+                if polarity {
+                    return true;
+                }
+                search_from = pos + marker.len();
+            }
+            false
+        }
+
+        /// Extracts `(LayerId variant name, expectancy const name)` pairs,
+        /// one per `LayerRegistryEntry` in `REGISTRY_ENTRIES`, from
+        /// comment-stripped `stripped`.
+        fn registry_entry_expectancy_names(stripped: &str) -> Vec<(String, String)> {
+            fn extract_ident_after(text: &str, marker: &str) -> Option<String> {
+                let pos = text.find(marker)?;
+                let after = &text[pos + marker.len()..];
+                let ident: String = after
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if ident.is_empty() {
+                    None
+                } else {
+                    Some(ident)
+                }
+            }
+
+            // NOTE: the marker text itself contains a `[LayerRegistryEntry;
+            // N]` TYPE annotation, which has its own `[`/`]` pair — the
+            // array's VALUE literal's opening `[` is the one after the `=`,
+            // not the first `[` after the marker. Anchor on `=` first.
+            let decl_marker = "const REGISTRY_ENTRIES:";
+            let array_start = stripped.find(decl_marker).unwrap_or_else(|| {
+                panic!("REGISTRY_ENTRIES declaration must exist in the scanned source")
+            });
+            let eq_pos = stripped[array_start..]
+                .find('=')
+                .map(|rel| array_start + rel)
+                .unwrap_or_else(|| panic!("no '=' found after {decl_marker:?}"));
+            let open_bracket = stripped[eq_pos..]
+                .find('[')
+                .map(|rel| eq_pos + rel)
+                .unwrap_or_else(|| {
+                    panic!("no '[' found after '=' in the REGISTRY_ENTRIES declaration")
+                });
+            let array_body = balanced_body(stripped, open_bracket, '[', ']');
+
+            let mut pairs = Vec::new();
+            let entry_marker = "LayerRegistryEntry {";
+            let mut search_from = 0usize;
+            while let Some(rel) = array_body[search_from..].find(entry_marker) {
+                let entry_start = search_from + rel;
+                let open_brace = entry_start + entry_marker.len() - 1;
+                let entry_body = balanced_body(array_body, open_brace, '{', '}');
+
+                let id = extract_ident_after(entry_body, "id: LayerId::");
+                let expectancy = extract_ident_after(entry_body, "expectancy: &");
+                if let (Some(id), Some(expectancy)) = (id, expectancy) {
+                    pairs.push((id, expectancy));
+                }
+                search_from = open_brace + 1;
+            }
+            pairs
+        }
+
+        /// The full discovery pipeline: every `LayerId` (by variant name)
+        /// whose registry row's expectancy carries a `(EntryPath::Daemon,
+        /// expected: true)` cell, per `source`'s CURRENT text — never a
+        /// hardcoded `LayerId`/const-name list.
+        fn layer_ids_with_daemon_expected_true(source: &str) -> Vec<String> {
+            let stripped = strip_line_comments(source);
+            registry_entry_expectancy_names(&stripped)
+                .into_iter()
+                .filter(|(_, const_name)| {
+                    resolve_expectancy_literal_text(&stripped, const_name, 0)
+                        .map(body_has_daemon_expected_true)
+                        .unwrap_or(false)
+                })
+                .map(|(layer_id, _)| layer_id)
+                .collect()
+        }
+
+        /// Test 1 (drift guard): every `LayerId` the registry expects on
+        /// `(EntryPath::Daemon, ..)` must have SOME daemon-local
+        /// classification — either modelled directly
+        /// (`DAEMON_MODELLED_LAYER_IDS`) or classified in
+        /// `DAEMON_UNMODELLED_LAYER_EXPECTANCY`. A new `(EntryPath::Daemon,
+        /// expected: true)` cell added to `layer_registry.rs` without a
+        /// matching update on either side of this file fails here.
+        #[test]
+        fn every_daemon_expected_registry_row_has_a_matching_daemon_local_classification() {
+            let source = include_str!("../exec_strategy_windows/layer_registry.rs");
+            let discovered = layer_ids_with_daemon_expected_true(source);
+            assert!(
+                !discovered.is_empty(),
+                "the discovery scan found ZERO (EntryPath::Daemon, expected: true) cells in the \
+                 real registry — this is almost certainly a scanner bug (the real registry has \
+                 at least AppContainerProfile/JobObjectContainment/DaclPackageSidGrant/\
+                 DaclAncestorTraverse/WfpEgressFilters/MinifilterAbsence), not a genuinely empty \
+                 registry; do not let this test pass vacuously"
+            );
+            for layer_id_name in &discovered {
+                let is_modelled = DAEMON_MODELLED_LAYER_IDS
+                    .iter()
+                    .any(|id| format!("{id:?}") == *layer_id_name);
+                let is_classified_unmodelled = DAEMON_UNMODELLED_LAYER_EXPECTANCY
+                    .iter()
+                    .any(|(id, _)| format!("{id:?}") == *layer_id_name);
+                assert!(
+                    is_modelled || is_classified_unmodelled,
+                    "layer_registry.rs declares (EntryPath::Daemon, expected: true) for \
+                     LayerId::{layer_id_name}, but no daemon-local classification exists for it \
+                     — add it to DAEMON_UNMODELLED_LAYER_EXPECTANCY (or model it in \
+                     daemon_attest_and_decide/daemon_census_rows) before merging"
+                );
+            }
+        }
+
+        /// D-21/ADR-65 (Phase 117-33): `MinifilterAbsence` MUST classify
+        /// `NotApplicable`, never `Unconfirmed` — it is a structural-absence
+        /// row (no minifilter exists to probe against), not a probe that can
+        /// fail. Pinned as its own assertion, independent of Test 1's
+        /// generic "some classification exists" check, so a future edit
+        /// that reclassifies this one row specifically fails loudly here.
+        #[test]
+        fn minifilter_absence_classifies_not_applicable_never_unconfirmed() {
+            use nono::attestation::LayerAttestationStatus;
+
+            let status = DAEMON_UNMODELLED_LAYER_EXPECTANCY
+                .iter()
+                .find(|(id, _)| *id == nono::LayerId::MinifilterAbsence)
+                .map(|(_, status)| *status)
+                .expect("MinifilterAbsence must have a daemon-local classification");
+            assert_eq!(
+                status,
+                LayerAttestationStatus::NotApplicable,
+                "D-21/ADR-65: MinifilterAbsence must classify NotApplicable, never Unconfirmed \
+                 — got {status:?}"
+            );
+        }
+
+        /// Test 2 (perturbation proof): a synthetic, registry-shaped source
+        /// string naming a HYPOTHETICAL future `LayerId`
+        /// (`HypotheticalFutureLayer` — deliberately not a real variant; the
+        /// scanner is pure text matching and does not care whether the name
+        /// is a real `LayerId`) with NO daemon-local table entry must be
+        /// reported by the SAME discovery function used above — proving the
+        /// guard the previous test relies on can actually fail, not merely
+        /// pass by construction. Operates on an in-test synthetic string
+        /// only, never a real file mutation.
+        ///
+        /// A REAL `LayerId` cannot be used for this perturbation: all 13
+        /// real variants are, by design, covered by either
+        /// `DAEMON_MODELLED_LAYER_IDS` or `DAEMON_UNMODELLED_LAYER_EXPECTANCY`
+        /// today (that IS the property the previous test asserts) — there is
+        /// no real "gap" to point at. What this test proves instead is that
+        /// the discovery scan's OUTPUT, fed through the identical
+        /// classification check the production test uses, would correctly
+        /// flag a genuinely uncovered name if the registry ever grew one.
+        #[test]
+        fn synthetic_unrecognised_daemon_cell_is_caught_by_the_discovery_scan() {
+            let synthetic = r#"
+const SYNTHETIC_EXPECTANCY: [ArmExpectancy; 1] = [
+    ArmExpectancy {
+        entry_path: EntryPath::Daemon,
+        token_arm: None,
+        expected: true,
+    },
+];
+const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
+    LayerRegistryEntry {
+        id: LayerId::HypotheticalFutureLayer,
+        name: "synthetic-row",
+        call_sites: &[],
+        expectancy: &SYNTHETIC_EXPECTANCY,
+        outcome: ContractOutcome::Abort,
+        probe: ProbeKind::LiveTokenOrJobQuery,
+    },
+];
+"#;
+            let discovered = layer_ids_with_daemon_expected_true(synthetic);
+            assert!(
+                discovered.contains(&"HypotheticalFutureLayer".to_string()),
+                "the discovery scan must find the synthetic (EntryPath::Daemon, expected: true) \
+                 cell attached to HypotheticalFutureLayer: {discovered:?}"
+            );
+
+            // No real LayerId is named "HypotheticalFutureLayer", so neither
+            // table can classify it — this proves the PRODUCTION assertion
+            // in `every_daemon_expected_registry_row_has_a_matching_daemon_local_classification`
+            // would panic if a real registry cell named an uncovered
+            // `LayerId` this way, i.e. the guard this test protects can
+            // genuinely fail.
+            let is_modelled = DAEMON_MODELLED_LAYER_IDS
+                .iter()
+                .any(|id| format!("{id:?}") == "HypotheticalFutureLayer");
+            let is_classified_unmodelled = DAEMON_UNMODELLED_LAYER_EXPECTANCY
+                .iter()
+                .any(|(id, _)| format!("{id:?}") == "HypotheticalFutureLayer");
+            assert!(
+                !is_modelled && !is_classified_unmodelled,
+                "perturbation proof invalid: HypotheticalFutureLayer must NOT already be \
+                 classified as daemon-expected, or this test cannot prove the guard can fail"
+            );
+        }
+
+        /// Sanity check that the resolver's alias-following actually
+        /// matters: `WfpEgressFilters`'s registry row references
+        /// `WFP_EGRESS_FILTERS_EXPECTANCY`, whose OWN definition is an alias
+        /// to `DACL_PACKAGE_SID_SCOPED_EXPECTANCY` (`= DACL_PACKAGE_SID_SCOPED_EXPECTANCY;`),
+        /// not a literal — a resolver that stopped at the first `const`
+        /// declaration without following the alias would silently miss it.
+        #[test]
+        fn resolver_follows_a_const_to_const_alias_not_just_direct_literals() {
+            let source = include_str!("../exec_strategy_windows/layer_registry.rs");
+            let discovered = layer_ids_with_daemon_expected_true(source);
+            assert!(
+                discovered.contains(&"WfpEgressFilters".to_string()),
+                "WfpEgressFilters is expected at (EntryPath::Daemon, None) via an ALIASED \
+                 expectancy const — if this assertion fails, the resolver stopped following the \
+                 alias chain: {discovered:?}"
+            );
+        }
+
+        /// Test 3 (D-16 triage): a daemon session whose ancestor-traverse
+        /// ACE was never applied (WR-06: under-grants reach, never widens
+        /// confinement, so the decision does not abort) must still be able
+        /// to PRODUCE a receipt whose `DaclAncestorTraverse` row reads
+        /// `Unconfirmed` while the accompanying `outcome` is `Ran` — the
+        /// exact "Unconfirmed-on-Proceed" state D-16 requires the receipt be
+        /// ABLE to show. This plan does not decide whether any REAL session
+        /// currently reaches it; that is a later triage question (D-16's own
+        /// wording).
+        #[test]
+        fn unconfirmed_on_proceed_is_representable_in_a_daemon_receipt() {
+            use nono::attestation::LayerAttestationStatus;
+
+            let app_container_confirmed = true;
+            let job_confirmed = true;
+            let network_scoping_required = false;
+            let wfp_filters_installed = false;
+            let dacl_guard_applied = true;
+            let ancestor_traverse_applied = false; // the row under test
+
+            let decision = daemon_decision_from_booleans(
+                app_container_confirmed,
+                job_confirmed,
+                network_scoping_required,
+                wfp_filters_installed,
+                dacl_guard_applied,
+                ancestor_traverse_applied,
+            );
+            assert!(
+                matches!(decision, DaemonAttestationDecision::Proceed),
+                "WR-06: an absent ancestor traverse must not abort, got {decision:?}"
+            );
+
+            let census = daemon_census_rows(
+                app_container_confirmed,
+                job_confirmed,
+                network_scoping_required,
+                wfp_filters_installed,
+                dacl_guard_applied,
+                ancestor_traverse_applied,
+            );
+            let receipt = build_daemon_receipt(
+                census,
+                "20260816-000000-1".to_string(),
+                4242,
+                nono::SessionOutcome::Ran,
+            );
+
+            assert_eq!(receipt.layers.len(), 13);
+            assert_eq!(receipt.outcome, nono::SessionOutcome::Ran);
+
+            let ancestor_row = receipt
+                .layers
+                .iter()
+                .find(|row| row.id == nono::LayerId::DaclAncestorTraverse)
+                .expect("DaclAncestorTraverse row must be present in a 13-row receipt");
+            assert_eq!(
+                ancestor_row.status,
+                LayerAttestationStatus::Unconfirmed,
+                "D-16: an absent ancestor-traverse grant must read Unconfirmed even though the \
+                 decision is Proceed — the receipt is a record, not a decision"
+            );
+
+            // Must not crash or panic on serialization either.
+            serde_json::to_string(&receipt).expect("Unconfirmed-on-Proceed receipt must serialize");
+        }
+
+        /// Test 4 (D-14 half 2, daemon producer, sentinel round-trip): the
+        /// daemon's OWN data-flow proof that `expected_package_sid` (this
+        /// arm's closest analog to the CLI's `expected_session_sid`
+        /// sentinel-injection point — see this plan's `<interfaces>`) never
+        /// reaches a serialized receipt. Runs the FULL daemon pipeline
+        /// (`daemon_attest_and_decide` -> `daemon_census_rows` ->
+        /// `build_daemon_receipt`) with the sentinel seeded into
+        /// `expected_package_sid`.
+        #[test]
+        fn sentinel_seeded_expected_package_sid_never_leaks_into_the_serialized_daemon_receipt() {
+            let sentinel = r"C:\Users\SENTINEL-DAEMON-9c2e\secret-project";
+
+            let job: HANDLE = unsafe {
+                // SAFETY: CreateJobObjectW with null name + null security
+                // attributes is documented to succeed unless out-of-memory.
+                CreateJobObjectW(std::ptr::null(), std::ptr::null())
+            };
+            assert!(!job.is_null(), "CreateJobObjectW failed");
+
+            // The property under test — the sentinel never appears in the
+            // output — holds regardless of whether the comparison it feeds
+            // succeeds or fails, so a null process handle (guaranteed to
+            // fail the comparison) is sufficient here.
+            let decision = daemon_attest_and_decide(
+                std::ptr::null_mut(),
+                job,
+                sentinel,
+                true,
+                false,
+                false,
+                true,
+            );
+            let outcome = match decision {
+                DaemonAttestationDecision::Proceed => nono::SessionOutcome::Ran,
+                DaemonAttestationDecision::Abort { .. } => nono::SessionOutcome::Refused,
+            };
+
+            // SAFETY: `job` is a valid HANDLE this test owns.
+            unsafe { CloseHandle(job) };
+
+            let census = daemon_census_rows(false, false, false, false, true, true);
+            let receipt =
+                build_daemon_receipt(census, "20260816-000003-4".to_string(), 4545, outcome);
+
+            let json = serde_json::to_string(&receipt).expect("receipt must serialize");
+            assert!(
+                !json.contains("SENTINEL-DAEMON-9c2e"),
+                "sentinel leaked into the serialized daemon receipt: {json}"
+            );
+            assert!(
+                !json.contains("secret-project"),
+                "sentinel path fragment leaked into the serialized daemon receipt: {json}"
+            );
+        }
+    }
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
