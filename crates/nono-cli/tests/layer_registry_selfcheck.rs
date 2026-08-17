@@ -64,6 +64,23 @@ fn read_layer_registry() -> String {
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()))
 }
 
+/// Phase 118 Plan 03 (D-12): `LayerId`'s canonical `ALL` declaration lives in
+/// `crates/nono/src/receipt.rs` now, not in `layer_registry.rs` (which
+/// re-exports the type and resolves its own `ALL` directly to
+/// `nono::LayerId::ALL` rather than a second, hand-maintained array — see
+/// that file's own doc comment on the `ALL` const). This reads core's copy,
+/// the one genuine source of truth `extract_all_layer_id_names` below
+/// parses.
+fn read_core_layer_id_module() -> String {
+    let path = workspace_root()
+        .join("crates")
+        .join("nono")
+        .join("src")
+        .join("receipt.rs");
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()))
+}
+
 fn read_spec() -> String {
     let path = workspace_root()
         .join("proj")
@@ -491,21 +508,24 @@ fn symbol_citation_extraction_finds_the_eight_converted_citations() {
     );
 }
 
-/// Extract the identifier list inside `layer_registry.rs`'s
-/// `pub(crate) const ALL: &[LayerId] = &[ ... ];` block — the flat,
-/// declaration-order list of every current `LayerId` variant name.
+/// Extract the identifier list inside `crates/nono/src/receipt.rs`'s
+/// `pub const ALL: &'static [LayerId] = &[ ... ];` block (Phase 118 Plan 03,
+/// D-12: promoted from `layer_registry.rs`, whose own `ALL` now resolves
+/// directly to `nono::LayerId::ALL` rather than duplicating this array — see
+/// `read_core_layer_id_module`'s doc comment) — the flat, declaration-order
+/// list of every current `LayerId` variant name.
 fn extract_all_layer_id_names(src: &str) -> Vec<String> {
-    let marker = "const ALL: &[LayerId] = &[";
+    let marker = "pub const ALL: &'static [LayerId] = &[";
     let start = src.find(marker).unwrap_or_else(|| {
         panic!(
-            "expected to find `{marker}` in layer_registry.rs — the ALL const was renamed, \
-             removed, or reformatted; update this test's marker to match"
+            "expected to find `{marker}` in crates/nono/src/receipt.rs — the ALL const was \
+             renamed, removed, or reformatted; update this test's marker to match"
         )
     });
     let after_marker = &src[start + marker.len()..];
-    let end = after_marker
-        .find("];")
-        .unwrap_or_else(|| panic!("expected a closing `];` after `{marker}` in layer_registry.rs"));
+    let end = after_marker.find("];").unwrap_or_else(|| {
+        panic!("expected a closing `];` after `{marker}` in crates/nono/src/receipt.rs")
+    });
     let body = &after_marker[..end];
 
     body.split(',')
@@ -525,14 +545,14 @@ fn extract_all_layer_id_names(src: &str) -> Vec<String> {
 /// corresponding SPEC row fails here, not in a human review.
 #[test]
 fn spec_matches_registry() {
-    let registry_src = read_layer_registry();
+    let registry_src = read_core_layer_id_module();
     let spec_text = read_spec();
 
     let variant_names = extract_all_layer_id_names(&registry_src);
 
     assert!(
         variant_names.len() >= 13,
-        "expected at least 13 LayerId variants in layer_registry.rs's ALL const \
+        "expected at least 13 LayerId variants in crates/nono/src/receipt.rs's ALL const \
          (the 13-row Phase 117 Plan 01 inventory), found {}: {variant_names:?}",
         variant_names.len()
     );

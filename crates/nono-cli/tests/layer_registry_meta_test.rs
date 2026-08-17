@@ -16,9 +16,12 @@
 //! Three tests, all discovery-based (Phase 115 V-01 lesson: "a test that
 //! names its targets is blind by construction" — none of these hardcode the
 //! 13 `LayerId` names themselves; all three read `LayerId::ALL` fresh out of
-//! `layer_registry.rs`'s source text on every run, following
-//! `layer_registry_selfcheck.rs`'s own established `CARGO_MANIFEST_DIR` +
-//! `std::fs::read_to_string` house pattern — no `include_str!`, no `regex`):
+//! `crates/nono/src/receipt.rs`'s source text on every run (Phase 118 Plan
+//! 03, D-12: promoted from `layer_registry.rs`, whose own `ALL` now resolves
+//! directly to `nono::LayerId::ALL` instead of duplicating the array),
+//! following `layer_registry_selfcheck.rs`'s own established
+//! `CARGO_MANIFEST_DIR` + `std::fs::read_to_string` house pattern — no
+//! `include_str!`, no `regex`):
 //!
 //! - `every_registry_row_has_a_test`: every `LayerId` NOT on the
 //!   `MANUALLY_VERIFIED` allow-list below must have a
@@ -63,11 +66,19 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn read_layer_registry() -> String {
-    let path = manifest_dir()
+/// Phase 118 Plan 03 (D-12): `LayerId`'s canonical `ALL` declaration lives in
+/// `crates/nono/src/receipt.rs` now, not in `layer_registry.rs` (which
+/// re-exports the type and resolves its own `ALL` directly to
+/// `nono::LayerId::ALL` rather than a second, hand-maintained array — see
+/// that file's own doc comment on the `ALL` const). This reads core's copy,
+/// the one genuine source of truth `extract_all_layer_id_names` below
+/// parses.
+fn read_core_layer_id_module() -> String {
+    let path = workspace_root()
+        .join("crates")
+        .join("nono")
         .join("src")
-        .join("exec_strategy_windows")
-        .join("layer_registry.rs");
+        .join("receipt.rs");
     std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()))
 }
@@ -88,24 +99,27 @@ fn read_spec() -> String {
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()))
 }
 
-/// Extracts the identifier list inside `layer_registry.rs`'s
-/// `pub(crate) const ALL: &[LayerId] = &[ ... ];` block, mirroring
+/// Extracts the identifier list inside `crates/nono/src/receipt.rs`'s
+/// `pub const ALL: &'static [LayerId] = &[ ... ];` block (Phase 118 Plan 03,
+/// D-12: promoted from `layer_registry.rs`, whose own `ALL` now resolves
+/// directly to `nono::LayerId::ALL` rather than duplicating this array —
+/// see `read_core_layer_id_module`'s doc comment). Mirrors
 /// `layer_registry_selfcheck.rs::extract_all_layer_id_names` exactly (kept
 /// as a separate copy per that file's own house convention: each
 /// `tests/*.rs` file is a SEPARATE compilation unit and cannot import from a
 /// sibling integration-test file).
 fn extract_all_layer_id_names(src: &str) -> Vec<String> {
-    let marker = "const ALL: &[LayerId] = &[";
+    let marker = "pub const ALL: &'static [LayerId] = &[";
     let start = src.find(marker).unwrap_or_else(|| {
         panic!(
-            "expected to find `{marker}` in layer_registry.rs — the ALL const was renamed, \
-             removed, or reformatted; update this test's marker to match"
+            "expected to find `{marker}` in crates/nono/src/receipt.rs — the ALL const was \
+             renamed, removed, or reformatted; update this test's marker to match"
         )
     });
     let after_marker = &src[start + marker.len()..];
-    let end = after_marker
-        .find("];")
-        .unwrap_or_else(|| panic!("expected a closing `];` after `{marker}` in layer_registry.rs"));
+    let end = after_marker.find("];").unwrap_or_else(|| {
+        panic!("expected a closing `];` after `{marker}` in crates/nono/src/receipt.rs")
+    });
     let body = &after_marker[..end];
 
     body.split(',')
@@ -317,7 +331,7 @@ fn contains_fn_exact(src: &str, fn_name: &str) -> bool {
 /// function (or a `MANUALLY_VERIFIED`/`ALSO_AUTOMATED` entry) fails here.
 #[test]
 fn every_registry_row_has_a_test() {
-    let registry_src = read_layer_registry();
+    let registry_src = read_core_layer_id_module();
     let variant_names = extract_all_layer_id_names(&registry_src);
     assert!(
         variant_names.len() >= 13,
@@ -381,6 +395,98 @@ fn every_registry_row_has_a_test() {
     );
 }
 
+/// Phase 118 Plan 03, Task 2 (D-01 census-completeness drift guard,
+/// SOURCE-LEVEL half): `attestation.rs::census_from_entries` must stay a
+/// non-early-returning, registry-driven pass. The RUNTIME half of this
+/// proof already lives inline in `attestation.rs`'s own `#[cfg(test)]
+/// mod tests` (`nono-cli` has no `[lib]` target, so this `tests/*.rs` file
+/// cannot call the `pub(crate)` function directly — see this plan's
+/// `<interfaces>` block): its
+/// `census_from_entries_returns_all_13_rows_even_when_the_first_row_would_abort`
+/// test asserts `census_from_entries(layer_registry::all_entries(),
+/// &input).len() == 13` against the REAL, Windows-populated registry, for
+/// an input that makes `decide_from_entries` abort at the very first row.
+///
+/// This test complements that runtime proof with what a runtime call
+/// cannot check from outside the crate: `census_from_entries`'s own
+/// function body, read fresh from `attestation.rs`'s source text on every
+/// run (discovery-based, Phase 115 V-01 lesson), must contain no `return`
+/// keyword (the exact early-return shape `decide_from_entries` uses, and
+/// `census_from_entries` must NOT — D-01: a full 13-row census on every
+/// session, never stopping at the first failure) and must iterate the
+/// `entries` parameter directly (registry-driven), not a hardcoded
+/// per-`LayerId` match — so a future edit that reintroduces an early
+/// return, or that hardcodes the loop instead of iterating the registry,
+/// fails here even for a change that would not alter the CURRENT
+/// registry's row count.
+///
+/// The REGISTRY side of exhaustiveness (a 14th `LayerId` variant added
+/// without a corresponding `REGISTRY_ENTRIES` row) is ALREADY covered by
+/// `layer_registry.rs`'s pre-existing `all_entries_covers_every_layer_id`
+/// test — this test does not duplicate that guard, only what is NET NEW:
+/// proof that the census PASS ITSELF (not just the registry) stays
+/// exhaustive.
+#[test]
+fn census_from_entries_has_no_early_return_and_is_registry_driven() {
+    let path = manifest_dir()
+        .join("src")
+        .join("exec_strategy_windows")
+        .join("attestation.rs");
+    let src = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+
+    let marker = "fn census_from_entries(";
+    let sig_start = src.find(marker).unwrap_or_else(|| {
+        panic!(
+            "expected to find `{marker}` in attestation.rs — census_from_entries was renamed \
+             or removed; update this test's marker to match"
+        )
+    });
+
+    let body_open_rel = src[sig_start..]
+        .find('{')
+        .unwrap_or_else(|| panic!("expected an opening `{{` after `{marker}` in attestation.rs"));
+    let body_start = sig_start + body_open_rel + 1;
+
+    // Brace-depth walk to find the MATCHING closing brace, not just the
+    // first `}` (the function body itself contains nested `{ ... }`
+    // blocks — the `LayerReceiptRow { .. }` struct literal).
+    let mut depth: i32 = 1;
+    let mut body_end = None;
+    for (i, ch) in src[body_start..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    body_end = Some(body_start + i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let body_end = body_end.unwrap_or_else(|| {
+        panic!("failed to find the matching closing brace for census_from_entries's body")
+    });
+    let body = &src[body_start..body_end];
+
+    assert!(
+        !body.contains("return"),
+        "census_from_entries's body contains a `return` keyword — this is the exact \
+         early-return shape decide_from_entries uses, and census_from_entries must NOT use it \
+         (D-01: a full 13-row census on every session, never stopping at the first failure). \
+         Body:\n{body}"
+    );
+    assert!(
+        body.contains("for entry in entries"),
+        "census_from_entries's body does not appear to iterate its `entries` parameter \
+         directly — it must be registry-driven (a loop over `entries`), not a hardcoded \
+         per-LayerId match, so a 14th LayerId variant added to the registry is automatically \
+         covered without a corresponding code change here. Body:\n{body}"
+    );
+}
+
 /// Plan 18 (T-117-18-01): every `ALSO_AUTOMATED` entry's cited file must
 /// exist and must contain its cited function name, checked fresh from disk
 /// on every run. Without this test, `ALSO_AUTOMATED` would be a second,
@@ -435,7 +541,7 @@ fn also_automated_entries_are_non_vacuous() {
 /// genuinely-uncovered row hide inside a correct-looking total.
 #[test]
 fn coverage_split_accounts_for_every_layer_id() {
-    let registry_src = read_layer_registry();
+    let registry_src = read_core_layer_id_module();
     let all = extract_all_layer_id_names(&registry_src);
 
     // Count DEFINITIONS, not mentions: the module doc names the convention
@@ -667,7 +773,7 @@ fn word_occurrences(haystack: &str, word: &str) -> Vec<usize> {
 /// does not overclaim this gate's reach.
 #[test]
 fn module_doc_assigns_each_claimed_row_to_the_list_it_is_on() {
-    let registry_src = read_layer_registry();
+    let registry_src = read_core_layer_id_module();
     let row_names = extract_all_layer_id_names(&registry_src);
     assert!(
         row_names.len() >= 13,
