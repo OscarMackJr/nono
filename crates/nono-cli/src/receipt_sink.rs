@@ -252,7 +252,14 @@ pub struct ReceiptWriter {
 /// D-05's opaque, never-path-derived identifier — this is defense in depth
 /// (CLAUDE.md's path-security rule), not a claim that a malicious
 /// `session_id` is expected in practice.
-fn validate_session_id_for_filename(session_id: &str) -> Result<()> {
+///
+/// `pub(crate)` (not private): Plan 118-09's `receipt_commands.rs` reuses
+/// this SAME check for the read-side `nono receipt show`/`verify`
+/// `session_id` CLI argument, rather than re-deriving an independent
+/// filename-safety rule that could drift from this one — a CLI-provided
+/// `session_id` is exactly as untrusted as a supervisor-generated one from
+/// this module's own path-security standpoint.
+pub(crate) fn validate_session_id_for_filename(session_id: &str) -> Result<()> {
     if session_id.is_empty()
         || !session_id
             .chars()
@@ -263,6 +270,23 @@ fn validate_session_id_for_filename(session_id: &str) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// Compute (without any I/O) the sink file path for `session_id` under
+/// `sink_dir`, validating `session_id` is filename-safe first. Pure and
+/// side-effect-free — unlike [`ReceiptWriter::new`], never creates the file.
+///
+/// `pub(crate)`: shared by [`ReceiptWriter::new`] (the write side, below)
+/// and `receipt_commands.rs` (Plan 118-09's read side, D-10), so both agree
+/// on the exact `<session_id>.jsonl` naming convention from ONE place
+/// instead of two independently-maintained copies that could drift.
+///
+/// # Errors
+///
+/// Returns `Err` if `session_id` is not filename-safe.
+pub(crate) fn session_file_path(session_id: &str, sink_dir: &Path) -> Result<PathBuf> {
+    validate_session_id_for_filename(session_id)?;
+    Ok(sink_dir.join(format!("{session_id}.jsonl")))
 }
 
 impl ReceiptWriter {
@@ -278,8 +302,7 @@ impl ReceiptWriter {
     /// Returns `Err` if `session_id` is not filename-safe, or if the sink
     /// file cannot be created/opened.
     pub fn new(session_id: String, sink_dir: &Path) -> Result<Self> {
-        validate_session_id_for_filename(&session_id)?;
-        let file_path = sink_dir.join(format!("{session_id}.jsonl"));
+        let file_path = session_file_path(&session_id, sink_dir)?;
         OpenOptions::new()
             .create(true)
             .append(true)

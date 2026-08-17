@@ -94,6 +94,11 @@ mod pty_proxy;
 #[path = "pty_proxy_windows.rs"]
 mod pty_proxy;
 mod query_ext;
+// Phase 118 Plan 09: `nono receipt list|show|verify` (D-10) — the read side
+// of the receipt sink(s). Cross-platform command surface, NOT gated
+// (D-18's pattern: the clap definitions and this module compile everywhere;
+// the underlying receipt data is empty/absent on non-Windows).
+mod receipt_commands;
 // Phase 118 Plan 05: operator-ACL'd receipt sink (D-06/D-08), shared plumbing
 // for `nono.exe` and `nono-agentd.exe` (via a #[path] include in
 // bin/nono-agentd.rs). Windows-only (D-18): every FFI call it makes

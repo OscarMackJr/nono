@@ -560,6 +560,9 @@ fn cli_verbosity(cli: &Cli) -> u8 {
         | Commands::Rollback(_)
         | Commands::Trust(_)
         | Commands::Audit(_)
+        // Phase 118 Plan 09 (D-10): receipt commands have no verbose flag,
+        // matching the Audit family's own shape immediately above.
+        | Commands::Receipt(_)
         | Commands::Ps(_)
         | Commands::Stop(_)
         | Commands::Detach(_)

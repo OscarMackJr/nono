@@ -14,6 +14,7 @@ use crate::output;
 use crate::package_cmd;
 use crate::profile_cmd;
 use crate::proxy_command;
+use crate::receipt_commands;
 use crate::rollback_commands;
 use crate::session_commands;
 use crate::setup;
@@ -109,6 +110,12 @@ fn dispatch_command(
         Commands::Audit(args) => {
             run_command_with_update(update_handle, silent, || audit_commands::run_audit(args))
         }
+        // Phase 118 Plan 09 (D-10): `nono receipt list|show|verify` — a
+        // separate command family from `nono audit`, its own chain domain
+        // (D-11 amended by D-25).
+        Commands::Receipt(args) => run_command_with_update(update_handle, silent, || {
+            receipt_commands::run_receipt(args)
+        }),
         Commands::Ps(args) => {
             run_command_with_update(update_handle, silent, || session_commands::run_ps(&args))
         }
