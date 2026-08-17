@@ -199,57 +199,20 @@
 /// composition confinement model, plus the deliberate structural-absence
 /// row (`MinifilterAbsence`, ADR-65/D-33). D-01: this enum, not the
 /// `proj/` SPEC, is the source of truth — the SPEC is generated from or
-/// drift-checked against `ALL` (Task 3) and the registry data below.
+/// drift-checked against `ALL` and the registry data below.
 ///
-/// D-11: platform-neutral declaration (no `#[cfg]` here) so this type
-/// compiles and is usable (docs, drift tests, Phase 118's receipt type)
-/// on every host; only the *population* (`all_entries`, Task 3) is
-/// `#[cfg(target_os = "windows")]`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LayerId {
-    /// WRITE_RESTRICTED token + per-session synthetic restricting SID.
-    RestrictedToken,
-    /// NO_WRITE_UP (± NO_READ_UP/NO_EXECUTE_UP) mandatory-label ACE on
-    /// every compiled filesystem-policy path.
-    MandatoryIntegrityLabel,
-    /// Per-run AppContainer profile + derived package SID applied to the
-    /// confined child's token at spawn time.
-    AppContainerProfile,
-    /// DACL grant of the synthetic per-session SID on writable filesystem
-    /// grants — the `WriteRestricted`-arm double-check companion to
-    /// `RestrictedToken`.
-    DaclSessionSidGrant,
-    /// DACL grant of the per-run AppContainer package SID on writable
-    /// filesystem grants.
-    DaclPackageSidGrant,
-    /// DACL grant of `FILE_TRAVERSE` to the package SID on user-owned
-    /// ancestors of the confined cwd.
-    DaclAncestorTraverse,
-    /// DACL grant of `FILE_READ_ATTRIBUTES` to the package SID on
-    /// user-owned ancestors of the resolved binary / workspace chains.
-    DaclAncestorReadAttrs,
-    /// Session/package-SID-scoped WFP `ALE_USER_ID` allow-filter egress
-    /// enforcement, installed via the elevated `nono-wfp-service`.
-    WfpEgressFilters,
-    /// Program-path-scoped `netsh advfirewall` block-rule egress
-    /// enforcement — the legacy/fallback network backend, distinct from
-    /// WFP (SC4-3, resolved above).
-    FirewallRulesEgress,
-    /// The deliberate structural-absence row: no production minifilter
-    /// exists in this tree (ADR-65/D-33). Per-file read policy within one
-    /// directory is explicitly not claimed.
-    MinifilterAbsence,
-    /// Job Object assignment (kill-group + `--timeout` enforcement) on the
-    /// suspended child, with a deny-DACL on the job object itself.
-    JobObjectContainment,
-    /// Authenticode signature comparison between `nono.exe` and the
-    /// sibling `nono-shell-broker.exe` before spawning the broker.
-    BrokerAuthenticodeTrustGate,
-    /// Pre-spawn static coverage check: does the compiled filesystem
-    /// policy already cover the program, cwd, and every resolved
-    /// interpreter path the wrapper will spawn.
-    InterpreterCoverageGate,
-}
+/// **Phase 118 Plan 03 (D-12): promoted to `crates/nono::LayerId`.** This
+/// module re-exports the core type rather than defining a second, possibly-
+/// divergent copy — every `LayerId::Variant` call site in this file and its
+/// dependents keeps compiling unchanged against this alias. The *identity*
+/// vocabulary (this enum) lives in core so every receipt-producing binary
+/// (`nono.exe`, `nono-agentd.exe`, `nono-shell-broker.exe`) can build a
+/// census against it without depending on `nono-cli`; the *policy* below
+/// (`ArmExpectancy`, `ProbeKind`, `REGISTRY_ENTRIES`, and every enforcing
+/// call site) stays exactly where it is — see `crates/nono/src/receipt.rs`'s
+/// module doc for the full ADR-86 boundary argument (D-12's Cluster A /
+/// Cluster B split).
+pub(crate) use nono::LayerId;
 
 /// Axis 2 of the D-08 expectancy matrix (RESEARCH §B): which *binary*
 /// handles the spawn. Distinct from `WindowsTokenArm` (axis 1, decided by
@@ -260,24 +223,20 @@ pub(crate) enum LayerId {
 /// is a second, independent `CREATE_SUSPENDED` window that `WindowsTokenArm`
 /// does not model either — hence `Broker` is its own `EntryPath` variant,
 /// not folded into `DirectCli`'s `BrokerLaunch`/`BrokerLaunchNoPty` arms.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EntryPath {
-    /// `nono.exe` spawning directly (`exec_strategy_windows/launch.rs`).
-    /// Covers direct `nono run`, the PTY/no-PTY broker arms' OWN spawn of
-    /// `nono-shell-broker.exe` (the broker.exe process itself, not its
-    /// grandchild), and the per-tool-call hook path (which re-enters this
-    /// same entry point, RESEARCH §B row 4).
-    DirectCli,
-    /// `nono-shell-broker.exe` spawning the real confined grandchild inside
-    /// its own separate `CREATE_SUSPENDED` window
-    /// (`nono-shell-broker/src/main.rs::run`). This is the process
-    /// Blocker-1 (above) exists to correctly attribute layers to.
-    Broker,
-    /// `nono-agentd.exe`'s daemon-side launch path
-    /// (`agent_daemon/launch.rs`), structurally independent of
-    /// `exec_strategy_windows/` (RESEARCH §Summary-1).
-    Daemon,
-}
+/// **Phase 118 Plan 03 (D-12/orchestrator directive): re-exported from
+/// `crates/nono::EntryPath`**, same 3 variant names/order (`DirectCli` /
+/// `Broker` / `Daemon`) as the definition this replaces — `nono.exe`
+/// spawning directly (`exec_strategy_windows/launch.rs`), covering direct
+/// `nono run`, the PTY/no-PTY broker arms' OWN spawn of
+/// `nono-shell-broker.exe`, and the per-tool-call hook path; the broker
+/// spawning the real confined grandchild inside its own separate
+/// `CREATE_SUSPENDED` window (`nono-shell-broker/src/main.rs::run`); and
+/// `nono-agentd.exe`'s daemon-side launch path (`agent_daemon/launch.rs`),
+/// structurally independent of `exec_strategy_windows/`. Every existing
+/// `EntryPath::Variant` call site in this crate keeps compiling unchanged
+/// against this alias — see `crates/nono/src/receipt.rs`'s `EntryPath` doc
+/// for the full promotion rationale.
+pub(crate) use nono::EntryPath;
 
 /// One cell of the D-08 expectancy matrix: is `LayerId` X expected to be
 /// active for the (entry_path, token_arm) combination this value names.
@@ -1097,28 +1056,12 @@ const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
     },
 ];
 
-/// Every `LayerId` variant, in declaration order. D-01/D-11: platform-
-/// neutral (no `#[cfg]`) so drift tests and Phase 118's receipt type can
-/// iterate it on any host. Mirrors the `NetworkAuditDenialCategory::ALL` +
-/// `assert_all_variants_covered` idiom
-/// (`crates/nono/src/undo/types.rs::assert_all_variants_covered`) exactly: this is the mechanism that fails the build when a
-/// `LayerId` variant is added without a corresponding `ALL` entry and match
-/// arm below.
-pub(crate) const ALL: &[LayerId] = &[
-    LayerId::RestrictedToken,
-    LayerId::MandatoryIntegrityLabel,
-    LayerId::AppContainerProfile,
-    LayerId::DaclSessionSidGrant,
-    LayerId::DaclPackageSidGrant,
-    LayerId::DaclAncestorTraverse,
-    LayerId::DaclAncestorReadAttrs,
-    LayerId::WfpEgressFilters,
-    LayerId::FirewallRulesEgress,
-    LayerId::MinifilterAbsence,
-    LayerId::JobObjectContainment,
-    LayerId::BrokerAuthenticodeTrustGate,
-    LayerId::InterpreterCoverageGate,
-];
+/// Every `LayerId` variant, in declaration order. Phase 118 Plan 03 (D-12):
+/// resolves directly to [`nono::LayerId::ALL`] rather than a second,
+/// hand-maintained array — a duplicated `ALL` const in this file could
+/// silently diverge from core's. `layer_registry::ALL` remains the stable
+/// name every existing call site in this crate uses.
+pub(crate) const ALL: &[LayerId] = LayerId::ALL;
 
 // IMPORTANT: match is exhaustive (no wildcard arm) so the compiler forces
 // handling of every current and future LayerId variant — mirrors

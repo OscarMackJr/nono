@@ -641,6 +641,81 @@ fn decide_from_entries(
     }
 }
 
+/// Phase 118 Plan 03 (RCPT-01/D-01): a full 13-row census of `entries`
+/// against `input`, built as a SEPARATE pure pass alongside
+/// [`decide_from_entries`] — never inside it (Research Finding 1, Pitfall
+/// 4). Every row is pushed unconditionally, every iteration: unlike
+/// `decide_from_entries`, this loop contains **no `return` statement**, so a
+/// row that would have made the decision function abort on the spot is
+/// still recorded here, and every row after it is still probed. This is
+/// what makes a `Refused` receipt (D-02) the highest-value record there is —
+/// it names the failed layer AND the state of the other twelve.
+///
+/// Each row's [`RowVerdict`] is computed by calling [`classify_row`] fresh,
+/// exactly as `decide_from_entries` does — never reused/cached from a prior
+/// pass — so the census reflects a live probe per row, not stale
+/// decision-loop state (T-118-08).
+pub(crate) fn census_from_entries(
+    entries: &[layer_registry::LayerRegistryEntry],
+    input: &AttestationInput,
+) -> Vec<nono::LayerReceiptRow> {
+    let mut census = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let verdict = classify_row(entry, input);
+        census.push(nono::LayerReceiptRow {
+            id: entry.id,
+            status: verdict.status,
+        });
+    }
+    census
+}
+
+/// Phase 118 Plan 03 (D-12 corrective, see `crates/nono/src/receipt.rs`'s
+/// struct doc): maps the CLI-local `WindowsTokenArm` (`launch.rs`, untouched
+/// by this plan — Plan 118-07 owns unifying it with core) onto the
+/// content-free core [`nono::TokenArm`] enum `EnforcementReceipt::token_arm`
+/// now carries. Exhaustive match, no wildcard arm, mirroring
+/// `assert_all_layer_ids_covered`'s drift-guard style: a future
+/// `WindowsTokenArm` variant added without a corresponding arm here fails to
+/// compile rather than silently mapping to the wrong core variant.
+fn token_arm_to_receipt(arm: WindowsTokenArm) -> nono::TokenArm {
+    match arm {
+        WindowsTokenArm::Null => nono::TokenArm::Null,
+        WindowsTokenArm::WriteRestricted => nono::TokenArm::WriteRestricted,
+        WindowsTokenArm::LowIlPrimary => nono::TokenArm::LowIlPrimary,
+        WindowsTokenArm::BrokerLaunch => nono::TokenArm::BrokerLaunch,
+        WindowsTokenArm::BrokerLaunchNoPty => nono::TokenArm::BrokerLaunchNoPty,
+    }
+}
+
+/// Phase 118 Plan 03 (RCPT-01): assembles a [`nono::EnforcementReceipt`]
+/// from a [`census_from_entries`] result plus the terminal facts of one
+/// session's launch. `layer_registry::EntryPath` is `nono::EntryPath`
+/// itself (re-exported, Task 1 of this plan) so `entry_path` needs no
+/// conversion; `token_arm` is mapped via [`token_arm_to_receipt`].
+///
+/// Not wired into [`apply_startup_attestation_gate`] by this plan — that
+/// wiring, alongside the untouched `decide_from_entries` call, is Plan
+/// 118-07's job (after the sink exists in Plan 118-05).
+pub(crate) fn build_enforcement_receipt(
+    census: Vec<nono::LayerReceiptRow>,
+    session_id: String,
+    pid: u32,
+    entry_path: layer_registry::EntryPath,
+    token_arm: Option<WindowsTokenArm>,
+    outcome: nono::SessionOutcome,
+) -> nono::EnforcementReceipt {
+    nono::EnforcementReceipt {
+        schema_version: 1,
+        session_id,
+        pid,
+        entry_path,
+        token_arm: token_arm.map(token_arm_to_receipt),
+        outcome,
+        layers: census,
+    }
+}
+
 /// The single CLI-side attestation decision function (CINT-02). See the
 /// module doc for D-02/Open Question 1/Blocker-1 and the two documented
 /// deviations from the plan's literal text.
@@ -1329,6 +1404,221 @@ mod tests {
         let result = attest_and_decide(input);
         assert!(result.is_ok());
     }
+
+    // ---- census_from_entries (Phase 118 Plan 03, Task 1) ----
+
+    /// Builds an `AttestationInput` against the REAL `layer_registry::all_entries()`
+    /// registry, on the `(DirectCli, WriteRestricted)` arm, with a null
+    /// `child_process`/`containment_job` — a setup that makes
+    /// `decide_from_entries`'s very FIRST row (`LayerId::RestrictedToken`,
+    /// `ProbeKind::LiveTokenOrJobQuery`, `ContractOutcome::Abort`) classify
+    /// `Unconfirmed` and abort immediately, since `probe_restricted_sids` on
+    /// a null process handle fails closed.
+    fn abort_on_first_row_input() -> AttestationInput<'static> {
+        AttestationInput {
+            child_process: dummy_process(),
+            containment_job: dummy_job(),
+            entry_path: EntryPath::DirectCli,
+            token_arm: Some(WindowsTokenArm::WriteRestricted),
+            wfp_preconfirmed: false,
+            applied: layer_registry::AppliedLayers::default(),
+            expected_session_sid: None,
+            required_layers_override: &[],
+            machine_required_layers: &[],
+        }
+    }
+
+    /// Test 1 (Task 1 `<behavior>`): `census_from_entries` returns all 13
+    /// rows even for an input that makes `decide_from_entries` abort on the
+    /// very first row — proving the census does NOT stop at the first
+    /// failure the way the decision function does.
+    #[test]
+    fn census_from_entries_returns_all_13_rows_even_when_the_first_row_would_abort() {
+        let input = abort_on_first_row_input();
+        let census = census_from_entries(layer_registry::all_entries(), &input);
+        assert_eq!(
+            census.len(),
+            13,
+            "census_from_entries must return a full 13-row census regardless of any single \
+             row's failure (D-01), even though decide_from_entries aborts on the first row \
+             for this exact input"
+        );
+    }
+
+    /// Test 2 (Task 1 `<behavior>`) — the perturbation proof that census and
+    /// decision are a SEPARATE pass, not a refactor of one another
+    /// (Pitfall 4): for the IDENTICAL input, `decide_from_entries` still
+    /// aborts at the same layer/status while `census_from_entries` still
+    /// returns all 13 rows.
+    #[test]
+    fn decide_from_entries_still_aborts_while_census_from_entries_stays_complete() {
+        let input = abort_on_first_row_input();
+        let entries = layer_registry::all_entries();
+
+        let decision = decide_from_entries(entries, &input, &HashSet::new());
+        assert_eq!(
+            decision,
+            AttestationDecision::Abort {
+                layer: LayerId::RestrictedToken,
+                status: LayerAttestationStatus::Unconfirmed,
+            },
+            "decide_from_entries's pre-existing early-return behavior must be byte-identical \
+             after this plan (D-01/Finding 1) — this is not a refactor of the decision function"
+        );
+
+        let census = census_from_entries(entries, &input);
+        assert_eq!(
+            census.len(),
+            13,
+            "census_from_entries must stay a full 13-row census for the SAME input that made \
+             decide_from_entries abort at the first row"
+        );
+    }
+
+    /// Test 3 (Task 1 `<behavior>`): every row's `status` in the census
+    /// matches what `classify_row` independently computes for that row in
+    /// isolation — no stale/cached values, a fresh probe per row.
+    #[test]
+    fn every_census_row_matches_an_independent_classify_row_call() {
+        let input = abort_on_first_row_input();
+        let entries = layer_registry::all_entries();
+        let census = census_from_entries(entries, &input);
+
+        assert_eq!(census.len(), entries.len());
+        for (row, entry) in census.iter().zip(entries.iter()) {
+            assert_eq!(
+                row.id, entry.id,
+                "census row order must match the registry's own order"
+            );
+            let independent = classify_row(entry, &input);
+            assert_eq!(
+                row.status, independent.status,
+                "census row for {:?} must match a freshly, independently computed classify_row \
+                 result — not a stale or cached value (T-118-08)",
+                entry.id
+            );
+        }
+    }
+
+    /// Census-completeness cross-check against the SAME synthetic single-row
+    /// fixtures `decide_from_entries`'s own tests use, so the "no early
+    /// return" property is proven on a minimal fixture too, not only the
+    /// full production registry.
+    #[test]
+    fn census_from_entries_never_returns_early_on_a_synthetic_single_row_abort() {
+        const ENTRIES: [LayerRegistryEntry; 1] = [LayerRegistryEntry {
+            id: LayerId::MandatoryIntegrityLabel,
+            name: "synthetic-configured-only-abort",
+            call_sites: &[],
+            expectancy: &NULL_ARM_EXPECTANCY,
+            outcome: ContractOutcome::Abort,
+            probe: ProbeKind::ConfiguredOnly,
+        }];
+        let input = null_arm_input(layer_registry::AppliedLayers::default());
+        let census = census_from_entries(&ENTRIES, &input);
+        assert_eq!(census.len(), 1);
+        assert_eq!(census[0].id, LayerId::MandatoryIntegrityLabel);
+        assert_eq!(census[0].status, LayerAttestationStatus::Unconfirmed);
+    }
+
+    // ---- build_enforcement_receipt / token_arm_to_receipt (Task 1) ----
+
+    #[test]
+    fn token_arm_to_receipt_maps_every_windows_token_arm_variant() {
+        assert_eq!(
+            token_arm_to_receipt(WindowsTokenArm::Null),
+            nono::TokenArm::Null
+        );
+        assert_eq!(
+            token_arm_to_receipt(WindowsTokenArm::WriteRestricted),
+            nono::TokenArm::WriteRestricted
+        );
+        assert_eq!(
+            token_arm_to_receipt(WindowsTokenArm::LowIlPrimary),
+            nono::TokenArm::LowIlPrimary
+        );
+        assert_eq!(
+            token_arm_to_receipt(WindowsTokenArm::BrokerLaunch),
+            nono::TokenArm::BrokerLaunch
+        );
+        assert_eq!(
+            token_arm_to_receipt(WindowsTokenArm::BrokerLaunchNoPty),
+            nono::TokenArm::BrokerLaunchNoPty
+        );
+    }
+
+    #[test]
+    fn build_enforcement_receipt_assembles_a_full_receipt_from_a_census() {
+        let input = abort_on_first_row_input();
+        let entries = layer_registry::all_entries();
+        let census = census_from_entries(entries, &input);
+        let receipt = build_enforcement_receipt(
+            census,
+            "20260816-000003-4".to_string(),
+            4545,
+            input.entry_path,
+            input.token_arm,
+            nono::SessionOutcome::Refused,
+        );
+        assert_eq!(receipt.schema_version, 1);
+        assert_eq!(receipt.session_id, "20260816-000003-4");
+        assert_eq!(receipt.pid, 4545);
+        assert_eq!(receipt.entry_path, nono::EntryPath::DirectCli);
+        assert_eq!(receipt.token_arm, Some(nono::TokenArm::WriteRestricted));
+        assert_eq!(receipt.outcome, nono::SessionOutcome::Refused);
+        assert_eq!(receipt.layers.len(), 13);
+    }
+
+    // ---- Sentinel round-trip (Phase 118 Plan 03, Task 2 — D-14 half 2) ----
+
+    /// Positive proof: a sentinel string seeded into
+    /// `AttestationInput::expected_session_sid` — the closest thing to a
+    /// caller-supplied, potentially path-shaped string that flows into the
+    /// census/receipt assembly pipeline (this plan's `<interfaces>` block) —
+    /// never appears in the serialized `EnforcementReceipt`. Contains the
+    /// literal substring "SENTINEL" in its own source, proving this is a
+    /// real seeded-value test, not a vacuous pass.
+    #[test]
+    fn sentinel_seeded_session_sid_never_leaks_into_the_serialized_receipt() {
+        const SENTINEL: &str = "C:\\Users\\SENTINEL-TOKEN-7f3a\\secret-project";
+        let mut input = abort_on_first_row_input();
+        input.expected_session_sid = Some(SENTINEL);
+
+        let entries = layer_registry::all_entries();
+        let census = census_from_entries(entries, &input);
+        let receipt = build_enforcement_receipt(
+            census,
+            "20260816-000004-5".to_string(),
+            4646,
+            input.entry_path,
+            input.token_arm,
+            nono::SessionOutcome::Refused,
+        );
+
+        let json = serde_json::to_string(&receipt).expect("receipt must serialize");
+        assert!(
+            !json.contains("SENTINEL-TOKEN-7f3a"),
+            "the sentinel substring seeded into expected_session_sid must never appear in the \
+             serialized EnforcementReceipt (D-05/D-14) — found in: {json}"
+        );
+        assert!(
+            !json.contains("secret-project"),
+            "the sentinel's path-shaped substring must never appear in the serialized \
+             EnforcementReceipt — found in: {json}"
+        );
+    }
+
+    // Test 2 (negative control, per this task's <behavior> and VALIDATION.md
+    // — "demonstrated in review, not committed"): a temporary
+    // `raw_session_sid: String` field was added to `EnforcementReceipt`
+    // (crates/nono/src/receipt.rs), populated verbatim from
+    // `input.expected_session_sid.unwrap_or_default()` inside
+    // `build_enforcement_receipt` above, and this same test file was
+    // re-run. `sentinel_seeded_session_sid_never_leaks_into_the_serialized_receipt`
+    // FAILED as expected (`json.contains("SENTINEL-TOKEN-7f3a")` was true),
+    // proving the test can fail and is not vacuous. Both the temporary field
+    // and its population line were then reverted in full — no trace remains
+    // in this diff. See this plan's SUMMARY.md for the full transcript.
 }
 
 /// Behavior tests exercised against the real, Windows-populated registry

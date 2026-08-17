@@ -91,7 +91,9 @@ pub use machine_policy::{
 };
 pub use net_filter::{FilterResult, HostFilter};
 pub use path::try_canonicalize;
-pub use receipt::{EnforcementReceipt, LayerId, LayerReceiptRow, SessionOutcome};
+pub use receipt::{
+    EnforcementReceipt, EntryPath, LayerId, LayerReceiptRow, SessionOutcome, TokenArm,
+};
 pub use receipt_chain::{
     hash_receipt_chain, hash_receipt_event, RECEIPT_CHAIN_DOMAIN, RECEIPT_EVENT_DOMAIN,
 };
