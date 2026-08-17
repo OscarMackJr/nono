@@ -1,54 +1,54 @@
 {
   "version": "1.0",
-  "timestamp": "2026-08-16T14:11:49.953Z",
+  "timestamp": "2026-08-17T14:36:44.371Z",
   "phase": "118",
-  "phase_name": "Per-Session Enforcement Receipts (NOT STARTED — awaiting discuss-phase)",
+  "phase_name": "per-session-enforcement-receipts",
   "phase_dir": ".planning/phases/118-per-session-enforcement-receipts",
-  "plan": null,
-  "task": null,
-  "total_tasks": null,
+  "plan": 10,
+  "task": 2,
+  "total_tasks": 3,
   "status": "paused",
-  "context_detection_note": "Auto-detection points at phase 117 because it holds the most recent *PLAN.md. That is STALE — 117 is CLOSED (ROADMAP [x], 34/34 plans, VERIFICATION status human_needed with the one human item now ANSWERED GREEN by CI). The genuinely open work is a quick-task MSI fix plus Phase 118, which has an empty directory. Handoff written to .planning/.continue-here.md, not into 117.",
+  "milestone": "v3.7",
+  "branch": "milestone/v2.13-carryforward-closeout",
+  "phase_base_commit": "2359c841",
+  "head_commit": "f19752e8",
+  "plans_complete": "9.5 of 10",
   "completed_tasks": [
-    {"id": 1, "name": "Phase 117 SC4 recording gap closed + SC3 operator override applied", "status": "done", "commit": "23d605bd"},
-    {"id": 2, "name": "Phase 117 closed out in ROADMAP + REQUIREMENTS (CINT-01/02/03)", "status": "done", "commit": "f4fd994a"},
-    {"id": 3, "name": "Fail-open Windows CI gate fixed (pwsh multi-command run block) — PROVEN in CI", "status": "done", "commit": "a129369e"},
-    {"id": 4, "name": "19 CI-only test failures diagnosed (3 proven causes, no product defect)", "status": "done", "commit": "94ed5155"},
-    {"id": 5, "name": "19 CI-only test failures fixed — PROVEN in CI (22 failures -> 3 pre-existing)", "status": "done", "commit": "18405fc0"},
-    {"id": 6, "name": "3 mechanical CI causes fixed (clippy lint x3 sites, -p rename, --allow-http2 doc)", "status": "done", "commit": "10d701ba"},
-    {"id": 7, "name": "SIGN-03 recorded GREEN — Azure Trusted Signing confirmed working", "status": "done", "commit": "986af3bb"},
-    {"id": 8, "name": "STATE.md v3.5 pause reason corrected (Azure blocker CLEARED)", "status": "done", "commit": "42a917b7"}
+    {"id": "118-01", "name": "Core receipt vocabulary + content-free scan", "status": "done", "commit": "671624e0", "note": "corrected by operator decision in b266e138 — entry_path/token_arm promoted to core EntryPath/TokenArm enums so receipts round-trip"},
+    {"id": "118-02", "name": "Win32 deny_sid_on_path + require_receipts machine policy", "status": "done", "commit": "9b711ef1", "note": "also fixed 2 real pre-existing defects: revoke_sid_on_path silently skipped DENY ACEs; dacl_contains_sid ignored ACE type, making its perturbation proof vacuous"},
+    {"id": "118-03", "name": "CLI 13-row census + LayerId/EntryPath core re-export", "status": "done", "commit": "864ff73e"},
+    {"id": "118-04", "name": "Daemon collect-all-then-decide restructure (D-26)", "status": "done", "commit": "1401d1ab", "note": "decision-equivalence proof tabled per original early-return branch, perturbation-verified"},
+    {"id": "118-05", "name": "Operator-ACL'd receipt sink (D-06/D-08)", "status": "done", "commit": "32bfb488", "note": "corrected a false doc claim: NO_READ_UP label blocks Low-IL-or-below readers only, never Medium-IL"},
+    {"id": "118-06", "name": "Broker widened wire contract (D-27)", "status": "done", "commit": "07121be7", "note": "bounced back once by orchestrator: had instrumented only 3 of 5 refuse branches, violating RCPT-01; all 5 now instrumented"},
+    {"id": "118-07", "name": "Wire CLI census into sink", "status": "done", "commit": "f2ff94f7"},
+    {"id": "118-08", "name": "Wire daemon census into sink", "status": "done", "commit": "93caad9a", "note": "proactively enumerated every refuse path after seeing 118-06's bounce"},
+    {"id": "118-09", "name": "nono receipt list|show|verify", "status": "done", "commit": "10dbe543", "note": "verify proven fail-closed against 6 tamper shapes; 1 accepted limit — clean tail-record deletion is undetectable by a keyless chain with no external anchor"},
+    {"id": "118-10 Task 1", "name": "Cross-target clippy gates + D-17 latency measurement", "status": "done", "commit": "f19752e8", "note": "BOTH gates clean at --workspace scope: cross linux-gnu 4m59s, cargo-zigbuild apple-darwin 57.69s. D-17 measured N=30: avg 5.7ms, p50 5.6ms, min 2.6ms, max 13.5ms — recorded at launch.rs:1568"}
   ],
   "remaining_tasks": [
-    {"id": 9, "name": "Conditional MSI POC-cert provisioning — TWO files, fully diagnosed, NOT STARTED", "status": "not_started"},
-    {"id": 10, "name": "Phase 118 — run /gsd:discuss-phase 118, then /gsd:plan-phase 118", "status": "not_started"},
-    {"id": 11, "name": "Push 3 unpushed commits (986af3bb, 42a917b7 + HANDOFF wip)", "status": "not_started"}
+    {"id": "118-10 Task 2", "name": "Record discretionary decisions in receipt_sink.rs module doc", "status": "in_progress", "progress": "69-line '# Discretionary decisions (Phase 118 closeout)' section IS WRITTEN but UNCOMMITTED in the working tree. Covers all 4 required items incl. literal 'D-06' and an explicit 'NOT implemented / deliberate' verdict on the Event Log pointer. Still needs: cargo doc -p nono-sandbox-cli --no-deps (no new errors), then commit."},
+    {"id": "118-10 Task 3", "name": "Confined-child sink-guard verification (D-08)", "status": "not_started", "blocking": true, "note": "checkpoint:human-verify — CANNOT be automated or self-approved. Needs a real confined session on a real host across 3 arms + a supervisor-still-writable check."},
+    {"id": "118-10 SUMMARY", "name": "Write 118-10-SUMMARY.md", "status": "not_started", "note": "must quote the operator's Task 3 response VERBATIM as the evidence of the check having run"},
+    {"id": "phase-close", "name": "Phase close-out sequence", "status": "not_started", "note": "/gsd:code-review 118 (D-22, required before phase is done) -> regression gate -> gsd-verifier -> HAND-EDIT STATE.md/ROADMAP.md/REQUIREMENTS.md"}
   ],
   "blockers": [
-    {
-      "description": "MSI conditional fix spans TWO files, not one. build-windows-msi.ps1 gates the emissions; validate-windows-msi-contract.ps1:312/351/353 HARD-ASSERTS all three exist ('unconditional for machine scope', its own comment :300). Gating only the build script relocates the red from build:239 to validator:353. Additionally validator :314-317 null-derefs on $certImportCa.Execute before reporting the missing node.",
-      "type": "technical",
-      "workaround": "Fix both files. Proposed shape: cert PRESENT -> assert all three strictly; cert ABSENT -> assert their ABSENCE (proves coupling both directions rather than going quiet)."
-    },
-    {
-      "description": "Relaxing the validator asserts is a SECURITY CONTRACT decision, not mechanical. It makes CI-built machine MSIs contractually permitted to ship without a trust anchor. Likely the right end state (CLOSE-01/Phase 107 removes it anyway) but it is an operator call.",
-      "type": "human_action",
-      "workaround": null
-    }
+    {"description": "118-10 Task 3 is a blocking human-verify checkpoint requiring a real confined session; no automated substitute is acceptable per the plan's own threat register (T-118-30/31)", "type": "human_action", "workaround": "none — self-approving it would be exactly the anti-pattern the phase exists to eliminate"},
+    {"description": "3 integration-test failures found by 118-04's --no-fail-fast sweep remain UNADJUDICATED: audit_verify_reports_signed_attestation_with_pinned_public_key, rollback_signed_session_verifies_from_audit_dir_bundle, windows_run_ignores_unverified_localappdata_override_when_runtime_root_is_verified", "type": "technical", "workaround": "logged in phase deferred-items.md; 118-10 is the designated adjudication point. Check at phase-base 2359c841 to confirm pre-existence."}
   ],
   "human_actions_pending": [
-    {"action": "Approve the validator security-contract change (conditional asserts on the three POC emissions)", "context": "Blocks the MSI fix. Machine MSI currently provisions a self-signed POC signing root into a machine cert store on every install via 'nono setup --trust-root' (deferred SYSTEM, Return=ignore).", "blocking": true},
-    {"action": "Decide whether to unpause v3.5", "context": "SIGN-03 is now GREEN so Phase 104 is unblocked at the head. Deliberately NOT unpaused. Phase 104 Plan 03 ends in an irreversible public tag push, v3.7 is mid-flight, and the board is still red (Windows Packaging, 5 Integration suites, ubuntu clippy).", "blocking": false},
-    {"action": "Push 3 unpushed commits", "context": "Records only, no code. They supersede the stale 'Trusted Signing REGRESSED / do NOT push v0.66.1' claims.", "blocking": false}
+    {"action": "Run the 5 confined-child sink-guard checks (118-10 Task 3) and reply 'approved' or describe the failing check", "context": "D-08's guard cannot be proven by unit test because supervisor and confined child run as the SAME Windows user. Sink path is %PROGRAMDATA%\\nono\\receipts.", "blocking": true},
+    {"action": "Elevated/CI Windows runner still needed for WR-20 and for labels_guard's SeRestorePrivilege test", "context": "carried over from Phase 117; not introduced by 118", "blocking": false}
   ],
   "decisions": [
-    {"decision": "SC3 accepted via operator override (10/13 rows), not marked as a clean pass anywhere", "rationale": "3 rows are host/structurally gated; the record must not read as though the literal bar was met", "phase": "117"},
-    {"decision": "Do NOT commit dist/windows/nono-poc-signing.cer and do NOT touch .gitignore", "rationale": "Reverses a deliberate 2026-05-27 code-signing-material exclusion (c22daaa1) in a PUBLIC repo, for an artifact CLOSE-01 retires at Phase 107", "phase": "quick"},
-    {"decision": "Do NOT add libdbus-1-dev to the cross-compile job", "rationale": "The portability gate runs on runner.os == Linux i.e. BOTH targets, so it would only move the failure and would weaken a probable forcing function", "phase": "quick"},
-    {"decision": "Keep the POC test cert until Gate 3, despite Azure signing now working", "rationale": "CLOSE-01 ordering is explicit: retire only after clean-host UAT, never merely after a green release, so a recovery path survives. Azure already regressed silently once for 3 weeks.", "phase": "v3.5"},
-    {"decision": "v3.5 stays PAUSED even though SIGN-03 went green", "rationale": "Only the REASON changed (Azure cleared -> operator tag-push decision + red board). No phase checkbox flipped.", "phase": "v3.5"}
+    {"decision": "Promote EnforcementReceipt.entry_path/token_arm to core EntryPath/TokenArm enums", "rationale": "OPERATOR DECISION mid-Wave-1. As first written they were &'static str — structurally content-free (good for D-14) but practically un-deserializable, which would have blocked Plan 118-09's receipt show/list at Wave 5. Enums are content-free by construction AND round-trippable AND compile-time exhaustive. Rejected alternatives: owned String (loses the type-level guarantee) and a duplicate read-side DTO (two shapes to keep in sync forever).", "phase": "118"},
+    {"decision": "Also re-export EntryPath from core in layer_registry.rs, not just LayerId", "rationale": "orchestrator-directed extension to 118-03 Task 1; identical variant set so all call sites kept compiling, and it avoids the duplicate-shape drift the operator had just rejected", "phase": "118"},
+    {"decision": "Do NOT unify WindowsTokenArm with core TokenArm", "rationale": "token_arm_to_receipt in attestation.rs is already an exhaustive match with no wildcard, so adding a variant to either enum is a compile error — the drift guard already exists and unification would be churn for no safety gain", "phase": "118"},
+    {"decision": "Sanctioned host test baseline is 12, not the 11 in project memory", "rationale": "the 12th is exec_strategy::labels_guard::tests::non_owned_path_with_a_foreign_label_is_exempt_not_a_coverage_gap, a DELIBERATE loud test-setup failure Phase 117 added (D-31) because this non-elevated session lacks SeRestorePrivilege. Verified by reading its actual panic message, not assumed.", "phase": "118"},
+    {"decision": "Skipped the execute-phase workflow's state.begin-phase call; hand-edited STATE.md instead", "rationale": "D-24 + project memory: SDK state writers have previously DELETED the whole parallel_milestone* block on this dual-milestone STATE.md", "phase": "118"}
   ],
-  "uncommitted_files": [],
-  "next_action": "Decide the validator security-contract question (see human_actions_pending[0]), then implement the two-file MSI fix and prove BOTH branches with -EmitOnly. Independently: /gsd:discuss-phase 118.",
-  "context_notes": "Session theme, and it recurred all day: gates that were correct when written and silently stopped covering reality. A CI job green while 22 tests failed; an integration script unrunnable for months hiding 5 real suite failures; an MSI build requiring a gitignored file; a clippy rule pinning targets but not toolchain version. Every one surfaced only by actually RUNNING the gate. Expect fixing a gate to reveal what it was hiding — that happened three separate times today and should be treated as the normal outcome, not a surprise."
+  "uncommitted_files": [
+    {"path": "crates/nono-cli/src/receipt_sink.rs", "change": "+69 lines — Task 2's '# Discretionary decisions (Phase 118 closeout)' module-doc section", "action_needed": "verify with cargo doc, then commit as Task 2"}
+  ],
+  "next_action": "Run `cargo doc -p nono-sandbox-cli --no-deps` to verify the uncommitted receipt_sink.rs module doc produces no new errors, commit it as 118-10 Task 2 with a DCO sign-off, then present 118-10 Task 3's 5 confined-child checks to the operator and WAIT for their typed response.",
+  "context_notes": "Phase 118 ran 10 plans across 6 waves sequentially on the main working tree (workflow.use_worktrees=false, so no worktree isolation and no intra-wave parallelism). All 6 waves' code work is done; only the phase-gate plan's human checkpoint and the close-out sequence remain. Every executor was given an explicit constraints block (no SDK state writers, cargo-test-selector proof, guard-predicate discipline, perturbation proofs) and that block was demonstrably productive — it is why 3 real defects and 1 requirement gap were caught rather than shipped. Do NOT relax it for the remaining work. The orchestrator, not the executors, owns STATE.md and ROADMAP.md for this phase; none of the 10 plans touched either file."
 }
