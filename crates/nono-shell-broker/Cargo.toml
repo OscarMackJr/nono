@@ -27,15 +27,27 @@ nono = { version = "0.70.0", path = "../nono", package = "nono-sandbox" }
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Phase 118 Plan 06 (D-15): JSONL serialization for this binary's own
+# hand-rolled enforcement-receipt sink writer. `sha2` is not needed
+# directly — `nono::hash_receipt_event`/`hash_receipt_chain` (core) already
+# wrap it.
+serde.workspace = true
+serde_json.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Storage_FileSystem",
     "Win32_System_Threading",
     "Win32_System_Console",
     "Win32_System_SystemServices",
 ] }
+
+[dev-dependencies]
+# Phase 118 Plan 06: tempdir-backed tests for the hand-rolled receipt-sink
+# guard/writer, mirroring `receipt_sink.rs`'s own test shape.
+tempfile = "3"
 
 [lints]
 workspace = true

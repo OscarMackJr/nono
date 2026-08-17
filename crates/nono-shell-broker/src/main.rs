@@ -452,6 +452,353 @@ mod broker {
         Ok(())
     }
 
+    // ── Phase 118 Plan 06 (D-15/D-27): this broker's own enforcement-receipt
+    // pipeline. `nono-shell-broker.exe` writes a SECOND, independently-
+    // verifiable receipt for the real confined grandchild it spawns —
+    // distinct from `nono.exe`'s own `EntryPath::DirectCli` receipt for
+    // `nono-shell-broker.exe` itself (Plan 118-07, not yet wired), the two
+    // correlated only by `session_id` (D-15's "no cross-process lock"
+    // design; each segment verifies independently). This crate cannot
+    // import `nono-cli`'s `receipt_sink.rs` (separate binary, no
+    // `nono-cli` dependency), so the sink-guard + chain-write code here is
+    // HAND-ROLLED from core (`crates/nono`) primitives only — small
+    // duplication vs. `receipt_sink.rs`, expected and acceptable per D-15.
+
+    /// D-27: the single place a `LayerId` named on the wire contract's
+    /// `required` channel gets a real per-row status, reusing the SAME
+    /// probe results [`broker_resume_gate`] already computed (no
+    /// re-probing). A required name outside this binary's two attestable
+    /// rows (`AppContainerProfile`/`MandatoryIntegrityLabel`) fails toward
+    /// `Unconfirmed` — `broker_resume_gate`'s own unrecognized-name arm
+    /// already refuses to resume in that case, but this is a PURE census
+    /// function that may be called independently of that refusal (e.g. the
+    /// pre-gate `NONO_BROKER_REQUIRED_LAYERS`-absent branch), so it never
+    /// assumes `Confirmed`.
+    fn broker_required_row_status(
+        name: &str,
+        app_container_probe: &Option<NonoResult<Option<String>>>,
+        expected_app_container_sid: Option<&str>,
+        integrity_probe: &NonoResult<u32>,
+    ) -> nono::LayerAttestationStatus {
+        match name {
+            "AppContainerProfile" => match app_container_probe {
+                Some(Ok(Some(sid))) => match expected_app_container_sid {
+                    Some(expected) if sid.eq_ignore_ascii_case(expected) => {
+                        nono::LayerAttestationStatus::Confirmed
+                    }
+                    _ => nono::LayerAttestationStatus::Unconfirmed,
+                },
+                _ => nono::LayerAttestationStatus::Unconfirmed,
+            },
+            "MandatoryIntegrityLabel" => match integrity_probe {
+                Ok(rid) if *rid <= SECURITY_MANDATORY_LOW_RID => {
+                    nono::LayerAttestationStatus::Confirmed
+                }
+                _ => nono::LayerAttestationStatus::Unconfirmed,
+            },
+            _ => nono::LayerAttestationStatus::Unconfirmed,
+        }
+    }
+
+    /// D-27's runtime fail-safe (T-118-18): builds a real 13-row census from
+    /// the widened wire contract. A row named in `not_applicable_raw`
+    /// classifies `NotApplicable`; a row named in `required_layers_raw`
+    /// classifies via [`broker_required_row_status`]; a row named in
+    /// NEITHER channel — a version-skewed nono-cli/nono-shell-broker pair,
+    /// or a `LayerId` this broker binary predates — fails toward
+    /// `Unconfirmed`, never silently dropped from the 13-row output and
+    /// never silently promoted to `Confirmed`/`NotApplicable`.
+    ///
+    /// Deviation from this plan's literal `<interfaces>` signature
+    /// (documented per the executor's deviation protocol; see
+    /// `118-06-SUMMARY.md`): `expected_app_container_sid` is an added
+    /// parameter, not in the plan's stated 4-argument shape. Without it,
+    /// `AppContainerProfile` would classify `Confirmed` merely because SOME
+    /// AppContainer SID was present on the child token — never checking it
+    /// is the SAME per-run SID `broker_resume_gate` itself requires — which
+    /// would let a receipt claim a layer active more strongly than the
+    /// gate's own security decision actually verified (the exact
+    /// "claims success while structurally incapable of reporting failure"
+    /// anti-pattern `118-CONTEXT.md`'s pause-handoff framing names).
+    fn broker_census(
+        required_layers_raw: &str,
+        not_applicable_raw: &str,
+        app_container_probe: &Option<NonoResult<Option<String>>>,
+        expected_app_container_sid: Option<&str>,
+        integrity_probe: &NonoResult<u32>,
+    ) -> Vec<nono::LayerReceiptRow> {
+        let required: Vec<&str> = required_layers_raw
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        let not_applicable: Vec<&str> = not_applicable_raw
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        nono::LayerId::ALL
+            .iter()
+            .map(|&id| {
+                let name = format!("{id:?}");
+                let status = if not_applicable.contains(&name.as_str()) {
+                    nono::LayerAttestationStatus::NotApplicable
+                } else if required.contains(&name.as_str()) {
+                    broker_required_row_status(
+                        &name,
+                        app_container_probe,
+                        expected_app_container_sid,
+                        integrity_probe,
+                    )
+                } else {
+                    nono::LayerAttestationStatus::Unconfirmed
+                };
+                nono::LayerReceiptRow { id, status }
+            })
+            .collect()
+    }
+
+    /// `%PROGRAMDATA%\nono\receipts` — byte-identical resolution to
+    /// `nono-cli`'s `receipt_sink.rs::resolve_sink_dir` (D-15: both writers
+    /// land in the SAME directory, correlated by session id, never sharing
+    /// code — separate crates, separate binaries).
+    fn broker_receipt_sink_dir() -> PathBuf {
+        let base = std::env::var("PROGRAMDATA").unwrap_or_else(|_| r"C:\ProgramData".to_string());
+        PathBuf::from(base).join("nono").join("receipts")
+    }
+
+    /// D-08's both-not-either guard (DENY ACE + unconditional `NO_READ_UP`
+    /// mandatory label), hand-rolled from core primitives — mirrors
+    /// `receipt_sink.rs::ensure_sink_guarded`'s mask values exactly.
+    /// Idempotent: safe to reapply even if `nono.exe`'s own receipt write
+    /// (Plan 118-07) already guarded this directory for this launch.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the directory cannot be created, if a DENY ACE
+    /// cannot be applied for a `Some` SID, or if the mandatory label cannot
+    /// be applied.
+    fn ensure_broker_receipt_sink_guarded(
+        dir: &std::path::Path,
+        package_sid: Option<&str>,
+    ) -> NonoResult<()> {
+        use windows_sys::Win32::Storage::FileSystem::{
+            DELETE, FILE_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+        };
+        use windows_sys::Win32::System::SystemServices::{
+            SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP, SYSTEM_MANDATORY_LABEL_NO_READ_UP,
+        };
+        const DENY_MASK: u32 = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_EXECUTE | DELETE;
+        const LABEL_MASK: u32 =
+            SYSTEM_MANDATORY_LABEL_NO_READ_UP | SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP;
+
+        std::fs::create_dir_all(dir).map_err(|e| {
+            NonoError::Snapshot(format!(
+                "broker receipt sink: failed to create sink directory {}: {e}",
+                dir.display()
+            ))
+        })?;
+        if let Some(sid) = package_sid {
+            nono::deny_sid_on_path(dir, sid, DENY_MASK)?;
+        }
+        nono::try_set_mandatory_label(dir, LABEL_MASK)?;
+        Ok(())
+    }
+
+    /// One JSONL line's envelope: the receipt plus the chain-linkage fields
+    /// a consumer needs to recompute-and-compare (`nono receipt verify`,
+    /// D-10). Field names deliberately match `receipt_sink.rs`'s
+    /// `ReceiptRecord` byte-for-byte, so Plan 118-09's command family can
+    /// read either writer's output with one code path.
+    #[derive(serde::Serialize)]
+    struct BrokerReceiptRecord<'a> {
+        sequence: u64,
+        prev_head: Option<nono::undo::ContentHash>,
+        leaf_hash: nono::undo::ContentHash,
+        chain_head: nono::undo::ContentHash,
+        receipt: &'a nono::EnforcementReceipt,
+    }
+
+    /// Hand-rolled, single-writer, KEYLESS (D-25: no `key` field) chain
+    /// state + JSONL append writer.
+    ///
+    /// Unlike `receipt_sink.rs`'s `ReceiptWriter`, this carries NO mutex:
+    /// this binary's own receipt-write call site inside [`run`] is
+    /// single-threaded by construction — one broker process handles exactly
+    /// one launch, one suspended child, one gate decision, and every
+    /// `write_receipt` call happens sequentially on `run`'s own call stack,
+    /// never from a second concurrent caller — so the WR-21 "hold the mutex
+    /// across the full build+advance+write sequence" discipline degenerates
+    /// to plain sequential code with nothing to race.
+    struct BrokerReceiptWriter {
+        head: [u8; 32],
+        sequence: u64,
+        file_path: PathBuf,
+    }
+
+    impl BrokerReceiptWriter {
+        /// Opens (creating if absent) `<sink_dir>/<session_id>.broker.jsonl`
+        /// in append mode once, to fail fast if the sink is unwritable.
+        ///
+        /// # Errors
+        ///
+        /// Returns `Err` if the sink file cannot be created/opened.
+        fn new(session_id: &str, sink_dir: &std::path::Path) -> NonoResult<Self> {
+            // D-05/CLAUDE.md path-security: never trust a wire-derived
+            // string directly in a filename. `NONO_SESSION_ID` is
+            // "audit-correlation only; accept empty" per the house
+            // convention `nono::supervisor::aipc_sdk` documents for this
+            // exact env var name — an unsafe/absent value here degrades to
+            // a fixed, safe name rather than failing the whole receipt
+            // write closed.
+            let safe_id = if session_id.is_empty()
+                || !session_id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                "unknown-session"
+            } else {
+                session_id
+            };
+            let file_path = sink_dir.join(format!("{safe_id}.broker.jsonl"));
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&file_path)
+                .map(|_file| ())
+                .map_err(|e| {
+                    NonoError::Snapshot(format!(
+                        "broker receipt sink: failed to create/open sink file {}: {e}",
+                        file_path.display()
+                    ))
+                })?;
+            Ok(Self {
+                head: [0u8; 32],
+                sequence: 0,
+                file_path,
+            })
+        }
+
+        /// Serialize `receipt`, advance the keyless chain, and append one
+        /// JSONL record. Chain state only advances AFTER the file write
+        /// durably succeeds, so a failed write never desyncs in-memory
+        /// state from disk.
+        ///
+        /// # Errors
+        ///
+        /// Returns `Err` if `receipt` cannot be serialized, or if the sink
+        /// file cannot be opened, written, or flushed.
+        fn write_receipt(&mut self, receipt: &nono::EnforcementReceipt) -> NonoResult<()> {
+            use std::io::Write as _;
+
+            let event_bytes = serde_json::to_vec(receipt).map_err(|e| {
+                NonoError::Snapshot(format!(
+                    "broker receipt sink: failed to serialize enforcement receipt: {e}"
+                ))
+            })?;
+            let leaf_hash = nono::hash_receipt_event(&event_bytes);
+            let prev_head = if self.sequence == 0 {
+                None
+            } else {
+                Some(nono::undo::ContentHash::from_bytes(self.head))
+            };
+            let chain_head = nono::hash_receipt_chain(prev_head.as_ref(), &leaf_hash);
+
+            let record = BrokerReceiptRecord {
+                sequence: self.sequence,
+                prev_head,
+                leaf_hash,
+                chain_head,
+                receipt,
+            };
+            let mut line = serde_json::to_vec(&record).map_err(|e| {
+                NonoError::Snapshot(format!(
+                    "broker receipt sink: failed to serialize receipt record: {e}"
+                ))
+            })?;
+            line.push(b'\n');
+
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.file_path)
+                .map_err(|e| {
+                    NonoError::Snapshot(format!(
+                        "broker receipt sink: failed to open sink file {} for append: {e}",
+                        self.file_path.display()
+                    ))
+                })?;
+            file.write_all(&line)
+                .and_then(|()| file.flush())
+                .map_err(|e| {
+                    NonoError::Snapshot(format!(
+                        "broker receipt sink: failed to append receipt record to {}: {e}",
+                        self.file_path.display()
+                    ))
+                })?;
+
+            self.head = *chain_head.as_bytes();
+            self.sequence = self.sequence.saturating_add(1);
+            Ok(())
+        }
+    }
+
+    /// D-03/D-15: resolves+guards the shared sink directory, assembles the
+    /// receipt from an already-built `census`, and writes it. Called at
+    /// EVERY point [`run`] decides `Ran` or `Refused`, so a receipt exists
+    /// before the child could ever execute an instruction (`Ran`) or
+    /// definitely never will (`Refused`).
+    ///
+    /// D-04: an emitter failure degrades VISIBLY (a `tracing::warn!`)
+    /// rather than aborting an already-decided session outcome — this
+    /// function has no `Result` return for exactly that reason; the
+    /// broker's actual resume/terminate decision is governed entirely by
+    /// `broker_resume_gate`, never by whether the receipt write succeeded.
+    fn record_broker_receipt(
+        session_id: &str,
+        pid: u32,
+        outcome: nono::SessionOutcome,
+        census: Vec<nono::LayerReceiptRow>,
+        package_sid_for_guard: Option<&str>,
+    ) {
+        let receipt = nono::EnforcementReceipt {
+            schema_version: 1,
+            session_id: session_id.to_string(),
+            pid,
+            entry_path: nono::EntryPath::Broker,
+            token_arm: None,
+            outcome,
+            layers: census,
+        };
+        let sink_dir = broker_receipt_sink_dir();
+        if let Err(e) = ensure_broker_receipt_sink_guarded(&sink_dir, package_sid_for_guard) {
+            tracing::warn!(
+                error = %e,
+                "broker: failed to guard the receipt sink directory — degrading visibly \
+                 (D-04), not aborting the already-decided session outcome"
+            );
+            return;
+        }
+        match BrokerReceiptWriter::new(session_id, &sink_dir) {
+            Ok(mut writer) => {
+                if let Err(e) = writer.write_receipt(&receipt) {
+                    tracing::warn!(
+                        error = %e,
+                        "broker: failed to write enforcement receipt — degrading visibly (D-04)"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "broker: failed to construct the enforcement-receipt writer — degrading \
+                     visibly (D-04)"
+                );
+            }
+        }
+    }
+
     /// 8-step sequence. Mechanism MUST stay byte-equivalent to the validated
     /// PoC at `.planning/quick/260508-m99-.../poc-broker/src/main.rs:36-186`,
     /// with token construction unified through `nono::create_low_integrity_primary_token`
@@ -883,6 +1230,25 @@ mod broker {
         // D-19: the supervisor (the broker, here) attests; the confined
         // process never does — every probe reads the real child token from
         // outside via the shared `crates/nono` primitives.
+        //
+        // Phase 118 Plan 06 (D-15/D-27): the sibling `NotApplicable` wire
+        // channel and the session-correlation id are read alongside
+        // `NONO_BROKER_REQUIRED_LAYERS`, but feed this broker's own receipt
+        // CENSUS only — never its resume/terminate DECISION, which stays
+        // governed exclusively by `NONO_BROKER_REQUIRED_LAYERS`'s existing
+        // fail-closed read below (D-27: an absent/unreadable value here
+        // degrades the RECEIPT — rows named in neither channel fail toward
+        // `Unconfirmed` — it never blocks resume). `NONO_SESSION_ID` is
+        // "audit-correlation only; accept empty" per the house convention
+        // `nono::supervisor::aipc_sdk` documents for this exact env var
+        // name; D-15's correlation-by-session-id degrades gracefully (an
+        // absent id still produces a valid, if uncorrelated, receipt)
+        // rather than refusing the launch over a record-quality concern.
+        let not_applicable_raw =
+            std::env::var("NONO_BROKER_NOT_APPLICABLE_LAYERS").unwrap_or_default();
+        let session_id = std::env::var("NONO_SESSION_ID").unwrap_or_default();
+        let pid = process_info.dwProcessId;
+
         let required_layers_raw = std::env::var("NONO_BROKER_REQUIRED_LAYERS").map_err(|_| {
             NonoError::SandboxInit(
                 "NONO_BROKER_REQUIRED_LAYERS absent or unreadable — refusing to resume an \
@@ -890,8 +1256,40 @@ mod broker {
                     .into(),
             )
         });
-        let gate_result = match required_layers_raw {
+        let (gate_result, census, expected_sid) = match required_layers_raw {
             Err(e) => {
+                // Phase 118 Plan 06 (D-03): the gate never even ran — still
+                // probe (read-only) for the most truthful census this
+                // branch can produce, and RECORD `Refused` BEFORE
+                // terminating, matching the other two producers' ordering
+                // guarantee (a receipt survives even this earliest
+                // fail-closed refusal).
+                let app_container_probe = if is_app_container {
+                    Some(nono::attestation::probe_app_container_sid(
+                        child_process.raw(),
+                    ))
+                } else {
+                    None
+                };
+                let integrity_probe = nono::attestation::probe_integrity_level(child_process.raw());
+                let expected_sid: Option<String> = match app_container_sid.as_ref() {
+                    Some(owned) => nono::package_sid_to_string(owned).ok(),
+                    None => None,
+                };
+                let census = broker_census(
+                    "",
+                    &not_applicable_raw,
+                    &app_container_probe,
+                    expected_sid.as_deref(),
+                    &integrity_probe,
+                );
+                record_broker_receipt(
+                    &session_id,
+                    pid,
+                    nono::SessionOutcome::Refused,
+                    census,
+                    expected_sid.as_deref(),
+                );
                 unsafe {
                     // SAFETY: fail closed — terminate rather than resume an
                     // unattested child (D-22).
@@ -924,15 +1322,33 @@ mod broker {
                     None => None,
                 };
                 let integrity_probe = nono::attestation::probe_integrity_level(child_process.raw());
-                broker_resume_gate(
+                // Phase 118 Plan 06: build this broker's own receipt census
+                // from the SAME probe results the gate below consumes — no
+                // re-probing (this plan's interfaces requirement).
+                let census = broker_census(
+                    &raw,
+                    &not_applicable_raw,
+                    &app_container_probe,
+                    expected_sid.as_deref(),
+                    &integrity_probe,
+                );
+                let gate = broker_resume_gate(
                     &raw,
                     app_container_probe,
                     expected_sid.as_deref(),
                     integrity_probe,
-                )
+                );
+                (gate, census, expected_sid)
             }
         };
         if let Err(reason) = gate_result {
+            record_broker_receipt(
+                &session_id,
+                pid,
+                nono::SessionOutcome::Refused,
+                census,
+                expected_sid.as_deref(),
+            );
             unsafe {
                 // SAFETY: fail closed — terminate rather than resume an
                 // unattested child (D-22).
@@ -942,6 +1358,20 @@ mod broker {
                 "startup self-attestation failed for the broker suspended child: {reason}"
             )));
         }
+
+        // Phase 118 Plan 06 (D-03): write the `Ran` receipt BEFORE
+        // `ResumeThread` — the same ordering guarantee `nono.exe`/
+        // `nono-agentd.exe` use, so a receipt exists before the child could
+        // ever execute a single instruction. `census.clone()`: the
+        // ResumeThread-failure branch immediately below needs the SAME
+        // census again for its own (rare) corrective `Refused` record.
+        record_broker_receipt(
+            &session_id,
+            pid,
+            nono::SessionOutcome::Ran,
+            census.clone(),
+            expected_sid.as_deref(),
+        );
 
         // CR-03.1: resume on BOTH arms — the legacy/PTY arm is now spawned
         // suspended too, so it needs the same resume.
@@ -953,6 +1383,21 @@ mod broker {
         };
         if resumed == u32::MAX {
             let err = unsafe { GetLastError() };
+            // Phase 118 Plan 06: the gate decided `Ran` and that record is
+            // already durable, but `ResumeThread` itself then failed — the
+            // child never actually executes. Append a SECOND, correcting
+            // `Refused` record to the SAME per-session chain (D-15's
+            // append-only, per-writer segment: never a replaced record, a
+            // truthful second one) — a governance consumer reading receipts
+            // for this session_id should take the LAST record as
+            // authoritative.
+            record_broker_receipt(
+                &session_id,
+                pid,
+                nono::SessionOutcome::Refused,
+                census,
+                expected_sid.as_deref(),
+            );
             unsafe {
                 // SAFETY: fail closed — terminate rather than leave suspended.
                 windows_sys::Win32::System::Threading::TerminateProcess(child_process.raw(), 1);
@@ -1765,6 +2210,262 @@ mod broker {
             assert!(
                 broker_resume_gate("", None, None, Ok(0x1000)).is_err(),
                 "an absent/empty required-layers env var must refuse resume (fail-closed)"
+            );
+        }
+    }
+
+    /// Phase 118 Plan 06 (D-15/D-27): the broker's own 13-row census,
+    /// receipt-record shape, and D-14 sentinel round-trip.
+    #[cfg(test)]
+    #[allow(clippy::unwrap_used)]
+    mod broker_receipt_tests {
+        use super::*;
+
+        fn sample_receipt() -> nono::EnforcementReceipt {
+            nono::EnforcementReceipt {
+                schema_version: 1,
+                session_id: "test-session".to_string(),
+                pid: 4242,
+                entry_path: nono::EntryPath::Broker,
+                token_arm: None,
+                outcome: nono::SessionOutcome::Ran,
+                layers: nono::LayerId::ALL
+                    .iter()
+                    .map(|&id| nono::LayerReceiptRow {
+                        id,
+                        status: nono::LayerAttestationStatus::Confirmed,
+                    })
+                    .collect(),
+            }
+        }
+
+        /// D-27: a `LayerId` named in NEITHER wire-contract channel — a
+        /// version-skewed nono-cli/nono-shell-broker pair is the real-world
+        /// shape this proves safe for — must classify `Unconfirmed`, never
+        /// be silently dropped from the 13-row census. Uses a REAL
+        /// `LayerId` (`RestrictedToken`) that is genuinely absent from both
+        /// test strings.
+        #[test]
+        fn unrecognized_row_classifies_unconfirmed_never_dropped() {
+            let census = broker_census(
+                "AppContainerProfile",
+                "MandatoryIntegrityLabel",
+                &None,
+                None,
+                &Ok(0x1000),
+            );
+            assert_eq!(
+                census.len(),
+                13,
+                "the census must always name all 13 rows, never a filtered subset"
+            );
+            let row = census
+                .iter()
+                .find(|r| r.id == nono::LayerId::RestrictedToken)
+                .expect("RestrictedToken must be present in the census output");
+            assert_eq!(
+                row.status,
+                nono::LayerAttestationStatus::Unconfirmed,
+                "a row named in neither wire-contract channel must fail toward Unconfirmed, \
+                 not be silently dropped or promoted to Confirmed/NotApplicable"
+            );
+        }
+
+        #[test]
+        fn not_applicable_channel_row_classifies_not_applicable() {
+            let census = broker_census(
+                "",
+                "AppContainerProfile,MandatoryIntegrityLabel",
+                &None,
+                None,
+                &Ok(0x1000),
+            );
+            let row = census
+                .iter()
+                .find(|r| r.id == nono::LayerId::AppContainerProfile)
+                .expect("present");
+            assert_eq!(row.status, nono::LayerAttestationStatus::NotApplicable);
+        }
+
+        #[test]
+        fn required_app_container_profile_confirms_only_when_sid_matches_expected() {
+            let matching = broker_census(
+                "AppContainerProfile",
+                "",
+                &Some(Ok(Some("S-1-15-2-1".to_string()))),
+                Some("S-1-15-2-1"),
+                &Ok(0x1000),
+            );
+            let row = matching
+                .iter()
+                .find(|r| r.id == nono::LayerId::AppContainerProfile)
+                .unwrap();
+            assert_eq!(row.status, nono::LayerAttestationStatus::Confirmed);
+
+            let mismatching = broker_census(
+                "AppContainerProfile",
+                "",
+                &Some(Ok(Some("S-1-15-2-1".to_string()))),
+                Some("S-1-15-2-999"),
+                &Ok(0x1000),
+            );
+            let row = mismatching
+                .iter()
+                .find(|r| r.id == nono::LayerId::AppContainerProfile)
+                .unwrap();
+            assert_eq!(
+                row.status,
+                nono::LayerAttestationStatus::Unconfirmed,
+                "an AppContainer SID present but not matching the per-run expected SID must \
+                 not classify Confirmed"
+            );
+        }
+
+        #[test]
+        fn required_mandatory_integrity_label_confirms_at_or_below_low_rid() {
+            let census = broker_census(
+                "MandatoryIntegrityLabel",
+                "",
+                &None,
+                None,
+                &Ok(SECURITY_MANDATORY_LOW_RID),
+            );
+            let row = census
+                .iter()
+                .find(|r| r.id == nono::LayerId::MandatoryIntegrityLabel)
+                .unwrap();
+            assert_eq!(row.status, nono::LayerAttestationStatus::Confirmed);
+
+            let census_medium =
+                broker_census("MandatoryIntegrityLabel", "", &None, None, &Ok(0x2000));
+            let row2 = census_medium
+                .iter()
+                .find(|r| r.id == nono::LayerId::MandatoryIntegrityLabel)
+                .unwrap();
+            assert_eq!(row2.status, nono::LayerAttestationStatus::Unconfirmed);
+        }
+
+        /// D-10/Plan 118-09: this crate's hand-rolled `BrokerReceiptRecord`
+        /// field names must match `receipt_sink.rs`'s `ReceiptRecord` shape
+        /// byte-for-byte, so the future `nono receipt` command family can
+        /// read either writer's output with one code path.
+        #[test]
+        fn broker_receipt_record_field_names_match_receipt_sink_shape() {
+            let receipt = sample_receipt();
+            let leaf_hash = nono::hash_receipt_event(b"{}");
+            let record = BrokerReceiptRecord {
+                sequence: 0,
+                prev_head: None,
+                leaf_hash,
+                chain_head: nono::hash_receipt_chain(None, &leaf_hash),
+                receipt: &receipt,
+            };
+            let json = serde_json::to_value(&record).expect("record must serialize");
+            let obj = json
+                .as_object()
+                .expect("record must serialize to a JSON object");
+            let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            assert_eq!(
+                keys,
+                vec![
+                    "chain_head",
+                    "leaf_hash",
+                    "prev_head",
+                    "receipt",
+                    "sequence"
+                ],
+                "field names must match receipt_sink.rs's ReceiptRecord shape byte-for-byte"
+            );
+        }
+
+        #[test]
+        fn broker_receipt_writer_chains_two_records_and_recomputes_from_disk() {
+            let sink_dir = tempfile::tempdir().expect("tempdir");
+            let mut writer = BrokerReceiptWriter::new("test-broker-session", sink_dir.path())
+                .expect("writer must construct");
+
+            let receipt_a = sample_receipt();
+            let mut receipt_b = sample_receipt();
+            receipt_b.outcome = nono::SessionOutcome::Refused;
+
+            writer.write_receipt(&receipt_a).expect("write 1");
+            writer.write_receipt(&receipt_b).expect("write 2");
+
+            let contents = std::fs::read_to_string(&writer.file_path).expect("read sink file");
+            let lines: Vec<&str> = contents.lines().collect();
+            assert_eq!(lines.len(), 2, "expected exactly 2 JSONL records");
+
+            let record_a: serde_json::Value =
+                serde_json::from_str(lines[0]).expect("parse record 1");
+            let record_b: serde_json::Value =
+                serde_json::from_str(lines[1]).expect("parse record 2");
+            assert_eq!(record_a["sequence"], 0);
+            assert!(record_a["prev_head"].is_null());
+            assert_eq!(record_b["sequence"], 1);
+            assert_eq!(record_b["prev_head"], record_a["chain_head"]);
+
+            // Recompute the chain independently from the on-disk leaf
+            // hashes and confirm it matches what was stored — the
+            // fail-closed recompute-and-compare shape `nono receipt verify`
+            // will use later (D-10).
+            let leaf_a: nono::undo::ContentHash =
+                serde_json::from_value(record_a["leaf_hash"].clone()).expect("parse leaf hash");
+            let recomputed_head_a = nono::hash_receipt_chain(None, &leaf_a);
+            let stored_head_a: nono::undo::ContentHash =
+                serde_json::from_value(record_a["chain_head"].clone()).expect("parse chain head");
+            assert_eq!(recomputed_head_a, stored_head_a);
+        }
+
+        #[test]
+        fn ensure_broker_receipt_sink_guarded_applies_label_even_with_no_sid() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            ensure_broker_receipt_sink_guarded(dir.path(), None)
+                .expect("guard must apply the mandatory label unconditionally");
+            assert!(
+                nono::low_integrity_label_and_mask(dir.path()).is_some(),
+                "the mandatory label must be applied even when no package SID was minted"
+            );
+        }
+
+        /// D-14 half 2 (sentinel round-trip), THIRD producer, class
+        /// coverage (RESEARCH.md's three-audit-questions discipline): the
+        /// broker's closest analog to the CLI's `expected_session_sid` and
+        /// the daemon's `expected_package_sid` sentinel-injection points is
+        /// the PROBED (not merely expected/compared) AppContainer package
+        /// SID string — arguably higher-risk since it originates from a
+        /// live OS probe, not a caller-supplied comparison value.
+        ///
+        /// Negative-control demonstration (per this plan's required
+        /// evidence, NOT committed — see `118-06-SUMMARY.md`): a temporary
+        /// `raw_app_container_sid: String` field was added to
+        /// `EnforcementReceipt`, populated verbatim from
+        /// `app_container_probe`, and this test re-run to confirm it FAILS
+        /// before the field was reverted.
+        #[test]
+        fn sentinel_seeded_app_container_sid_never_leaks_into_the_serialized_broker_receipt() {
+            const SENTINEL: &str = "S-1-15-2-1-SENTINEL-BROKER-4f1a";
+            let census = broker_census(
+                "AppContainerProfile,MandatoryIntegrityLabel",
+                "",
+                &Some(Ok(Some(SENTINEL.to_string()))),
+                Some(SENTINEL),
+                &Ok(0x1000),
+            );
+            let receipt = nono::EnforcementReceipt {
+                schema_version: 1,
+                session_id: "sentinel-session".to_string(),
+                pid: 4242,
+                entry_path: nono::EntryPath::Broker,
+                token_arm: None,
+                outcome: nono::SessionOutcome::Ran,
+                layers: census,
+            };
+            let json = serde_json::to_string(&receipt).expect("receipt must serialize");
+            assert!(
+                !json.contains("SENTINEL-BROKER-4f1a"),
+                "the sentinel-seeded AppContainer SID must never appear in a serialized \
+                 broker receipt: {json}"
             );
         }
     }
