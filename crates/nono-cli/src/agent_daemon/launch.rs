@@ -1414,6 +1414,39 @@ mod windows_impl {
     ///   returned, so a child in a *different* AppContainer — one the WFP
     ///   `ALE_USER_ID` filter is not scoped to — attested identically to the
     ///   correct one. It is now compared to this tenant's own package SID.
+    ///
+    /// # Phase 118 Plan 04 (D-26): collect-all-then-decide restructure
+    ///
+    /// This function used to be a single early-return chain: each of the
+    /// four negative predicates below `return`ed immediately, so a launch
+    /// that failed `AppContainerProfile` never even CALLED `probe_in_job` —
+    /// there was no state to record for `JobObjectContainment`,
+    /// `WfpEgressFilters`, or `DaclPackageSidGrant` on that launch, only
+    /// "never reached". D-26 requires every modelled layer to be probed
+    /// unconditionally so a receipt can carry a real per-row census (RCPT-01)
+    /// even on a launch that aborts early.
+    ///
+    /// The restructure is split into two PURE functions below, mirroring the
+    /// CLI-side `census_from_entries`/`decide_from_entries` split (Phase 118
+    /// Plan 03, `exec_strategy_windows/attestation.rs`):
+    /// - [`daemon_decision_from_booleans`] is the IDENTICAL abort-precedence
+    ///   chain, byte-for-byte in decision terms, now operating on
+    ///   precomputed booleans instead of inline probe calls. Which layer
+    ///   aborts, and in what precedence order when more than one has
+    ///   failed, is unchanged — this is the "provably unchanged" half of
+    ///   D-26, proved by
+    ///   `attestation_gate_tests::daemon_decision_from_booleans_matches_pre_restructure_precedence_for_every_scenario`.
+    /// - [`daemon_census_rows`] is a NEW, non-early-returning pass over the
+    ///   same 5 booleans, producing a real [`nono::LayerAttestationStatus`]
+    ///   for every one of the 5 modelled rows regardless of which one the
+    ///   decision aborts on.
+    ///
+    /// `daemon_attest_and_decide` itself now does exactly two things: call
+    /// both live OS probes UNCONDITIONALLY (this is the actual behavior
+    /// change — `probe_in_job` used to be gated behind
+    /// `app_container_confirmed`), then delegate to
+    /// `daemon_decision_from_booleans` for the decision. Its signature and
+    /// the `launch_agent` call site are BOTH unchanged.
     fn daemon_attest_and_decide(
         process: HANDLE,
         job: HANDLE,
@@ -1423,14 +1456,54 @@ mod windows_impl {
         wfp_filters_installed: bool,
         ancestor_traverse_applied: bool,
     ) -> DaemonAttestationDecision {
-        use nono::attestation::{probe_app_container_sid, probe_in_job, LayerAttestationStatus};
+        use nono::attestation::{probe_app_container_sid, probe_in_job};
 
         // WR-01: presence is not enough — it must be THIS tenant's package
         // SID, the one the WFP ALE_USER_ID filter is scoped to.
+        //
+        // D-26: this probe and the one immediately below it BOTH run
+        // unconditionally now — neither gates the other. Pre-restructure,
+        // `probe_in_job` was only reached if this comparison had already
+        // succeeded.
         let app_container_confirmed = match probe_app_container_sid(process) {
             Ok(Some(sid)) => sid.eq_ignore_ascii_case(expected_package_sid),
             Ok(None) | Err(_) => false,
         };
+
+        // Phase 117 review CR-02: probed against the daemon's OWN agent job
+        // handle, not the vacuous "is this process in ANY job" query a null
+        // handle would ask (a Win8+ nested-job host makes that always true).
+        let job_confirmed = matches!(probe_in_job(process, job), Ok(true));
+
+        daemon_decision_from_booleans(
+            app_container_confirmed,
+            job_confirmed,
+            network_scoping_required,
+            wfp_filters_installed,
+            dacl_guard_applied,
+            ancestor_traverse_applied,
+        )
+    }
+
+    /// D-26: the exact original abort-precedence chain, preserved
+    /// byte-for-byte in DECISION terms — same predicates, same order, same
+    /// `layer`/`status` values on `Abort` — now taking precomputed booleans
+    /// instead of making the two live OS probe calls inline. Factored out of
+    /// `daemon_attest_and_decide` so it is unit-testable without a real
+    /// process/job handle (`attestation_gate_tests::
+    /// daemon_decision_from_booleans_matches_pre_restructure_precedence_for_every_scenario`),
+    /// and so [`daemon_census_rows`] can be driven from the identical input
+    /// shape without duplicating probe calls.
+    fn daemon_decision_from_booleans(
+        app_container_confirmed: bool,
+        job_confirmed: bool,
+        network_scoping_required: bool,
+        wfp_filters_installed: bool,
+        dacl_guard_applied: bool,
+        ancestor_traverse_applied: bool,
+    ) -> DaemonAttestationDecision {
+        use nono::attestation::LayerAttestationStatus;
+
         if !app_container_confirmed {
             return DaemonAttestationDecision::Abort {
                 layer: "AppContainerProfile",
@@ -1438,10 +1511,6 @@ mod windows_impl {
             };
         }
 
-        // Phase 117 review CR-02: probed against the daemon's OWN agent job
-        // handle, not the vacuous "is this process in ANY job" query a null
-        // handle would ask (a Win8+ nested-job host makes that always true).
-        let job_confirmed = matches!(probe_in_job(process, job), Ok(true));
         if !job_confirmed {
             return DaemonAttestationDecision::Abort {
                 layer: "JobObjectContainment",
@@ -1497,6 +1566,217 @@ mod windows_impl {
 
         // WR-08: every modelled layer holds. `Proceed` is reachable.
         DaemonAttestationDecision::Proceed
+    }
+
+    /// D-26/RCPT-01 (Phase 118 Plan 04): the daemon's parallel,
+    /// NON-early-returning census pass over the same 5 modelled layers
+    /// [`daemon_decision_from_booleans`] decides over — mirrors the
+    /// CLI-side `census_from_entries`'s "separate pure pass alongside the
+    /// decision function" shape (Phase 118 Plan 03). Every row gets a real
+    /// status regardless of what the DECISION would have aborted on first —
+    /// this is the exact property the old early-return chain made
+    /// impossible to observe (proved by
+    /// `attestation_gate_tests::daemon_census_rows_reports_real_status_past_the_first_abort_point`).
+    ///
+    /// Status mapping mirrors each row's registry `ProbeKind`
+    /// (`layer_registry.rs`'s `REGISTRY_ENTRIES`, verified per-row by direct
+    /// read before writing this function, not assumed):
+    /// - `AppContainerProfile`/`JobObjectContainment` (`LiveTokenOrJobQuery`):
+    ///   `Confirmed`/`Unconfirmed` — a live re-probe already happened.
+    /// - `WfpEgressFilters` (`ConfirmedByEnforcingComponentReport`):
+    ///   `NotApplicable` when this launch did not request network scoping,
+    ///   otherwise `Confirmed`/`Unconfirmed` from the enforcing component's
+    ///   own report (never re-probed here — WR-02/Open Question 1's
+    ///   resolution, unchanged by this restructure).
+    /// - `DaclPackageSidGrant`/`DaclAncestorTraverse` (`ConfiguredOnly`):
+    ///   `EstablishedNotIndependentlyObservable`/`Unconfirmed` — the
+    ///   apply-time `Result` already happened; there is no independent
+    ///   re-observation for these rows by design (the same vocabulary the
+    ///   CLI-side `classify_row` uses for this probe kind).
+    ///
+    /// D-16: a launch whose `ancestor_traverse_applied` is `false` reaches
+    /// `Proceed` (WR-06) while this function still reports
+    /// `DaclAncestorTraverse: Unconfirmed` — the "Unconfirmed-on-Proceed"
+    /// state D-16 requires the receipt be ABLE to show, proved by
+    /// `daemon_expectancy_cross_check::unconfirmed_on_proceed_is_representable_in_a_daemon_receipt`.
+    fn daemon_census_rows(
+        app_container_confirmed: bool,
+        job_confirmed: bool,
+        network_scoping_required: bool,
+        wfp_filters_installed: bool,
+        dacl_guard_applied: bool,
+        ancestor_traverse_applied: bool,
+    ) -> Vec<nono::LayerReceiptRow> {
+        use nono::attestation::LayerAttestationStatus;
+        use nono::{LayerId, LayerReceiptRow};
+
+        let wfp_status = if !network_scoping_required {
+            LayerAttestationStatus::NotApplicable
+        } else if wfp_filters_installed {
+            LayerAttestationStatus::Confirmed
+        } else {
+            LayerAttestationStatus::Unconfirmed
+        };
+
+        vec![
+            LayerReceiptRow {
+                id: LayerId::AppContainerProfile,
+                status: if app_container_confirmed {
+                    LayerAttestationStatus::Confirmed
+                } else {
+                    LayerAttestationStatus::Unconfirmed
+                },
+            },
+            LayerReceiptRow {
+                id: LayerId::JobObjectContainment,
+                status: if job_confirmed {
+                    LayerAttestationStatus::Confirmed
+                } else {
+                    LayerAttestationStatus::Unconfirmed
+                },
+            },
+            LayerReceiptRow {
+                id: LayerId::WfpEgressFilters,
+                status: wfp_status,
+            },
+            LayerReceiptRow {
+                id: LayerId::DaclPackageSidGrant,
+                status: if dacl_guard_applied {
+                    LayerAttestationStatus::EstablishedNotIndependentlyObservable
+                } else {
+                    LayerAttestationStatus::Unconfirmed
+                },
+            },
+            LayerReceiptRow {
+                id: LayerId::DaclAncestorTraverse,
+                status: if ancestor_traverse_applied {
+                    LayerAttestationStatus::EstablishedNotIndependentlyObservable
+                } else {
+                    LayerAttestationStatus::Unconfirmed
+                },
+            },
+        ]
+    }
+
+    /// The 5 `LayerId`s [`daemon_census_rows`] models directly — used only
+    /// by `daemon_expectancy_cross_check`'s completeness assertion (Phase
+    /// 118 Plan 04 Task 2) to distinguish "modelled here" from "classified
+    /// via [`DAEMON_UNMODELLED_LAYER_EXPECTANCY`]" when checking that every
+    /// registry row expected on `(EntryPath::Daemon, ..)` has SOME daemon-
+    /// local classification.
+    const DAEMON_MODELLED_LAYER_IDS: [nono::LayerId; 5] = [
+        nono::LayerId::AppContainerProfile,
+        nono::LayerId::JobObjectContainment,
+        nono::LayerId::WfpEgressFilters,
+        nono::LayerId::DaclPackageSidGrant,
+        nono::LayerId::DaclAncestorTraverse,
+    ];
+
+    /// D-16 (Finding 1c, Phase 118 Plan 04): the 8 `LayerId`s
+    /// [`daemon_census_rows`] does not model, classified per each row's
+    /// REAL `(EntryPath::Daemon, ..)` expectancy cell in
+    /// `layer_registry.rs::REGISTRY_ENTRIES` — verified by direct read of
+    /// every one of the 8 rows before writing this table (see this plan's
+    /// SUMMARY.md for the row-by-row citation), not assumed to be
+    /// uniformly `NotApplicable`. All 8 happen to classify `NotApplicable`
+    /// today: seven have NO `(EntryPath::Daemon, expected: true)` cell at
+    /// all (so `classify_row`'s own `unwrap_or(false)` default applies), and
+    /// `MinifilterAbsence` DOES have such a cell but its
+    /// `ProbeKind::NotApplicable` forces `NotApplicable` regardless (D-21/
+    /// ADR-65 — there is nothing to probe against a structural absence).
+    ///
+    /// `MinifilterAbsence` is named explicitly below, not left to fall out
+    /// of a shared default, so a future edit cannot silently reclassify it
+    /// (per this plan's own instruction).
+    ///
+    /// Drift-guarded against `layer_registry.rs` by
+    /// `daemon_expectancy_cross_check::every_daemon_expected_registry_row_has_a_matching_daemon_local_classification`
+    /// below — a new `(EntryPath::Daemon, expected: true)` cell added to the
+    /// registry for any of these 8 `LayerId`s (or a 14th `LayerId` entirely)
+    /// without a matching update here fails that test.
+    const DAEMON_UNMODELLED_LAYER_EXPECTANCY: [(
+        nono::LayerId,
+        nono::attestation::LayerAttestationStatus,
+    ); 8] = [
+        (
+            nono::LayerId::RestrictedToken,
+            nono::attestation::LayerAttestationStatus::NotApplicable,
+        ),
+        (
+            nono::LayerId::MandatoryIntegrityLabel,
+            nono::attestation::LayerAttestationStatus::NotApplicable,
+        ),
+        (
+            nono::LayerId::DaclSessionSidGrant,
+            nono::attestation::LayerAttestationStatus::NotApplicable,
+        ),
+        (
+            nono::LayerId::DaclAncestorReadAttrs,
+            nono::attestation::LayerAttestationStatus::NotApplicable,
+        ),
+        (
+            nono::LayerId::FirewallRulesEgress,
+            nono::attestation::LayerAttestationStatus::NotApplicable,
+        ),
+        // D-21/ADR-65: MinifilterAbsence's own registry cell IS
+        // `expected: true` at `(EntryPath::Daemon, None)`, but its
+        // `ProbeKind::NotApplicable` means there is no minifilter to probe
+        // — this row is structural absence, not an unconfirmed probe.
+        // Named explicitly (never `Unconfirmed`) so a future edit cannot
+        // accidentally reclassify it.
+        (
+            nono::LayerId::MinifilterAbsence,
+            nono::attestation::LayerAttestationStatus::NotApplicable,
+        ),
+        (
+            nono::LayerId::BrokerAuthenticodeTrustGate,
+            nono::attestation::LayerAttestationStatus::NotApplicable,
+        ),
+        (
+            nono::LayerId::InterpreterCoverageGate,
+            nono::attestation::LayerAttestationStatus::NotApplicable,
+        ),
+    ];
+
+    /// D-01/D-12 (Phase 118 Plan 04): assembles the daemon's own
+    /// [`nono::EnforcementReceipt`] from a 5-row modelled census
+    /// ([`daemon_census_rows`]) plus [`DAEMON_UNMODELLED_LAYER_EXPECTANCY`]'s
+    /// 8 rows, into the full 13-row census D-01 requires. NOT wired into the
+    /// live `launch_agent` gate by this plan — that wiring is a later plan's
+    /// job; this plan only proves the assembly path is correct and
+    /// content-free (D-14, Task 2 Test 4).
+    ///
+    /// `entry_path`/`token_arm` are the core `nono::EntryPath`/
+    /// `nono::TokenArm` enums (post-118-01 correction, not `&'static str` —
+    /// see this plan's SUMMARY.md "Plan-Text Supersession" note), matching
+    /// the CLI-side `build_enforcement_receipt`'s (Phase 118 Plan 03)
+    /// same-shaped assembly. `token_arm` is always `None` here — the daemon
+    /// arm bypasses `select_windows_token_arm` entirely (see
+    /// `nono::EnforcementReceipt::token_arm`'s own doc comment).
+    fn build_daemon_receipt(
+        census: Vec<nono::LayerReceiptRow>,
+        session_id: String,
+        pid: u32,
+        outcome: nono::SessionOutcome,
+    ) -> nono::EnforcementReceipt {
+        let mut layers = census;
+        layers.extend(
+            DAEMON_UNMODELLED_LAYER_EXPECTANCY
+                .iter()
+                .map(|(id, status)| nono::LayerReceiptRow {
+                    id: *id,
+                    status: *status,
+                }),
+        );
+        nono::EnforcementReceipt {
+            schema_version: 1,
+            session_id,
+            pid,
+            entry_path: nono::EntryPath::Daemon,
+            token_arm: None,
+            outcome,
+            layers,
+        }
     }
 
     /// Remove state for a failed agent launch. If `AgentTenant` was already
@@ -2267,6 +2547,209 @@ mod windows_impl {
                 format!("{write_false_traverse_false:?}"),
                 "flipping ancestor_traverse_applied must not change the decision even when the \
                  write grant is absent"
+            );
+        }
+
+        /// Phase 118 Plan 04, Task 1 (D-26 equivalence proof, Test 1): the
+        /// restructured [`daemon_decision_from_booleans`] reaches the
+        /// IDENTICAL `DaemonAttestationDecision` the pre-restructure
+        /// early-return chain reached, for every scenario that previously
+        /// triggered one of its four early returns — including the
+        /// two-simultaneous-failure case, where the pre-restructure code
+        /// could only ever observe the FIRST failure (`AppContainerProfile`),
+        /// never `JobObjectContainment`, because the early return prevented
+        /// `probe_in_job` from ever being called for that input. This is a
+        /// perturbation-proofed equivalence test, not a "13 rows present"
+        /// count: it pins the exact `layer` name the decision aborts on, in
+        /// source-order precedence, for 7 distinct input combinations (≥6
+        /// required by this plan).
+        #[test]
+        fn daemon_decision_from_booleans_matches_pre_restructure_precedence_for_every_scenario() {
+            enum Expected {
+                Proceed,
+                Abort(&'static str),
+            }
+
+            struct Scenario {
+                label: &'static str,
+                app_container_confirmed: bool,
+                job_confirmed: bool,
+                network_scoping_required: bool,
+                wfp_filters_installed: bool,
+                dacl_guard_applied: bool,
+                ancestor_traverse_applied: bool,
+                expected: Expected,
+            }
+
+            let scenarios = [
+                Scenario {
+                    label: "all pass",
+                    app_container_confirmed: true,
+                    job_confirmed: true,
+                    network_scoping_required: false,
+                    wfp_filters_installed: false,
+                    dacl_guard_applied: true,
+                    ancestor_traverse_applied: true,
+                    expected: Expected::Proceed,
+                },
+                Scenario {
+                    label: "AppContainerProfile fails alone",
+                    app_container_confirmed: false,
+                    job_confirmed: true,
+                    network_scoping_required: false,
+                    wfp_filters_installed: false,
+                    dacl_guard_applied: true,
+                    ancestor_traverse_applied: true,
+                    expected: Expected::Abort("AppContainerProfile"),
+                },
+                Scenario {
+                    label: "JobObjectContainment fails alone",
+                    app_container_confirmed: true,
+                    job_confirmed: false,
+                    network_scoping_required: false,
+                    wfp_filters_installed: false,
+                    dacl_guard_applied: true,
+                    ancestor_traverse_applied: true,
+                    expected: Expected::Abort("JobObjectContainment"),
+                },
+                Scenario {
+                    label: "WfpEgressFilters fails alone",
+                    app_container_confirmed: true,
+                    job_confirmed: true,
+                    network_scoping_required: true,
+                    wfp_filters_installed: false,
+                    dacl_guard_applied: true,
+                    ancestor_traverse_applied: true,
+                    expected: Expected::Abort("WfpEgressFilters"),
+                },
+                Scenario {
+                    label: "DaclPackageSidGrant fails alone",
+                    app_container_confirmed: true,
+                    job_confirmed: true,
+                    network_scoping_required: false,
+                    wfp_filters_installed: false,
+                    dacl_guard_applied: false,
+                    ancestor_traverse_applied: true,
+                    expected: Expected::Abort("DaclPackageSidGrant"),
+                },
+                Scenario {
+                    label: "two fail simultaneously: AppContainerProfile AND JobObjectContainment",
+                    app_container_confirmed: false,
+                    job_confirmed: false,
+                    network_scoping_required: false,
+                    wfp_filters_installed: false,
+                    dacl_guard_applied: true,
+                    ancestor_traverse_applied: true,
+                    // Pre-restructure precedence: AppContainerProfile's early
+                    // return is FIRST in source order, so it wins even
+                    // though JobObjectContainment also failed —
+                    // `probe_in_job` was never even called in the old code
+                    // for this input, so the old code could not have named
+                    // anything else here either.
+                    expected: Expected::Abort("AppContainerProfile"),
+                },
+                Scenario {
+                    label: "ancestor_traverse_applied=false never aborts (WR-06), even combined \
+                             with an unrelated abort",
+                    app_container_confirmed: true,
+                    job_confirmed: true,
+                    network_scoping_required: false,
+                    wfp_filters_installed: false,
+                    dacl_guard_applied: false,
+                    ancestor_traverse_applied: false,
+                    expected: Expected::Abort("DaclPackageSidGrant"),
+                },
+            ];
+
+            for s in scenarios {
+                let decision = daemon_decision_from_booleans(
+                    s.app_container_confirmed,
+                    s.job_confirmed,
+                    s.network_scoping_required,
+                    s.wfp_filters_installed,
+                    s.dacl_guard_applied,
+                    s.ancestor_traverse_applied,
+                );
+                match (&decision, &s.expected) {
+                    (DaemonAttestationDecision::Proceed, Expected::Proceed) => {}
+                    (
+                        DaemonAttestationDecision::Abort { layer, .. },
+                        Expected::Abort(expected_layer),
+                    ) => {
+                        assert_eq!(
+                            *layer, *expected_layer,
+                            "{}: aborted on the wrong layer, got {decision:?}",
+                            s.label
+                        );
+                    }
+                    _ => panic!(
+                        "{}: got {decision:?}, expected {}",
+                        s.label,
+                        match s.expected {
+                            Expected::Proceed => "Proceed".to_string(),
+                            Expected::Abort(l) => format!("Abort{{{l}}}"),
+                        }
+                    ),
+                }
+            }
+        }
+
+        /// Phase 118 Plan 04, Task 1 (D-26, Test 2): census completeness
+        /// given the restructure. For the "AppContainerProfile fails alone"
+        /// scenario — which pre-restructure would have early-returned
+        /// before `probe_in_job` (and every other row) was ever consulted —
+        /// [`daemon_census_rows`] must report a REAL status for
+        /// `JobObjectContainment`/`WfpEgressFilters`/`DaclPackageSidGrant`/
+        /// `DaclAncestorTraverse`. This proves the restructure actually
+        /// unlocks "probe everything", not merely reorders code without
+        /// effect.
+        #[test]
+        fn daemon_census_rows_reports_real_status_past_the_first_abort_point() {
+            use nono::attestation::LayerAttestationStatus;
+
+            let census = daemon_census_rows(
+                false, // app_container_confirmed — the row that fails
+                true,  // job_confirmed
+                false, // network_scoping_required
+                false, // wfp_filters_installed
+                true,  // dacl_guard_applied
+                true,  // ancestor_traverse_applied
+            );
+            assert_eq!(
+                census.len(),
+                5,
+                "the daemon's modelled census must report all 5 rows: {census:?}"
+            );
+
+            let status_of = |id: nono::LayerId| {
+                census
+                    .iter()
+                    .find(|row| row.id == id)
+                    .unwrap_or_else(|| panic!("census missing a row for {id:?}: {census:?}"))
+                    .status
+            };
+
+            assert_eq!(
+                status_of(nono::LayerId::AppContainerProfile),
+                LayerAttestationStatus::Unconfirmed
+            );
+            assert_eq!(
+                status_of(nono::LayerId::JobObjectContainment),
+                LayerAttestationStatus::Confirmed,
+                "JobObjectContainment must be probed even though AppContainerProfile fails \
+                 first — this is the exact row the OLD early-return chain could never reach"
+            );
+            assert_eq!(
+                status_of(nono::LayerId::WfpEgressFilters),
+                LayerAttestationStatus::NotApplicable
+            );
+            assert_eq!(
+                status_of(nono::LayerId::DaclPackageSidGrant),
+                LayerAttestationStatus::EstablishedNotIndependentlyObservable
+            );
+            assert_eq!(
+                status_of(nono::LayerId::DaclAncestorTraverse),
+                LayerAttestationStatus::EstablishedNotIndependentlyObservable
             );
         }
     }
