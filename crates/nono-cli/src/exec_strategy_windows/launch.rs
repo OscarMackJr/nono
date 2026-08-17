@@ -13,6 +13,11 @@ use windows_sys::Win32::Security::Authorization::{
 use windows_sys::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
+// Phase 118 Plan 07 (RCPT-01/D-05): pid is a bare integer identity field on
+// `nono::EnforcementReceipt` — sourced from the SUPERVISOR's own already-open
+// process handle via `GetProcessId`, never from anything read out of the
+// child process's memory/argv/environment (D-19).
+use windows_sys::Win32::System::Threading::GetProcessId;
 
 // Phase 117 D-21 (CINT-02): the startup self-attestation gate this file
 // wires in at `spawn_windows_child`'s suspended-child window (Plan 10).
@@ -1548,6 +1553,31 @@ fn downgrade_detail_pointer(
 /// `if let Err(err) = ... { terminate_suspended_process(...); return
 /// Err(err); }` idiom as the adjacent containment/resource-limit gates this
 /// function is inserted alongside.
+///
+/// # D-17: this gate is the hook path's receipt coverage too
+///
+/// This gate is reached by every `EntryPath::DirectCli` session, including
+/// the per-tool-call hook re-entry (`crates/nono/src/receipt.rs`'s
+/// `EntryPath::DirectCli` doc comment: "the per-tool-call hook path" is one
+/// of the three things `DirectCli` covers — `claude_code_hook.rs` rewrites a
+/// tool call into a fresh `nono run` invocation, which is a brand-new
+/// `nono.exe` process going through this exact same gate, not a separate
+/// code path). Receipt coverage for the hook path is therefore automatic as
+/// of Plan 118-07's wiring below, with no separate call site needed. What
+/// remains is D-17/117-D-24's MEASURED latency budget for this path, which
+/// is a measurement task, not a code change — see Plan 118-10.
+///
+/// # RCPT-01/D-02/D-03 (Phase 118 Plan 07): a receipt on every branch, before `ResumeThread`
+///
+/// This gate now also writes exactly one [`nono::EnforcementReceipt`] per
+/// session, on EVERY branch below (`Proceed` / `Abort` / `ProceedDowngraded`)
+/// — the census is built from the SAME `entries`/`input` this gate's own
+/// decision is computed from, before `attest_and_decide` consumes `input` by
+/// value, so the two can never silently diverge. See
+/// [`emit_enforcement_receipt`] for the D-04 degrade-vs-abort posture around
+/// a write failure, and [`apply_startup_attestation_gate_with_sink_dir`] for
+/// the sink-directory seam this wrapper pins to the real
+/// `receipt_sink::resolve_sink_dir()`.
 #[allow(clippy::too_many_arguments)]
 fn apply_startup_attestation_gate(
     process: HANDLE,
@@ -1558,6 +1588,47 @@ fn apply_startup_attestation_gate(
     applied: layer_registry::AppliedLayers,
     expected_session_sid: Option<&str>,
     session_id: Option<&str>,
+) -> Result<()> {
+    apply_startup_attestation_gate_with_sink_dir(
+        process,
+        containment_job,
+        entry_path,
+        token_arm,
+        wfp_preconfirmed,
+        applied,
+        expected_session_sid,
+        session_id,
+        &crate::receipt_sink::resolve_sink_dir(),
+        // Production always resolves `require_receipts` from the real
+        // machine policy (`None` here means "no override" — see
+        // `record_receipt_write_outcome`'s doc).
+        None,
+    )
+}
+
+/// `apply_startup_attestation_gate`'s real body, parameterized on the
+/// receipt sink directory so tests can inject an isolated tempdir (or an
+/// intentionally unwritable path, for the D-04 write-failure behaviors)
+/// instead of exercising the real, shared `%PROGRAMDATA%\nono\receipts`
+/// directory on every one of this file's ~12 gate-level test call sites,
+/// and on `require_receipts` so tests can drive BOTH of D-04's postures
+/// deterministically without writing to the real (admin-only) `HKLM`
+/// `RequireReceipts` value. The public wrapper above is the ONLY production
+/// call path and always pins `sink_dir` to
+/// [`crate::receipt_sink::resolve_sink_dir`] and `require_receipts_override`
+/// to `None` (real machine-policy read).
+#[allow(clippy::too_many_arguments)]
+fn apply_startup_attestation_gate_with_sink_dir(
+    process: HANDLE,
+    containment_job: HANDLE,
+    entry_path: layer_registry::EntryPath,
+    token_arm: Option<WindowsTokenArm>,
+    wfp_preconfirmed: bool,
+    applied: layer_registry::AppliedLayers,
+    expected_session_sid: Option<&str>,
+    session_id: Option<&str>,
+    sink_dir: &Path,
+    require_receipts_override: Option<bool>,
 ) -> Result<()> {
     let input = attestation::AttestationInput {
         child_process: process,
@@ -1596,15 +1667,83 @@ fn apply_startup_attestation_gate(
         required_layers_override: &[],
         machine_required_layers: &[],
     };
+
+    // Phase 118 Plan 07 (RCPT-01/D-01/D-02/D-03): the SAME 13-row census
+    // `attest_and_decide`'s internal `decide_from_entries` walks, built from
+    // the SAME `entries`/`input` — BEFORE the decision, so a census call can
+    // never be constructed from an `AttestationInput` that has already
+    // diverged from the one the decision itself used. `census_from_entries`
+    // never early-returns (Plan 118-03), so this is complete regardless of
+    // which branch the match below takes.
+    let entries = layer_registry::all_entries();
+    let census = attestation::census_from_entries(entries, &input);
+    // D-05: a bare integer identity field, sourced from the supervisor's own
+    // already-open handle — never from the child's own claims (D-19).
+    // SAFETY: `GetProcessId` has no preconditions beyond `process` being a
+    // valid `HANDLE` value; a NULL or otherwise invalid handle is documented
+    // to make the call return 0, not undefined behavior (exercised by this
+    // file's own null-handle gate tests).
+    let pid = unsafe { GetProcessId(process) };
+
     match attestation::attest_and_decide(input)? {
-        attestation::AttestationDecision::Proceed => Ok(()),
+        attestation::AttestationDecision::Proceed => {
+            emit_enforcement_receipt(
+                sink_dir,
+                census,
+                session_id,
+                expected_session_sid,
+                pid,
+                entry_path,
+                token_arm,
+                nono::SessionOutcome::Ran,
+                require_receipts_override,
+            )?;
+            Ok(())
+        }
         attestation::AttestationDecision::Abort { layer, status } => {
+            // D-02: the `Refused` receipt is the highest-value record there
+            // is — it names the failed layer AND the state of the other
+            // twelve. Best-effort: the session is aborting either way, so
+            // this call's own `Err` (e.g. `require_receipts` set AND the
+            // write itself failed) is deliberately NOT propagated here — the
+            // ORIGINAL attestation failure below is always what this
+            // function returns, so a receipt-emission failure can never mask
+            // the underlying security error (critical_repo_constraints #5).
+            // `record_receipt_write_outcome` still fires its own visible
+            // degrade/abort LOG unconditionally on failure (D-04: never
+            // silent), even though its `Result` is discarded here.
+            let _ = emit_enforcement_receipt(
+                sink_dir,
+                census,
+                session_id,
+                expected_session_sid,
+                pid,
+                entry_path,
+                token_arm,
+                nono::SessionOutcome::Refused,
+                require_receipts_override,
+            );
             Err(NonoError::LayerAttestationFailed {
                 layer: format!("{layer:?}"),
                 reason: format!("{status:?}"),
             })
         }
         attestation::AttestationDecision::ProceedDowngraded { downgraded } => {
+            // RCPT-01/D-04: unlike the `Abort` arm, this session WAS going to
+            // proceed — so a write failure under `require_receipts` really
+            // must convert this into an abort (propagate `Err`, skipping the
+            // banner/audit-event logic below entirely).
+            emit_enforcement_receipt(
+                sink_dir,
+                census,
+                session_id,
+                expected_session_sid,
+                pid,
+                entry_path,
+                token_arm,
+                nono::SessionOutcome::Ran,
+                require_receipts_override,
+            )?;
             // Item-2 fix (checker pass 3): sorted, comma-joined `Debug`-format
             // `LayerId` names — the same SET of downgraded layers always
             // produces the same dedup key regardless of iteration order.
@@ -1672,6 +1811,149 @@ fn apply_startup_attestation_gate(
             Ok(())
         }
     }
+}
+
+/// Phase 118 Plan 07 (RCPT-01/D-02/D-03/D-04): assemble and write one
+/// [`nono::EnforcementReceipt`] for this session's launch, then apply D-04's
+/// visible-degrade-by-default / machine-policy-fail-closed posture around
+/// any write failure.
+///
+/// `session_id: None` is structurally unreachable from the real launch path
+/// (`execute_direct` always passes `Some(flags.session.session_id.as_str())`
+/// — `execution_runtime.rs:637`) but
+/// `apply_startup_attestation_gate`'s own signature permits it (several
+/// gate-level unit tests exercise it deliberately). Treated identically to a
+/// write failure rather than silently skipped, so this arm shares the SAME
+/// D-04 degrade/abort posture instead of a third, undocumented behavior.
+///
+/// Returns `Err` only when the receipt could not be written AND machine
+/// policy's `require_receipts` is set — the caller must treat that `Err`
+/// exactly like an `AttestationDecision::Abort` (terminate the suspended
+/// child; the `Abort` arm itself deliberately does NOT do this — see its own
+/// call site comment). Returns `Ok(())` otherwise: either the receipt was
+/// written, or its failure was recorded as a visible degrade (D-04's
+/// default, non-`require_receipts` posture).
+#[allow(clippy::too_many_arguments)]
+fn emit_enforcement_receipt(
+    sink_dir: &Path,
+    census: Vec<nono::LayerReceiptRow>,
+    session_id: Option<&str>,
+    expected_session_sid: Option<&str>,
+    pid: u32,
+    entry_path: layer_registry::EntryPath,
+    token_arm: Option<WindowsTokenArm>,
+    outcome: nono::SessionOutcome,
+    require_receipts_override: Option<bool>,
+) -> Result<()> {
+    let Some(session_id) = session_id else {
+        return record_receipt_write_outcome(
+            NonoError::Snapshot(
+                "receipt_sink: no session_id available for this launch — cannot emit an \
+                 enforcement receipt"
+                    .to_string(),
+            ),
+            require_receipts_override,
+        );
+    };
+
+    let receipt = attestation::build_enforcement_receipt(
+        census,
+        session_id.to_string(),
+        pid,
+        entry_path,
+        token_arm,
+        outcome,
+    );
+
+    // D-08 both-not-either guard on the SHARED sink directory, using this
+    // launch's own WRITE_RESTRICTED synthetic SID when one was minted for
+    // it. `package_sid` is deliberately NOT threaded through here:
+    // `apply_startup_attestation_gate` does not carry it today, and adding
+    // it would touch every one of this file's ~12 gate-level test call
+    // sites for a guard whose OTHER half already covers the gap — the
+    // unconditional `NO_READ_UP` mandatory label applies regardless of any
+    // SID (D-08 is both-not-either, not either-or; see
+    // `receipt_sink::ensure_sink_guarded`'s own doc), and an AppContainer-arm
+    // child is Low-IL by construction, so the label alone still covers it.
+    // This narrows (does not eliminate) the residual gap
+    // `nono::deny_sid_on_path`'s doc already names and accepts for a
+    // semi-trusted Medium-IL co-supervisor.
+    let write_result =
+        crate::receipt_sink::ensure_sink_guarded(sink_dir, expected_session_sid, None)
+            .and_then(|()| {
+                crate::receipt_sink::ReceiptWriter::new(session_id.to_string(), sink_dir)
+            })
+            .and_then(|writer| writer.write_receipt(&receipt));
+
+    match write_result {
+        Ok(()) => Ok(()),
+        Err(e) => record_receipt_write_outcome(e, require_receipts_override),
+    }
+}
+
+/// D-04: an enforcement-receipt emission failure ALWAYS produces a visible
+/// record — never silent, regardless of which branch of
+/// [`apply_startup_attestation_gate_with_sink_dir`]'s decision `match`
+/// called it, and regardless of whether the caller ultimately uses this
+/// function's `Result` for control flow. This function's only job is
+/// deciding whether that record is a warning (session proceeds) or an
+/// abort-worthy `Err` (machine policy's `require_receipts` is set).
+///
+/// `require_receipts_override`: `Some(bool)` bypasses the registry read
+/// entirely with the given value — this is a TEST SEAM
+/// (`HKLM\SOFTWARE\Policies\nono\RequireReceipts` is admin-write-only, so a
+/// unit test cannot otherwise drive the `require_receipts=true` posture
+/// deterministically). `None` (the production wrapper's only value) reads
+/// `HKLM\SOFTWARE\Policies\nono\RequireReceipts` via its own single
+/// `read_machine_egress_policy()` call, made ONLY on this failure path — not
+/// on every launch, so the happy path carries zero added registry-read
+/// latency (D-17's zero-startup-latency constraint). This is a deliberate,
+/// narrowly-scoped SECOND read alongside `main.rs`'s own startup read
+/// (`crates/nono/src/machine_policy.rs`'s module doc single-read discipline
+/// governs ONE call per logical consumer, not one call process-wide; RF-13
+/// — threading an already-resolved `MachineEgressPolicy` through this call
+/// site instead — remains explicitly out of scope for this plan, per this
+/// file's own RF-13 OPEN comment above).
+fn record_receipt_write_outcome(
+    cause: NonoError,
+    require_receipts_override: Option<bool>,
+) -> Result<()> {
+    // A malformed/unreadable machine policy cannot prove receipts are NOT
+    // required fleet-wide — treated the same way `MachineEgressPolicy`'s OWN
+    // doc says a malformed `RequireReceipts` value itself must be treated
+    // (abort, never a silent "off"): an admin who explicitly set this key
+    // gets either the value they configured or a loud abort, never a value
+    // quietly reinterpreted as "off". A read failure here, for whatever
+    // reason, gets the same conservative treatment rather than letting an
+    // unrelated policy-read error quietly relax the posture.
+    let require_receipts = match require_receipts_override {
+        Some(overridden) => overridden,
+        None => match nono::read_machine_egress_policy() {
+            Ok(Some(policy)) => policy.require_receipts,
+            Ok(None) => false,
+            Err(_) => true,
+        },
+    };
+
+    if require_receipts {
+        tracing::warn!(
+            target: "nono_security::telemetry_degraded",
+            "enforcement receipt emission failed and machine policy requires receipts \
+             (RequireReceipts=1) — aborting this launch: {cause}"
+        );
+        return Err(NonoError::LayerAttestationFailed {
+            layer: "EnforcementReceiptEmitter".to_string(),
+            reason: format!("receipt sink write failed under require_receipts policy: {cause}"),
+        });
+    }
+
+    tracing::warn!(
+        target: "nono_security::telemetry_degraded",
+        "enforcement receipt emission failed — proceeding with a downgraded evidentiary \
+         claim (D-04): this session's outcome was not durably recorded to the receipt \
+         sink: {cause}"
+    );
+    Ok(())
 }
 
 /// Phase 117 D-21 Warning-5 fix: derive `AttestationInput::wfp_preconfirmed`
@@ -3512,7 +3794,11 @@ mod attestation_gate_tests {
             CreateJobObjectW(std::ptr::null(), std::ptr::null())
         };
         assert!(!job.is_null(), "CreateJobObjectW failed");
-        let result = apply_startup_attestation_gate(
+        // Phase 118 Plan 07: an isolated tempdir sink, not the real, shared
+        // `%PROGRAMDATA%\nono\receipts` directory (see
+        // `apply_startup_attestation_gate_with_sink_dir`'s doc).
+        let sink_dir = tempfile::tempdir().expect("tempdir");
+        let result = apply_startup_attestation_gate_with_sink_dir(
             std::ptr::null_mut(),
             job,
             layer_registry::EntryPath::DirectCli,
@@ -3520,6 +3806,8 @@ mod attestation_gate_tests {
             false,
             fully_applied_layers(),
             None,
+            None,
+            sink_dir.path(),
             None,
         );
         unsafe {
@@ -3552,7 +3840,8 @@ mod attestation_gate_tests {
         };
         assert!(!job.is_null(), "CreateJobObjectW failed");
         // NOTE: deliberately NOT calling AssignProcessToJobObject.
-        let result = apply_startup_attestation_gate(
+        let sink_dir = tempfile::tempdir().expect("tempdir");
+        let result = apply_startup_attestation_gate_with_sink_dir(
             child.process,
             job,
             layer_registry::EntryPath::DirectCli,
@@ -3560,6 +3849,8 @@ mod attestation_gate_tests {
             false,
             fully_applied_layers(),
             None,
+            None,
+            sink_dir.path(),
             None,
         );
         unsafe {
@@ -3613,7 +3904,8 @@ mod attestation_gate_tests {
             }
         );
 
-        let result = apply_startup_attestation_gate(
+        let sink_dir = tempfile::tempdir().expect("tempdir");
+        let result = apply_startup_attestation_gate_with_sink_dir(
             child.process,
             job,
             layer_registry::EntryPath::DirectCli,
@@ -3622,6 +3914,8 @@ mod attestation_gate_tests {
             fully_applied_layers(),
             None,
             Some("117-10-attestation-gate-test-session"),
+            sink_dir.path(),
+            None,
         );
         assert!(
             result.is_ok(),
@@ -3658,7 +3952,8 @@ mod attestation_gate_tests {
         let mut applied = fully_applied_layers();
         applied.mandatory_integrity_label = layer_registry::LayerApplication::NotApplied;
 
-        let result = apply_startup_attestation_gate(
+        let sink_dir = tempfile::tempdir().expect("tempdir");
+        let result = apply_startup_attestation_gate_with_sink_dir(
             child.process,
             job,
             layer_registry::EntryPath::DirectCli,
@@ -3666,6 +3961,8 @@ mod attestation_gate_tests {
             false,
             applied,
             None,
+            None,
+            sink_dir.path(),
             None,
         );
         unsafe {
@@ -3728,7 +4025,8 @@ mod attestation_gate_tests {
 
         // The gate itself must still proceed — the layer IS partly in
         // effect, so refusing the launch would be wrong.
-        let gate = apply_startup_attestation_gate(
+        let sink_dir = tempfile::tempdir().expect("tempdir");
+        let gate = apply_startup_attestation_gate_with_sink_dir(
             child.process,
             job,
             layer_registry::EntryPath::DirectCli,
@@ -3737,6 +4035,8 @@ mod attestation_gate_tests {
             applied,
             None,
             Some("117-nr02-downgrade-test-session"),
+            sink_dir.path(),
+            None,
         );
 
         unsafe {
@@ -3858,8 +4158,9 @@ mod attestation_gate_tests {
         // after the closure returns.
         let subscriber = std::sync::Arc::new(CapturingSubscriber::default());
         let dispatch = tracing::Dispatch::from(std::sync::Arc::clone(&subscriber));
+        let sink_dir = tempfile::tempdir().expect("tempdir");
         let gate = tracing::dispatcher::with_default(&dispatch, || {
-            apply_startup_attestation_gate(
+            apply_startup_attestation_gate_with_sink_dir(
                 child.process,
                 job,
                 layer_registry::EntryPath::DirectCli,
@@ -3868,6 +4169,8 @@ mod attestation_gate_tests {
                 applied,
                 None,
                 Some("117-nr3-04-unconditional-warn-test-session"),
+                sink_dir.path(),
+                None,
             )
         });
 
@@ -4105,8 +4408,9 @@ mod attestation_gate_tests {
 
         let subscriber = std::sync::Arc::new(CapturingSubscriber::default());
         let dispatch = tracing::Dispatch::from(std::sync::Arc::clone(&subscriber));
+        let sink_dir = tempfile::tempdir().expect("tempdir");
         let gate = tracing::dispatcher::with_default(&dispatch, || {
-            apply_startup_attestation_gate(
+            apply_startup_attestation_gate_with_sink_dir(
                 child.process,
                 job,
                 layer_registry::EntryPath::DirectCli,
@@ -4115,6 +4419,8 @@ mod attestation_gate_tests {
                 applied,
                 None,
                 Some("117-21-cr-02-withheld-test-session"),
+                sink_dir.path(),
+                None,
             )
         });
 
@@ -4193,8 +4499,9 @@ mod attestation_gate_tests {
 
         let subscriber = std::sync::Arc::new(CapturingSubscriber::default());
         let dispatch = tracing::Dispatch::from(std::sync::Arc::clone(&subscriber));
+        let sink_dir = tempfile::tempdir().expect("tempdir");
         let gate = tracing::dispatcher::with_default(&dispatch, || {
-            apply_startup_attestation_gate(
+            apply_startup_attestation_gate_with_sink_dir(
                 child.process,
                 job,
                 layer_registry::EntryPath::DirectCli,
@@ -4203,6 +4510,8 @@ mod attestation_gate_tests {
                 applied,
                 None,
                 Some("117-27-cr-03-security-layer-absent-withheld-test-session"),
+                sink_dir.path(),
+                None,
             )
         });
 
@@ -4327,7 +4636,8 @@ mod attestation_gate_tests {
         let mut applied = fully_applied_layers();
         applied.wfp_egress_filters = super::super::wfp_composition_report(Some(&regressed));
 
-        let result = apply_startup_attestation_gate(
+        let sink_dir = tempfile::tempdir().expect("tempdir");
+        let result = apply_startup_attestation_gate_with_sink_dir(
             child.process,
             job,
             layer_registry::EntryPath::DirectCli,
@@ -4335,6 +4645,8 @@ mod attestation_gate_tests {
             derive_wfp_preconfirmed(Some(&regressed)),
             applied,
             None,
+            None,
+            sink_dir.path(),
             None,
         );
         unsafe {
@@ -4393,7 +4705,8 @@ mod attestation_gate_tests {
         // abort a launch that did not select WFP.
         applied.wfp_egress_filters = None;
 
-        let result = apply_startup_attestation_gate(
+        let sink_dir = tempfile::tempdir().expect("tempdir");
+        let result = apply_startup_attestation_gate_with_sink_dir(
             child.process,
             job,
             layer_registry::EntryPath::DirectCli,
@@ -4401,6 +4714,8 @@ mod attestation_gate_tests {
             false, // wfp_preconfirmed is irrelevant — WFP row is NotApplicable here
             applied,
             None,
+            None,
+            sink_dir.path(),
             None,
         );
         unsafe {
@@ -4441,7 +4756,8 @@ mod attestation_gate_tests {
         applied2.firewall_rules_egress = super::super::firewall_rules_report(Some(&healthy));
         applied2.wfp_egress_filters = None;
 
-        let result2 = apply_startup_attestation_gate(
+        let sink_dir2 = tempfile::tempdir().expect("tempdir");
+        let result2 = apply_startup_attestation_gate_with_sink_dir(
             child2.process,
             job2,
             layer_registry::EntryPath::DirectCli,
@@ -4449,6 +4765,8 @@ mod attestation_gate_tests {
             false,
             applied2,
             None,
+            None,
+            sink_dir2.path(),
             None,
         );
         unsafe {
@@ -4507,7 +4825,8 @@ mod attestation_gate_tests {
         // The gate itself must proceed (never abort) — a `PartiallyApplied`
         // ancestor-traverse walk is genuinely in effect on some of its
         // targets, so refusing the launch would be wrong.
-        let gate = apply_startup_attestation_gate(
+        let sink_dir = tempfile::tempdir().expect("tempdir");
+        let gate = apply_startup_attestation_gate_with_sink_dir(
             child.process,
             job,
             layer_registry::EntryPath::DirectCli,
@@ -4516,6 +4835,8 @@ mod attestation_gate_tests {
             applied,
             None,
             Some("117-23-dacl-ancestor-traverse-partial-test-session"),
+            sink_dir.path(),
+            None,
         );
 
         unsafe {
@@ -4851,6 +5172,321 @@ mod attestation_gate_tests {
             violations.len(),
             violations.join("\n  ")
         );
+    }
+
+    // ── Phase 118 Plan 07 (RCPT-01/D-02/D-03/D-04): receipt-wiring tests ──
+
+    /// Reads back the single JSONL line this test's `sink_dir`/`session_id`
+    /// combination should hold and returns the deserialized
+    /// `nono::EnforcementReceipt` embedded in its `"receipt"` field. Parses
+    /// generically (`serde_json::Value`) rather than depending on
+    /// `receipt_sink.rs`'s private `ReceiptRecord` envelope type, which is
+    /// not reachable from this file.
+    fn read_last_receipt(sink_dir: &Path, session_id: &str) -> nono::EnforcementReceipt {
+        let file_path = sink_dir.join(format!("{session_id}.jsonl"));
+        let contents = std::fs::read_to_string(&file_path)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", file_path.display()));
+        let last_line = contents
+            .lines()
+            .next_back()
+            .unwrap_or_else(|| panic!("no lines in {}", file_path.display()));
+        let value: serde_json::Value =
+            serde_json::from_str(last_line).expect("parse JSONL receipt record");
+        serde_json::from_value(value["receipt"].clone()).expect("parse EnforcementReceipt")
+    }
+
+    /// Test 1 (Task 1 behavior 1): `Proceed` writes a `Ran` receipt with a
+    /// full 13-row census, before the gate returns `Ok`.
+    #[test]
+    fn proceed_branch_writes_a_ran_receipt_with_full_census() {
+        let child = spawn_suspended_cmd();
+        let job: HANDLE = unsafe {
+            // SAFETY: see other tests in this module.
+            CreateJobObjectW(std::ptr::null(), std::ptr::null())
+        };
+        assert!(!job.is_null(), "CreateJobObjectW failed");
+        let assigned = unsafe {
+            // SAFETY: both handles are owned by this test.
+            AssignProcessToJobObject(job, child.process)
+        };
+        assert_ne!(assigned, 0, "AssignProcessToJobObject failed");
+
+        let sink_dir = tempfile::tempdir().expect("tempdir");
+        let session_id = "118-07-test-proceed-session";
+
+        let result = apply_startup_attestation_gate_with_sink_dir(
+            child.process,
+            job,
+            layer_registry::EntryPath::DirectCli,
+            Some(WindowsTokenArm::Null),
+            false,
+            fully_applied_layers(),
+            None,
+            Some(session_id),
+            sink_dir.path(),
+            None,
+        );
+        unsafe {
+            // SAFETY: `job` is a valid HANDLE this test owns.
+            CloseHandle(job);
+        }
+        assert!(result.is_ok(), "expected Proceed, got {result:?}");
+
+        let receipt = read_last_receipt(sink_dir.path(), session_id);
+        assert_eq!(receipt.outcome, nono::SessionOutcome::Ran);
+        assert_eq!(receipt.session_id, session_id);
+        assert_eq!(
+            receipt.layers.len(),
+            nono::LayerId::ALL.len(),
+            "receipt must carry a full 13-row census"
+        );
+    }
+
+    /// Test 2 (Task 1 behavior 2): `Abort` still writes a `Refused` receipt
+    /// with a full 13-row census — including the aborting layer's real
+    /// status — before the gate returns `Err`. Mirrors
+    /// `unconfirmed_abort_outcome_layer_returns_layer_attestation_failed`'s
+    /// deterministic null-handle setup.
+    #[test]
+    fn abort_branch_writes_a_refused_receipt_with_full_census() {
+        let job: HANDLE = unsafe {
+            // SAFETY: see other tests in this module.
+            CreateJobObjectW(std::ptr::null(), std::ptr::null())
+        };
+        assert!(!job.is_null(), "CreateJobObjectW failed");
+
+        let sink_dir = tempfile::tempdir().expect("tempdir");
+        let session_id = "118-07-test-abort-session";
+
+        let result = apply_startup_attestation_gate_with_sink_dir(
+            std::ptr::null_mut(),
+            job,
+            layer_registry::EntryPath::DirectCli,
+            Some(WindowsTokenArm::Null),
+            false,
+            fully_applied_layers(),
+            None,
+            Some(session_id),
+            sink_dir.path(),
+            None,
+        );
+        unsafe {
+            // SAFETY: `job` is a valid HANDLE this test owns.
+            CloseHandle(job);
+        }
+        match result {
+            Err(NonoError::LayerAttestationFailed { layer, .. }) => {
+                assert_eq!(layer, "JobObjectContainment");
+            }
+            other => panic!("expected Err(LayerAttestationFailed), got {other:?}"),
+        }
+
+        let receipt = read_last_receipt(sink_dir.path(), session_id);
+        assert_eq!(receipt.outcome, nono::SessionOutcome::Refused);
+        assert_eq!(
+            receipt.layers.len(),
+            nono::LayerId::ALL.len(),
+            "a Refused receipt must still carry the full 13-row census"
+        );
+        let containment_row = receipt
+            .layers
+            .iter()
+            .find(|row| row.id == nono::LayerId::JobObjectContainment)
+            .expect("census must include the aborting layer's own row");
+        assert_eq!(
+            containment_row.status,
+            nono::LayerAttestationStatus::Unconfirmed,
+            "the aborting layer's row must carry its real (Unconfirmed) status, not a \
+             placeholder"
+        );
+    }
+
+    /// Test 3 (Task 1 behavior 3): `ProceedDowngraded` writes a `Ran`
+    /// receipt (the session DID run) whose census independently
+    /// cross-checks against a freshly-computed `census_from_entries` call
+    /// over the SAME input — the non-vacuity pattern this file's own
+    /// `every_census_row_matches_an_independent_classify_row_call` (Plan
+    /// 118-03) established, applied at the gate level.
+    #[test]
+    fn proceed_downgraded_branch_writes_a_ran_receipt_with_real_downgraded_status() {
+        let child = spawn_suspended_cmd();
+        let job: HANDLE = unsafe {
+            // SAFETY: see other tests in this module.
+            CreateJobObjectW(std::ptr::null(), std::ptr::null())
+        };
+        assert!(!job.is_null(), "CreateJobObjectW failed");
+        let assigned = unsafe {
+            // SAFETY: both handles are owned by this test.
+            AssignProcessToJobObject(job, child.process)
+        };
+        assert_ne!(assigned, 0, "AssignProcessToJobObject failed");
+
+        let mut applied = fully_applied_layers();
+        applied.dacl_ancestor_traverse = layer_registry::LayerApplication::PartiallyApplied;
+
+        // Independently-computed expected census, over the SAME shape of
+        // input the gate itself builds — the non-vacuity cross-check.
+        let expected_input = attestation::AttestationInput {
+            child_process: child.process,
+            containment_job: job,
+            entry_path: layer_registry::EntryPath::DirectCli,
+            token_arm: Some(WindowsTokenArm::Null),
+            wfp_preconfirmed: false,
+            applied,
+            expected_session_sid: None,
+            required_layers_override: &[],
+            machine_required_layers: &[],
+        };
+        let expected_census =
+            attestation::census_from_entries(layer_registry::all_entries(), &expected_input);
+        let expected_traverse_row = expected_census
+            .iter()
+            .find(|row| row.id == nono::LayerId::DaclAncestorTraverse)
+            .expect("expected census must include DaclAncestorTraverse")
+            .status;
+
+        let sink_dir = tempfile::tempdir().expect("tempdir");
+        let session_id = "118-07-test-proceed-downgraded-session";
+
+        let result = apply_startup_attestation_gate_with_sink_dir(
+            child.process,
+            job,
+            layer_registry::EntryPath::DirectCli,
+            Some(WindowsTokenArm::Null),
+            false,
+            applied,
+            None,
+            Some(session_id),
+            sink_dir.path(),
+            None,
+        );
+        unsafe {
+            // SAFETY: `job` is a valid HANDLE this test owns.
+            CloseHandle(job);
+        }
+        assert!(result.is_ok(), "expected ProceedDowngraded, got {result:?}");
+
+        let receipt = read_last_receipt(sink_dir.path(), session_id);
+        assert_eq!(
+            receipt.outcome,
+            nono::SessionOutcome::Ran,
+            "ProceedDowngraded still RAN the session"
+        );
+        let receipt_traverse_row = receipt
+            .layers
+            .iter()
+            .find(|row| row.id == nono::LayerId::DaclAncestorTraverse)
+            .expect("receipt census must include DaclAncestorTraverse");
+        assert_eq!(
+            receipt_traverse_row.status, expected_traverse_row,
+            "the downgraded row's status in the WRITTEN receipt must match an independently \
+             computed census over the same input — not a stale or placeholder value"
+        );
+    }
+
+    /// Test 4 (Task 1 behavior 4): a simulated `write_receipt` failure —
+    /// forced by pointing `sink_dir` at a path where a plain FILE (not a
+    /// directory) already exists, so `ensure_sink_guarded`'s
+    /// `create_dir_all` cannot succeed — degrades (session proceeds) by
+    /// default, and aborts when `require_receipts_override` simulates the
+    /// machine-policy-required posture. Both directions driven from the SAME
+    /// forced failure, so the assertion is non-vacuous both ways.
+    #[test]
+    fn write_failure_degrades_by_default_and_aborts_under_require_receipts() {
+        // A path that cannot be `create_dir_all`'d: `<tempdir>/blocking-file`
+        // exists as a FILE, and `<tempdir>/blocking-file/receipts` (this
+        // test's `sink_dir`) therefore can never be created as a directory.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let blocking_file = tmp.path().join("blocking-file");
+        std::fs::write(&blocking_file, b"not a directory").expect("write blocking file");
+        let unwritable_sink_dir = blocking_file.join("receipts");
+
+        // Direction 1: default posture (no override) degrades — the launch
+        // still PROCEEDS despite the forced write failure.
+        {
+            let child = spawn_suspended_cmd();
+            let job: HANDLE = unsafe {
+                // SAFETY: see other tests in this module.
+                CreateJobObjectW(std::ptr::null(), std::ptr::null())
+            };
+            assert!(!job.is_null(), "CreateJobObjectW failed");
+            let assigned = unsafe {
+                // SAFETY: both handles are owned by this test.
+                AssignProcessToJobObject(job, child.process)
+            };
+            assert_ne!(assigned, 0, "AssignProcessToJobObject failed");
+
+            let result = apply_startup_attestation_gate_with_sink_dir(
+                child.process,
+                job,
+                layer_registry::EntryPath::DirectCli,
+                Some(WindowsTokenArm::Null),
+                false,
+                fully_applied_layers(),
+                None,
+                Some("118-07-test-write-failure-degrade-session"),
+                &unwritable_sink_dir,
+                Some(false),
+            );
+            unsafe {
+                // SAFETY: `job` is a valid HANDLE this test owns.
+                CloseHandle(job);
+            }
+            assert!(
+                result.is_ok(),
+                "a receipt-write failure must degrade (session proceeds) by default, got \
+                 {result:?}"
+            );
+            assert!(
+                !unwritable_sink_dir
+                    .join("118-07-test-write-failure-degrade-session.jsonl")
+                    .exists(),
+                "the forced failure must mean no receipt file was actually written"
+            );
+        }
+
+        // Direction 2 (fail_closed / require_receipts): the SAME forced
+        // write failure, with the machine-policy posture simulated as
+        // `require_receipts=true`, must abort the launch instead.
+        {
+            let child = spawn_suspended_cmd();
+            let job: HANDLE = unsafe {
+                // SAFETY: see other tests in this module.
+                CreateJobObjectW(std::ptr::null(), std::ptr::null())
+            };
+            assert!(!job.is_null(), "CreateJobObjectW failed");
+            let assigned = unsafe {
+                // SAFETY: both handles are owned by this test.
+                AssignProcessToJobObject(job, child.process)
+            };
+            assert_ne!(assigned, 0, "AssignProcessToJobObject failed");
+
+            let result = apply_startup_attestation_gate_with_sink_dir(
+                child.process,
+                job,
+                layer_registry::EntryPath::DirectCli,
+                Some(WindowsTokenArm::Null),
+                false,
+                fully_applied_layers(),
+                None,
+                Some("118-07-test-write-failure-require-receipts-session"),
+                &unwritable_sink_dir,
+                Some(true),
+            );
+            unsafe {
+                // SAFETY: `job` is a valid HANDLE this test owns.
+                CloseHandle(job);
+            }
+            match result {
+                Err(NonoError::LayerAttestationFailed { layer, .. }) => {
+                    assert_eq!(layer, "EnforcementReceiptEmitter");
+                }
+                other => panic!(
+                    "require_receipts=true combined with a forced write failure must abort \
+                     the launch, got {other:?}"
+                ),
+            }
+        }
     }
 }
 
