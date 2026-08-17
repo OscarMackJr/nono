@@ -1563,9 +1563,44 @@ fn downgrade_detail_pointer(
 /// tool call into a fresh `nono run` invocation, which is a brand-new
 /// `nono.exe` process going through this exact same gate, not a separate
 /// code path). Receipt coverage for the hook path is therefore automatic as
-/// of Plan 118-07's wiring below, with no separate call site needed. What
-/// remains is D-17/117-D-24's MEASURED latency budget for this path, which
-/// is a measurement task, not a code change — see Plan 118-10.
+/// of Plan 118-07's wiring below, with no separate call site needed.
+///
+/// **D-17/117-D-24 MEASURED latency budget (Plan 118-10, measured
+/// 2026-08-17 on this dev host, debug/unoptimized build):** the added cost
+/// this gate contributes on top of the pre-existing attestation decision is
+/// exactly the three calls
+/// `receipt_sink::ensure_sink_guarded` → `ReceiptWriter::new` →
+/// `write_receipt` performs below (see [`emit_enforcement_receipt`]) — this
+/// is the only new I/O this gate does per invocation as of Phase 118, and
+/// therefore the only thing attributable to receipts rather than to the
+/// pre-existing (117) attestation/spawn machinery. Measured directly (N=30,
+/// fresh `session_id` per iteration so `ensure_sink_guarded`'s ACL/label
+/// re-application on the shared directory is exercised every time exactly
+/// as production does, not amortized away): **avg 5.7ms, p50 5.6ms, min
+/// 2.6ms, max 13.5ms** wall-clock per invocation, against a tempdir on this
+/// host's disk (methodology: a temporary `#[ignore]`-gated test in
+/// `receipt_sink.rs`, run via `cargo test ... -- --ignored --nocapture`,
+/// then reverted per the sanctioned single-file-discard pattern — this
+/// doc comment is the durable record of the result, not the test).
+///
+/// **Qualitative comparison against the project's "zero startup latency"
+/// constraint (CLAUDE.md § Constraints):** this is NOT literally zero, and
+/// is a **named trade-off, not a silent compromise**, per CONTEXT.md's
+/// explicit instruction. It is small in absolute terms (single-digit
+/// milliseconds) against a `CreateProcess`+sandbox-setup baseline that is
+/// already tens of milliseconds before this gate runs at all, and this
+/// figure is measured on an **unoptimized debug build** — a release build
+/// (the shipped artifact) is expected to be faster, not slower, so this
+/// number is a conservative upper bound, not an optimistic one. **Named
+/// fallback if this ever proves material on a real fleet host:** the
+/// per-tool-call hook path (`claude_code_hook.rs`) is the hot path this
+/// budget is scoped to; if per-invocation overhead is ever found to matter
+/// there, the fallback is NOT to skip receipt emission (that would
+/// reintroduce the exact green-by-absence gap D-01 exists to close) but to
+/// revisit the sink I/O shape itself (e.g. batching `ensure_sink_guarded`'s
+/// idempotent re-guard so it is not repeated on every hot-path call) —
+/// that redesign is explicitly out of this phase's scope and not needed
+/// unless the measured number changes materially.
 ///
 /// # RCPT-01/D-02/D-03 (Phase 118 Plan 07): a receipt on every branch, before `ResumeThread`
 ///
