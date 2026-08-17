@@ -1789,10 +1789,24 @@ pub(super) fn spawn_windows_child(
         // AppContainer, so it must not be asked to attest one.
         let broker_required_layers =
             attestation::required_layers_for_broker(layer_registry::all_entries(), arm);
+        // Phase 118 Plan 06 (D-27): the sibling `NONO_BROKER_NOT_APPLICABLE_LAYERS`
+        // channel, so the broker's own 13-row receipt census can classify
+        // every row it does not itself have to confirm, without a
+        // hardcoded third copy of registry knowledge.
+        let broker_not_applicable_layers: String =
+            attestation::required_not_applicable_for_broker(layer_registry::all_entries(), arm)
+                .iter()
+                .map(|id| format!("{id:?}"))
+                .collect::<Vec<_>>()
+                .join(",");
         let mut broker_env_pairs = env_pairs.clone();
         broker_env_pairs.push((
             attestation::BROKER_REQUIRED_LAYERS_ENV_VAR.to_string(),
             broker_required_layers,
+        ));
+        broker_env_pairs.push((
+            attestation::BROKER_NOT_APPLICABLE_LAYERS_ENV_VAR.to_string(),
+            broker_not_applicable_layers,
         ));
         environment_block = build_windows_environment_block(&broker_env_pairs);
     }
@@ -5979,6 +5993,22 @@ mod write_deny_low_il_broker_no_pty_tests {
                 layer_registry::all_entries(),
                 super::WindowsTokenArm::BrokerLaunchNoPty,
             ),
+        ));
+        // Phase 118 Plan 06 (D-27): mirror the production call site
+        // (launch.rs's `BrokerLaunchNoPty` arm above) — the sibling
+        // `NotApplicable` wire-contract channel, so this harness exercises
+        // the SAME env-var pair the broker sees in production rather than
+        // a stale one-variable contract.
+        broker_env_pairs.push((
+            attestation::BROKER_NOT_APPLICABLE_LAYERS_ENV_VAR.to_string(),
+            attestation::required_not_applicable_for_broker(
+                layer_registry::all_entries(),
+                super::WindowsTokenArm::BrokerLaunchNoPty,
+            )
+            .iter()
+            .map(|id| format!("{id:?}"))
+            .collect::<Vec<_>>()
+            .join(","),
         ));
         let mut environment_block = super::build_windows_environment_block(&broker_env_pairs);
 

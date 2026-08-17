@@ -116,6 +116,17 @@ use std::collections::HashSet;
 /// enforces what nono-cli tells it).
 pub(crate) const BROKER_REQUIRED_LAYERS_ENV_VAR: &str = "NONO_BROKER_REQUIRED_LAYERS";
 
+/// D-27 sibling channel (Phase 118 Plan 06): names the `(EntryPath::Broker,
+/// ...)` rows that are NOT this broker spawn's responsibility — either no
+/// Broker expectancy cell at all for this arm, or a Broker-expected row
+/// whose `outcome` is not `ContractOutcome::Abort` (`MinifilterAbsence`,
+/// D-21). The broker's own 13-row receipt census (Plan 06) classifies every
+/// name on this channel `NotApplicable`, so it can report a full census
+/// without inventing its own copy of registry expectancy. Value shape
+/// matches [`BROKER_REQUIRED_LAYERS_ENV_VAR`]: a comma-separated list of
+/// `LayerId` `Debug`-format names. See [`required_not_applicable_for_broker`].
+pub(crate) const BROKER_NOT_APPLICABLE_LAYERS_ENV_VAR: &str = "NONO_BROKER_NOT_APPLICABLE_LAYERS";
+
 /// D-27/T-117-21: layer-specific detail (which layer, why) belongs on the
 /// operator's channel and the audit event, never on a channel the confined
 /// process can read (D-28) — enforced by Plan 09's rendering, not this type.
@@ -790,26 +801,80 @@ pub(crate) fn attest_and_decide(input: AttestationInput) -> nono::Result<Attesta
 /// contract demanded `AppContainerProfile` on the PTY shape, where the
 /// broker creates no AppContainer at all — an unsatisfiable requirement the
 /// broker used to paper over by ignoring it.
+/// Phase 118 Plan 06 (D-27): the single place that decides whether a
+/// registry row is the broker's own must-be-`Confirmed`-or-terminate
+/// responsibility ([`BrokerRole::Required`]) or not the broker's business at
+/// all ([`BrokerRole::NotApplicableOnBroker`]) for a given spawn arm.
+/// [`required_layers_for_broker`] and [`required_not_applicable_for_broker`]
+/// both call this and only this — neither re-derives the classification
+/// independently, so the two wire-contract producer functions cannot drift
+/// apart from each other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BrokerRole {
+    /// Broker-expected (any matching arm cell) AND `ContractOutcome::Abort`
+    /// — the broker must itself confirm this row `Confirmed` or terminate
+    /// its suspended grandchild.
+    Required,
+    /// Everything else: no Broker expectancy cell at all for this spawn arm,
+    /// OR a Broker expectancy cell whose row is not `ContractOutcome::Abort`
+    /// (e.g. `MinifilterAbsence`'s `ContractOutcome::FailOpen` — D-21:
+    /// structural absence classifies `NotApplicable`, never `Unconfirmed`,
+    /// so it belongs on the not-applicable channel even though it has an
+    /// `expected: true` `(Broker, None)` cell).
+    NotApplicableOnBroker,
+}
+
+fn broker_role(
+    entry: &layer_registry::LayerRegistryEntry,
+    spawn_arm: WindowsTokenArm,
+) -> BrokerRole {
+    let broker_expected = entry.expectancy.iter().any(|arm| {
+        arm.entry_path == layer_registry::EntryPath::Broker
+            && arm.expected
+            && match arm.token_arm {
+                None => true,
+                Some(name) => format!("{spawn_arm:?}") == name,
+            }
+    });
+    if broker_expected && entry.outcome == layer_registry::ContractOutcome::Abort {
+        BrokerRole::Required
+    } else {
+        BrokerRole::NotApplicableOnBroker
+    }
+}
+
 pub(crate) fn required_layers_for_broker(
     entries: &[layer_registry::LayerRegistryEntry],
     spawn_arm: WindowsTokenArm,
 ) -> String {
     entries
         .iter()
-        .filter(|entry| {
-            entry.outcome == layer_registry::ContractOutcome::Abort
-                && entry.expectancy.iter().any(|arm| {
-                    arm.entry_path == layer_registry::EntryPath::Broker
-                        && arm.expected
-                        && match arm.token_arm {
-                            None => true,
-                            Some(name) => format!("{spawn_arm:?}") == name,
-                        }
-                })
-        })
+        .filter(|entry| broker_role(entry, spawn_arm) == BrokerRole::Required)
         .map(|entry| format!("{:?}", entry.id))
         .collect::<Vec<_>>()
         .join(",")
+}
+
+/// D-27's sibling producer: the wire-contract channel naming every row
+/// [`required_layers_for_broker`] does NOT select, for the SAME
+/// `(entries, spawn_arm)` pair — the `(EntryPath::Broker, ...)`
+/// `NotApplicable` rows a full 13-row broker census needs, without giving
+/// the broker a third, hardcoded copy of registry knowledge (D-27
+/// explicitly rejected that shape as a drift-prone duplicate of
+/// `layer_registry.rs`). Sent over [`BROKER_NOT_APPLICABLE_LAYERS_ENV_VAR`].
+///
+/// Returns `LayerId`s directly (not a joined `String`) so callers — and this
+/// module's own partition test — can reason about the set without
+/// re-parsing a comma-joined value; the env-var call site joins it.
+pub(crate) fn required_not_applicable_for_broker(
+    entries: &[layer_registry::LayerRegistryEntry],
+    spawn_arm: WindowsTokenArm,
+) -> Vec<layer_registry::LayerId> {
+    entries
+        .iter()
+        .filter(|entry| broker_role(entry, spawn_arm) == BrokerRole::NotApplicableOnBroker)
+        .map(|entry| entry.id)
+        .collect()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────
@@ -1985,6 +2050,100 @@ mod broker_wire_contract_tests {
                     "{name} is not Broker-expected but appeared in required_layers_for_broker output"
                 );
             }
+        }
+    }
+
+    /// Task 1 Test 1 (Phase 118 Plan 06, D-27): concrete count check against
+    /// the "broker knows 2 of 13" framing this plan closes — on the
+    /// `BrokerLaunchNoPty` arm (the AppContainer shape, where BOTH Broker-
+    /// expected `Abort` rows apply), `required_not_applicable_for_broker`
+    /// must return exactly the 11 `LayerId`s `required_layers_for_broker`
+    /// does not, and the two sets must be disjoint.
+    #[test]
+    fn required_not_applicable_for_broker_returns_the_11_row_complement_for_the_nopty_arm() {
+        let entries = layer_registry::all_entries();
+        let spawn_arm = WindowsTokenArm::BrokerLaunchNoPty;
+
+        let required: HashSet<String> = required_layers_for_broker(entries, spawn_arm)
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        assert_eq!(
+            required.len(),
+            2,
+            "expected exactly 2 required rows on the NoPty arm (AppContainerProfile, \
+             MandatoryIntegrityLabel), got {required:?}"
+        );
+
+        let not_applicable = required_not_applicable_for_broker(entries, spawn_arm);
+        assert_eq!(
+            not_applicable.len(),
+            11,
+            "expected exactly 11 not-applicable rows on the NoPty arm (13 total - 2 required), \
+             got {not_applicable:?}"
+        );
+
+        let not_applicable_names: HashSet<String> =
+            not_applicable.iter().map(|id| format!("{id:?}")).collect();
+        assert!(
+            required.is_disjoint(&not_applicable_names),
+            "a row appeared on BOTH channels: {:?}",
+            required
+                .intersection(&not_applicable_names)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Task 1 Test 2 (Phase 118 Plan 06, D-27 perturbation proof): a real
+    /// set-equality/partition check, not an arithmetic `11 + 2 == 13`
+    /// count — the latter would still pass if a row were double-counted on
+    /// one channel while a DIFFERENT row silently fell off both. Runs for
+    /// BOTH broker spawn shapes, since `AppContainerProfile`'s
+    /// classification genuinely differs between them (CR-03.1).
+    #[test]
+    fn broker_wire_contract_partitions_all_13_layer_ids_with_zero_overlap_or_gap() {
+        let entries = layer_registry::all_entries();
+        let all_names: HashSet<String> = layer_registry::ALL
+            .iter()
+            .map(|id| format!("{id:?}"))
+            .collect();
+        assert_eq!(
+            all_names.len(),
+            layer_registry::ALL.len(),
+            "LayerId Debug-format names must be unique for this set-based check to be valid"
+        );
+
+        for spawn_arm in [
+            WindowsTokenArm::BrokerLaunch,
+            WindowsTokenArm::BrokerLaunchNoPty,
+        ] {
+            let required: HashSet<String> = required_layers_for_broker(entries, spawn_arm)
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
+            let not_applicable: HashSet<String> =
+                required_not_applicable_for_broker(entries, spawn_arm)
+                    .iter()
+                    .map(|id| format!("{id:?}"))
+                    .collect();
+
+            let overlap: Vec<&String> = required.intersection(&not_applicable).collect();
+            assert!(
+                overlap.is_empty(),
+                "row(s) {overlap:?} classified as BOTH required and not-applicable for \
+                 {spawn_arm:?} — a row can never be the broker's responsibility on both \
+                 channels at once"
+            );
+
+            let union: HashSet<String> = required.union(&not_applicable).cloned().collect();
+            assert_eq!(
+                union, all_names,
+                "union of required+not_applicable != layer_registry::ALL for {spawn_arm:?} \
+                 (a row fell through both wire-contract producer functions, or an extra \
+                 unrecognized name leaked in)"
+            );
         }
     }
 }
