@@ -1981,12 +1981,43 @@ pub fn grant_sid_read_attributes_on_path(path: &Path, sid: &str) -> Result<()> {
 ///   own, guarantee the read-side token is even Low-IL on this arm.
 /// - A Medium-IL broker child (`nono-shell-broker.exe`, Phase 31) is not
 ///   covered by ANY per-session SID — there is nothing for a DENY ACE to
-///   name on that arm. The mandatory label's `NO_READ_UP` is what closes it
-///   instead.
+///   name on that arm, **and** [`try_set_mandatory_label`]'s `NO_READ_UP`
+///   half does NOT close it either (Phase 118 Plan 05 correction — see
+///   below). Read protection against a semi-trusted Medium-IL co-supervisor
+///   is an accepted, named residual scope boundary, not something either
+///   mechanism claims to close.
+///
+/// # Correction (Phase 118 Plan 05): what `NO_READ_UP` actually blocks
+///
+/// This doc previously claimed the mandatory label's `NO_READ_UP` closes the
+/// Medium-IL-broker gap above. That claim was **empirically disproven**
+/// while building the receipt sink (`crates/nono-cli/src/receipt_sink.rs`):
+/// [`try_set_mandatory_label`] always pins the object's OWN integrity RID to
+/// `SECURITY_MANDATORY_LOW_RID` (the hardcoded `LW` SDDL alias) — it can
+/// never label an object Medium or higher. A live probe (real
+/// `CreateProcessAsUserW` spawn using [`create_low_integrity_primary_token`]
+/// against a tempdir labeled with `NO_READ_UP | NO_EXECUTE_UP`) confirmed: a
+/// **Low-IL** subject reading that object is denied (`cmd /c type` exits
+/// non-zero, "Access is denied"), while the **same test process at Medium
+/// IL** reads the identical file without restriction. `NO_READ_UP` on a
+/// Low-RID object therefore protects against Low-IL-or-below readers only —
+/// it structurally cannot protect against a Medium-IL reader, because a
+/// Medium-IL subject is never "below" a Low-RID object. The
+/// receipt-sink guard's PRIMARY, empirically-validated coverage is: Low-IL
+/// confined children (the `WriteRestricted`/`LowIlPrimary`/
+/// `BrokerLaunchNoPty` arms) cannot read the sink via the mandatory label
+/// alone, and — on arms that mint a session/package SID — cannot read it via
+/// the token's normal SID list either, once the DENY ACE also names that
+/// SID. Closing the Medium-IL-broker read path specifically would require a
+/// DIFFERENT mechanism (e.g. a DENY ACE naming the broker's own token SID,
+/// which today's `nono-shell-broker.exe` invocation does not mint) and is
+/// out of scope for Phase 118 Plan 05 — tracked as a named residual boundary
+/// rather than silently assumed closed.
 ///
 /// Matches CLAUDE.md's defense-in-depth principle: two independent
 /// mechanisms, applied together, because betting on either one alone leaves
-/// an arm uncovered.
+/// an arm uncovered — even where, as documented above, one arm remains only
+/// partially covered pending a future SID-naming mechanism for the broker.
 ///
 /// # WRITE_OWNER / WRITE_DAC gotcha
 ///

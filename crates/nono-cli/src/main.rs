@@ -94,6 +94,12 @@ mod pty_proxy;
 #[path = "pty_proxy_windows.rs"]
 mod pty_proxy;
 mod query_ext;
+// Phase 118 Plan 05: operator-ACL'd receipt sink (D-06/D-08), shared plumbing
+// for `nono.exe` and `nono-agentd.exe` (via a #[path] include in
+// bin/nono-agentd.rs). Windows-only (D-18): every FFI call it makes
+// (deny_sid_on_path, try_set_mandatory_label) is Windows-only in core too.
+#[cfg(target_os = "windows")]
+mod receipt_sink;
 mod registry_client;
 mod rollback_commands;
 mod rollback_preflight;
