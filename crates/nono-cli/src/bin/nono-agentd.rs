@@ -57,6 +57,16 @@ mod telemetry;
 #[path = "../agent_daemon/telemetry_init.rs"]
 mod telemetry_init;
 
+// Phase 118 Plan 05: operator-ACL'd receipt sink (D-06/D-08), shared with
+// `nono.exe` via #[path]-include (the daemon binary has no lib target, so
+// this module — normally reached from the `nono` binary via main.rs's `mod
+// receipt_sink;` — must be explicitly included here too, mirroring the
+// `agent_daemon`/`telemetry` include pattern above, DRAIN-04 D-02 / Pitfall
+// 2).
+#[cfg(target_os = "windows")]
+#[path = "../receipt_sink.rs"]
+mod receipt_sink;
+
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use std::ffi::OsString;
