@@ -332,7 +332,7 @@ mod windows_impl {
     };
     use windows_sys::Win32::System::Threading::{
         CreateProcessW, DeleteProcThreadAttributeList, GetCurrentProcess, GetExitCodeProcess,
-        InitializeProcThreadAttributeList, ResumeThread, TerminateProcess,
+        GetProcessId, InitializeProcThreadAttributeList, ResumeThread, TerminateProcess,
         UpdateProcThreadAttribute, WaitForSingleObject, CREATE_SUSPENDED,
         CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT, INFINITE,
         LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
@@ -717,6 +717,23 @@ mod windows_impl {
             // Terminate the suspended process before returning Err (T-74-04-04).
             // SAFETY: process_handle_raw is valid (from CreateProcessW).
             unsafe { TerminateProcess(process_handle_raw, 1) };
+            // RCPT-01 gap closure (Plan 118-08, mirrors 118-06's identical
+            // broker gap closure): a confined child was spawned and just
+            // refused — write a best-effort Refused receipt before the
+            // handles are closed below. network_scoping_required is a
+            // config-derived fact (independent of job assignment), so it is
+            // meaningful to report even this early; every OTHER boolean is
+            // reported `false` — none of those steps have run yet.
+            write_daemon_refuse_receipt_best_effort(
+                process_handle_raw,
+                job_guard.0,
+                &tenant_id,
+                &package_sid,
+                false,
+                profile_needs_network_scoping(&engine_profile),
+                false,
+                false,
+            );
             // SAFETY: both handles are valid; close to avoid leaks.
             unsafe { CloseHandle(process_handle_raw) };
             unsafe { CloseHandle(thread_handle_raw) };
@@ -772,6 +789,20 @@ mod windows_impl {
                     // D-05: terminate the suspended process before returning Err.
                     // SAFETY: process_handle_raw is valid (from CreateProcessW).
                     unsafe { TerminateProcess(process_handle_raw, 1) };
+                    // RCPT-01 gap closure (Plan 118-08): network_scoping_required
+                    // is already known `true` here (only reached inside `if
+                    // network_scoping_required`); every other boolean has not
+                    // run yet.
+                    write_daemon_refuse_receipt_best_effort(
+                        process_handle_raw,
+                        job_guard.0,
+                        &tenant_id,
+                        &package_sid,
+                        false,
+                        network_scoping_required,
+                        false,
+                        false,
+                    );
                     unsafe { CloseHandle(process_handle_raw) };
                     unsafe { CloseHandle(thread_handle_raw) };
                     // job_guard drops here → closes job handle → KILL_ON_JOB_CLOSE.
@@ -781,6 +812,19 @@ mod windows_impl {
                 // D-05: refuse to launch; terminate the suspended process.
                 // SAFETY: process_handle_raw is valid (from CreateProcessW).
                 unsafe { TerminateProcess(process_handle_raw, 1) };
+                // RCPT-01 gap closure (Plan 118-08): the WFP filter-add was
+                // attempted and failed — wfp_filters_installed stays `false`
+                // (never fabricated `true`).
+                write_daemon_refuse_receipt_best_effort(
+                    process_handle_raw,
+                    job_guard.0,
+                    &tenant_id,
+                    &package_sid,
+                    false,
+                    network_scoping_required,
+                    false,
+                    false,
+                );
                 // SAFETY: both handles are valid; close to avoid leaks.
                 unsafe { CloseHandle(process_handle_raw) };
                 unsafe { CloseHandle(thread_handle_raw) };
@@ -818,6 +862,20 @@ mod windows_impl {
                 // wrapped or closed yet. Termination on grant failure mirrors the
                 // fail-secure pattern at steps 6 and 6.5.
                 unsafe { TerminateProcess(process_handle_raw, 1) };
+                // RCPT-01 gap closure (Plan 118-08): the DACL grant failed
+                // entirely, so dacl_guard_applied/ancestor_traverse_applied
+                // both stay `false`; wfp_filters_installed is known by this
+                // point.
+                write_daemon_refuse_receipt_best_effort(
+                    process_handle_raw,
+                    job_guard.0,
+                    &tenant_id,
+                    &package_sid,
+                    false,
+                    network_scoping_required,
+                    wfp_filters_installed,
+                    false,
+                );
                 unsafe { CloseHandle(process_handle_raw) };
                 unsafe { CloseHandle(thread_handle_raw) };
                 // job_guard drops here → closes job handle → KILL_ON_JOB_CLOSE fires.
@@ -855,6 +913,19 @@ mod windows_impl {
                 // Registry poisoned: fail-secure cleanup.
                 // SAFETY: handles are valid.
                 unsafe { TerminateProcess(process_handle_raw, 1) };
+                // RCPT-01 gap closure (Plan 118-08): every layer up through
+                // 6.6 is known by this point — reported faithfully, not
+                // fabricated.
+                write_daemon_refuse_receipt_best_effort(
+                    process_handle_raw,
+                    job_raw_owned,
+                    &tenant_id,
+                    &package_sid,
+                    dacl_guard_applied,
+                    network_scoping_required,
+                    wfp_filters_installed,
+                    ancestor_traverse_applied,
+                );
                 unsafe { CloseHandle(process_handle_raw) };
                 unsafe { CloseHandle(thread_handle_raw) };
                 unsafe { CloseHandle(job_raw_owned) };
@@ -896,6 +967,23 @@ mod windows_impl {
 
         {
             let mut tenants = daemon_state.tenants.lock().map_err(|_| {
+                // RCPT-01 gap closure (Plan 118-08): identical shape to step
+                // 7a — every layer up through 6.6 is known. `tenant` (which
+                // owns duplicate wrappers of the same handle values) has not
+                // dropped yet, so `process_handle_raw`/`job_raw_owned` remain
+                // valid to probe here; `tenant`'s own Drop (job_handle close
+                // → KILL_ON_JOB_CLOSE, then process_handle close) fires
+                // AFTER this closure returns, when `?` propagates below.
+                write_daemon_refuse_receipt_best_effort(
+                    process_handle_raw,
+                    job_raw_owned,
+                    &tenant_id,
+                    &package_sid,
+                    dacl_guard_applied,
+                    network_scoping_required,
+                    wfp_filters_installed,
+                    ancestor_traverse_applied,
+                );
                 NonoError::SandboxInit("launch_agent: DaemonState::tenants mutex poisoned".into())
             })?;
             tenants.insert(tenant_id.clone(), tenant);
@@ -947,7 +1035,18 @@ mod windows_impl {
         // `(Daemon, None)` declares `Abort` while this arm warns and proceeds
         // — deliberate per WR-06, because an absent ancestor traverse
         // under-grants reach and never widens confinement.
-        match daemon_attest_and_decide(
+        // Phase 118 Plan 08 (RCPT-01/D-02/D-03/D-15): probe ONCE, derive BOTH
+        // the decision AND the 13-row census from the SAME two booleans —
+        // mirrors Plan 118-07's "census built from the SAME entries/input the
+        // decision consumes" pattern
+        // (`exec_strategy_windows::launch::apply_startup_attestation_gate_with_sink_dir`)
+        // so the two can never silently diverge. `daemon_attest_and_decide`
+        // itself is UNCHANGED by this plan — still directly exercised by its
+        // own ~30 pre-existing tests — see
+        // `daemon_attest_decide_and_census`'s own doc for why a second live
+        // re-probe here (rather than changing that function's return type)
+        // cannot diverge from the first.
+        let (decision, census) = daemon_attest_decide_and_census(
             process_handle_raw,
             job_raw_owned,
             &package_sid,
@@ -964,8 +1063,47 @@ mod windows_impl {
             // WR-31: the ancestor-traverse grants (passes 1+3), distinct from
             // dacl_guard_applied (pass 2's workspace write grant).
             ancestor_traverse_applied,
-        ) {
-            DaemonAttestationDecision::Proceed => {}
+        );
+        // D-05: a bare integer identity field, sourced from the daemon's own
+        // already-open process handle — never from the confined child's own
+        // claims (D-19). SAFETY: `GetProcessId` has no preconditions beyond
+        // `process_handle_raw` being a valid `HANDLE` value; matches Plan
+        // 118-07's identical use at the CLI-side gate.
+        let pid = unsafe { GetProcessId(process_handle_raw) };
+
+        match decision {
+            DaemonAttestationDecision::Proceed => {
+                // RCPT-01/D-02/D-03: the receipt is written HERE, before
+                // ResumeThread (step 8) — matching D-03's write point exactly.
+                // D-04: a write failure ONLY aborts this launch when machine
+                // policy's `require_receipts` is set (production always
+                // passes `None` = real machine-policy read); otherwise the
+                // failure is recorded as a visible degrade and the launch
+                // proceeds. See `daemon_record_receipt_write_outcome`'s doc,
+                // mirrored byte-for-byte from Plan 118-07's own posture.
+                if let Err(e) = daemon_emit_enforcement_receipt(
+                    &crate::receipt_sink::resolve_sink_dir(),
+                    census,
+                    &tenant_id,
+                    &package_sid,
+                    pid,
+                    nono::SessionOutcome::Ran,
+                    None,
+                ) {
+                    // Matches the surrounding steps 6/6.5/6.6/7a fail-secure
+                    // idiom: terminate the suspended process explicitly
+                    // before returning Err, rather than relying solely on
+                    // `cleanup_failed_agent`'s job-close cascade.
+                    // SAFETY: process_handle_raw is still valid and un-closed
+                    // here.
+                    unsafe { TerminateProcess(process_handle_raw, 1) };
+                    // SAFETY: thread_handle_raw is still valid and un-closed
+                    // here.
+                    unsafe { CloseHandle(thread_handle_raw) };
+                    cleanup_failed_agent(&daemon_state, &tenant_id, &package_sid);
+                    return Err(e);
+                }
+            }
             DaemonAttestationDecision::Abort { layer, status } => {
                 tracing::warn!(
                     tenant_id = %tenant_id,
@@ -973,6 +1111,26 @@ mod windows_impl {
                     status = ?status,
                     "launch_agent: startup self-attestation failed; refusing to resume \
                      (fail-secure)"
+                );
+                // D-02: the `Refused` receipt is the highest-value record
+                // there is — it names the failed layer AND the state of the
+                // other twelve. Best-effort: the session is aborting either
+                // way, so this call's own `Err` is deliberately NOT
+                // propagated — the ORIGINAL attestation failure below is
+                // always what this function returns, so a receipt-emission
+                // failure can never mask the underlying security error
+                // (critical_repo_constraints #5).
+                // `daemon_record_receipt_write_outcome` still fires its own
+                // visible degrade/abort LOG unconditionally on failure (D-04:
+                // never silent), even though its `Result` is discarded here.
+                let _ = daemon_emit_enforcement_receipt(
+                    &crate::receipt_sink::resolve_sink_dir(),
+                    census,
+                    &tenant_id,
+                    &package_sid,
+                    pid,
+                    nono::SessionOutcome::Refused,
+                    None,
                 );
                 // Phase 117 review WR-07: terminate EXPLICITLY, matching
                 // the adjacent steps 6/6.5/6.6 idiom, rather than relying on
@@ -1004,6 +1162,36 @@ mod windows_impl {
         // SAFETY: close the thread handle regardless of resume result.
         unsafe { CloseHandle(thread_handle_raw) };
         if resume_result == u32::MAX {
+            // RCPT-01/D-15 (Plan 118-08, mirrors 118-06's identical decision
+            // for the broker's own Ran-then-ResumeThread-fails case): the
+            // Proceed branch above already wrote a `Ran` receipt (D-03:
+            // written before ResumeThread) — but `Ran` means "was resumed",
+            // and ResumeThread has now failed. Append a second, truthful
+            // `Refused` receipt for the SAME session_id rather than leaving
+            // that record uncorrected. A consumer reads the LAST record per
+            // session_id as authoritative (D-15's append-only, per-writer
+            // segment design). `process_handle_raw`/`job_raw_owned` are
+            // still valid, un-closed handles here (cleanup_failed_agent, not
+            // yet called, is what closes them below) — re-probed fresh
+            // rather than reusing the Proceed branch's now-moved `census`.
+            let (_, correction_census) = daemon_attest_decide_and_census(
+                process_handle_raw,
+                job_raw_owned,
+                &package_sid,
+                dacl_guard_applied,
+                network_scoping_required,
+                wfp_filters_installed,
+                ancestor_traverse_applied,
+            );
+            let _ = daemon_emit_enforcement_receipt(
+                &crate::receipt_sink::resolve_sink_dir(),
+                correction_census,
+                &tenant_id,
+                &package_sid,
+                pid,
+                nono::SessionOutcome::Refused,
+                None,
+            );
             // ResumeThread failed. Remove from state — this Drops AgentTenant →
             // closes job_handle → KILL_ON_JOB_CLOSE terminates the process.
             cleanup_failed_agent(&daemon_state, &tenant_id, &package_sid);
@@ -1445,8 +1633,19 @@ mod windows_impl {
     /// both live OS probes UNCONDITIONALLY (this is the actual behavior
     /// change — `probe_in_job` used to be gated behind
     /// `app_container_confirmed`), then delegate to
-    /// `daemon_decision_from_booleans` for the decision. Its signature and
-    /// the `launch_agent` call site are BOTH unchanged.
+    /// `daemon_decision_from_booleans` for the decision. Its own signature is
+    /// unchanged by this plan.
+    ///
+    /// # Phase 118 Plan 08 (RCPT-01): no longer `launch_agent`'s own call site
+    ///
+    /// `launch_agent`'s step 6.7 now calls [`daemon_attest_decide_and_census`]
+    /// instead of this function directly, so the SAME probe pass can also
+    /// produce the census a receipt is built from (RCPT-01) — see that
+    /// function's own doc for why calling the identical two probes a second
+    /// time there cannot diverge from this function's own probes. This
+    /// function itself is UNCHANGED and remains directly exercised by its own
+    /// ~30 pre-existing tests below (`attestation_gate_tests`); it is simply
+    /// no longer reached from the live `launch_agent` control flow.
     fn daemon_attest_and_decide(
         process: HANDLE,
         job: HANDLE,
@@ -1741,10 +1940,10 @@ mod windows_impl {
     /// D-01/D-12 (Phase 118 Plan 04): assembles the daemon's own
     /// [`nono::EnforcementReceipt`] from a 5-row modelled census
     /// ([`daemon_census_rows`]) plus [`DAEMON_UNMODELLED_LAYER_EXPECTANCY`]'s
-    /// 8 rows, into the full 13-row census D-01 requires. NOT wired into the
-    /// live `launch_agent` gate by this plan — that wiring is a later plan's
-    /// job; this plan only proves the assembly path is correct and
-    /// content-free (D-14, Task 2 Test 4).
+    /// 8 rows, into the full 13-row census D-01 requires. Wired into the live
+    /// `launch_agent` gate by Phase 118 Plan 08 — see
+    /// [`daemon_attest_decide_and_census`] and
+    /// [`daemon_emit_enforcement_receipt`].
     ///
     /// `entry_path`/`token_arm` are the core `nono::EntryPath`/
     /// `nono::TokenArm` enums (post-118-01 correction, not `&'static str` —
@@ -1777,6 +1976,243 @@ mod windows_impl {
             outcome,
             layers,
         }
+    }
+
+    /// D-01/D-02/D-03/D-15 (Phase 118 Plan 08): probes both live OS signals
+    /// EXACTLY ONCE, then derives BOTH [`daemon_attest_and_decide`]'s
+    /// decision and this launch's 13-row census
+    /// ([`daemon_census_rows`]) from the SAME two booleans — mirrors Plan
+    /// 118-07's "census built from the SAME entries/input the decision
+    /// consumes, before the decision" pattern
+    /// (`exec_strategy_windows::launch::apply_startup_attestation_gate_with_sink_dir`)
+    /// so the two can never silently diverge.
+    ///
+    /// [`daemon_attest_and_decide`] itself is UNCHANGED by this plan — still
+    /// directly exercised by its own ~30 pre-existing tests
+    /// (`attestation_gate_tests`) — this function performs the IDENTICAL two
+    /// probes (`probe_app_container_sid`/`probe_in_job`) a second time,
+    /// rather than changing that function's return type and rippling into
+    /// every one of its existing call sites. This cannot diverge from the
+    /// first probe pass: the child process is SUSPENDED at every call site in
+    /// `launch_agent` (steps 5-8, single-threaded control flow on the
+    /// daemon's own side), so there is no concurrent state change possible
+    /// between the two probe calls.
+    fn daemon_attest_decide_and_census(
+        process: HANDLE,
+        job: HANDLE,
+        expected_package_sid: &str,
+        dacl_guard_applied: bool,
+        network_scoping_required: bool,
+        wfp_filters_installed: bool,
+        ancestor_traverse_applied: bool,
+    ) -> (DaemonAttestationDecision, Vec<nono::LayerReceiptRow>) {
+        use nono::attestation::{probe_app_container_sid, probe_in_job};
+
+        // WR-01 (mirrors daemon_attest_and_decide's own identical probe):
+        // presence is not enough — it must be THIS tenant's package SID.
+        let app_container_confirmed = match probe_app_container_sid(process) {
+            Ok(Some(sid)) => sid.eq_ignore_ascii_case(expected_package_sid),
+            Ok(None) | Err(_) => false,
+        };
+        // CR-02 (mirrors daemon_attest_and_decide's own identical probe):
+        // probed against the daemon's OWN agent job handle.
+        let job_confirmed = matches!(probe_in_job(process, job), Ok(true));
+
+        let decision = daemon_decision_from_booleans(
+            app_container_confirmed,
+            job_confirmed,
+            network_scoping_required,
+            wfp_filters_installed,
+            dacl_guard_applied,
+            ancestor_traverse_applied,
+        );
+        let census = daemon_census_rows(
+            app_container_confirmed,
+            job_confirmed,
+            network_scoping_required,
+            wfp_filters_installed,
+            dacl_guard_applied,
+            ancestor_traverse_applied,
+        );
+        (decision, census)
+    }
+
+    /// D-02/D-03/D-04/D-15 (Phase 118 Plan 08): assembles and writes one
+    /// [`nono::EnforcementReceipt`] for this daemon session, then applies the
+    /// SAME D-04 visible-degrade-by-default / machine-policy-fail-closed
+    /// posture Plan 118-07 implemented for `nono.exe`'s own gate
+    /// (`exec_strategy_windows::launch::record_receipt_write_outcome`) — D-15:
+    /// "the daemon has no parent nono.exe" to report back to, so it writes
+    /// its own receipt directly through the SAME shared `receipt_sink`
+    /// writer (`crate::receipt_sink`, reachable via `nono-agentd.rs`'s
+    /// `#[path]` include, Plan 118-05).
+    ///
+    /// Unlike `nono.exe`'s own gate, `tenant_id` here is never absent —
+    /// [`generate_tenant_id`] runs unconditionally at `launch_agent`'s step 1
+    /// (16 bytes of `getrandom` entropy, D-05's opaque never-path-derived
+    /// identifier) before any of this function's callers run, so there is no
+    /// daemon-side analog of the CLI gate's "no session_id available" arm.
+    ///
+    /// Returns `Err` only when the receipt could not be written AND machine
+    /// policy's `require_receipts` is set — the `Proceed` call site must
+    /// treat that `Err` exactly like an `Abort` (terminate the suspended
+    /// child). The `Abort`/early-refuse call sites deliberately discard this
+    /// `Result` (best-effort — the session is refusing either way; a
+    /// receipt-emission failure must never mask the underlying security
+    /// error, critical_repo_constraints #5).
+    #[allow(clippy::too_many_arguments)]
+    fn daemon_emit_enforcement_receipt(
+        sink_dir: &std::path::Path,
+        census: Vec<nono::LayerReceiptRow>,
+        tenant_id: &str,
+        package_sid: &str,
+        pid: u32,
+        outcome: nono::SessionOutcome,
+        require_receipts_override: Option<bool>,
+    ) -> nono::Result<()> {
+        let receipt = build_daemon_receipt(census, tenant_id.to_string(), pid, outcome);
+
+        // D-08 both-not-either guard on the SHARED sink directory, using this
+        // launch's own AppContainer package SID — the daemon's per-session
+        // isolation identity (there is no WRITE_RESTRICTED synthetic
+        // "session SID" concept on the daemon arm, unlike the CLI gate's
+        // `expected_session_sid`). The unconditional `NO_READ_UP` mandatory
+        // label still covers every arm regardless (D-08 both-not-either).
+        let write_result =
+            crate::receipt_sink::ensure_sink_guarded(sink_dir, None, Some(package_sid))
+                .and_then(|()| {
+                    crate::receipt_sink::ReceiptWriter::new(tenant_id.to_string(), sink_dir)
+                })
+                .and_then(|writer| writer.write_receipt(&receipt));
+
+        match write_result {
+            Ok(()) => Ok(()),
+            Err(e) => daemon_record_receipt_write_outcome(e, require_receipts_override),
+        }
+    }
+
+    /// D-04: posture IDENTICAL to
+    /// `exec_strategy_windows::launch::record_receipt_write_outcome` (Plan
+    /// 118-07) — an enforcement-receipt emission failure ALWAYS produces a
+    /// visible record (never silent), and is promoted to an abort-worthy
+    /// `Err` only when machine policy's `RequireReceipts` is set. Duplicated
+    /// (not shared via a common function) because `nono-agentd` has no
+    /// `[lib]` target reachable from `nono.exe`'s own `exec_strategy_windows`
+    /// module tree — this module's own doc comment ("Module independence")
+    /// states `nono-agentd` intentionally does not depend on
+    /// `exec_strategy_windows/`.
+    ///
+    /// `require_receipts_override`: `Some(bool)` is a TEST SEAM bypassing the
+    /// registry read (`HKLM\SOFTWARE\Policies\nono\RequireReceipts` is
+    /// admin-write-only, so a unit test cannot otherwise drive
+    /// `require_receipts=true` deterministically). `None` (the only value
+    /// every real call site in this file passes) reads
+    /// `nono::read_machine_egress_policy()` on this FAILURE path only — not
+    /// on every launch, so the happy path carries zero added registry-read
+    /// latency (D-17's zero-startup-latency constraint).
+    fn daemon_record_receipt_write_outcome(
+        cause: NonoError,
+        require_receipts_override: Option<bool>,
+    ) -> nono::Result<()> {
+        // A malformed/unreadable machine policy cannot prove receipts are NOT
+        // required fleet-wide — treated the same conservative way Plan
+        // 118-07's identical function treats it (abort, never a silent
+        // "off").
+        let require_receipts = match require_receipts_override {
+            Some(overridden) => overridden,
+            None => match nono::read_machine_egress_policy() {
+                Ok(Some(policy)) => policy.require_receipts,
+                Ok(None) => false,
+                Err(_) => true,
+            },
+        };
+
+        if require_receipts {
+            tracing::warn!(
+                target: "nono_security::telemetry_degraded",
+                "enforcement receipt emission failed and machine policy requires receipts \
+                 (RequireReceipts=1) — aborting this daemon launch: {cause}"
+            );
+            return Err(NonoError::LayerAttestationFailed {
+                layer: "EnforcementReceiptEmitter".to_string(),
+                reason: format!("receipt sink write failed under require_receipts policy: {cause}"),
+            });
+        }
+
+        tracing::warn!(
+            target: "nono_security::telemetry_degraded",
+            "enforcement receipt emission failed — proceeding with a downgraded evidentiary \
+             claim (D-04): this daemon session's outcome was not durably recorded to the \
+             receipt sink: {cause}"
+        );
+        Ok(())
+    }
+
+    /// RCPT-01 gap closure (Phase 118 Plan 08), mirroring Plan 118-06's
+    /// identical broker-side gap closure: a best-effort `Refused` receipt for
+    /// a `launch_agent` terminal failure that happens AFTER a real confined
+    /// AppContainer child was spawned (step 5) but BEFORE the step 6.7
+    /// attestation gate itself runs (steps 6/6.5/6.6/7a/7b). RCPT-01 makes no
+    /// exception for early-vs-late refusal — a terminated suspended child is
+    /// a confined session that refused, regardless of which step refused it
+    /// (118-06-SUMMARY.md's "Resolved" deviation: "both branches still
+    /// terminate a confined suspended child and return `Err`... RCPT-01
+    /// makes no exception for early-vs-late refusal").
+    ///
+    /// Every boolean the caller has not yet ESTABLISHED by its own call site
+    /// is passed as `false` (never fabricated `true`) — D-13's four-state
+    /// floor: an unattested layer must never read as attested.
+    /// `app_container_confirmed`/`job_confirmed` ARE always freshly
+    /// re-probed here (never assumed) via the SAME two `nono::attestation`
+    /// probes [`daemon_attest_and_decide`] itself calls — the AppContainer
+    /// SID is fixed at `CreateProcessW` (step 5), so probing it is always
+    /// meaningful regardless of how far `launch_agent` got; `job` may be a
+    /// job the process was never assigned to (the step 6 caller), in which
+    /// case the probe correctly reads `false` rather than being skipped.
+    ///
+    /// Best-effort by design (returns nothing to check): every call site is
+    /// ALREADY returning `Err` for its own reason, so this call's own
+    /// failure must never mask that original error — matches the step 6.7
+    /// `Abort` arm's identical discard-the-`Result` posture.
+    #[allow(clippy::too_many_arguments)]
+    fn write_daemon_refuse_receipt_best_effort(
+        process: HANDLE,
+        job: HANDLE,
+        tenant_id: &str,
+        expected_package_sid: &str,
+        dacl_guard_applied: bool,
+        network_scoping_required: bool,
+        wfp_filters_installed: bool,
+        ancestor_traverse_applied: bool,
+    ) {
+        use nono::attestation::{probe_app_container_sid, probe_in_job};
+
+        let app_container_confirmed = match probe_app_container_sid(process) {
+            Ok(Some(sid)) => sid.eq_ignore_ascii_case(expected_package_sid),
+            Ok(None) | Err(_) => false,
+        };
+        let job_confirmed = matches!(probe_in_job(process, job), Ok(true));
+
+        let census = daemon_census_rows(
+            app_container_confirmed,
+            job_confirmed,
+            network_scoping_required,
+            wfp_filters_installed,
+            dacl_guard_applied,
+            ancestor_traverse_applied,
+        );
+        // SAFETY: matches this file's other GetProcessId call sites — no
+        // precondition beyond `process` being a valid HANDLE value.
+        let pid = unsafe { GetProcessId(process) };
+        let _ = daemon_emit_enforcement_receipt(
+            &crate::receipt_sink::resolve_sink_dir(),
+            census,
+            tenant_id,
+            expected_package_sid,
+            pid,
+            nono::SessionOutcome::Refused,
+            None,
+        );
     }
 
     /// Remove state for a failed agent launch. If `AgentTenant` was already
@@ -2754,6 +3190,328 @@ mod windows_impl {
         }
     }
 
+    /// Phase 118 Plan 08 (RCPT-01/D-02/D-03/D-04): the daemon's own receipt
+    /// pipeline (`daemon_attest_decide_and_census` →
+    /// `daemon_emit_enforcement_receipt` → the shared `receipt_sink`
+    /// writer), tested against an isolated `tempdir` sink so no test in this
+    /// module writes to the real, shared `%PROGRAMDATA%\nono\receipts`
+    /// directory — mirrors Plan 118-07's identical test-hygiene fix for
+    /// `nono.exe`'s own gate-level tests (its Deviation 1: "every gate-level
+    /// unit test... driv[ing] an isolated tempfile::tempdir() instead").
+    #[cfg(test)]
+    mod daemon_receipt_wiring_tests {
+        use super::*;
+        use nono::attestation::LayerAttestationStatus;
+        use nono::SessionOutcome;
+        use tempfile::tempdir;
+
+        /// A real, suspended, job-assigned AppContainer child — the same
+        /// live fixture shape
+        /// `real_appcontainer_job_process_proceeds_and_the_negatives_are_reachable`
+        /// (Plan 118-04, `attestation_gate_tests`) already established.
+        struct LiveFixture {
+            process: HANDLE,
+            thread: HANDLE,
+            job: HANDLE,
+            expected_sid: String,
+            profile: nono::AppContainerProfile,
+        }
+
+        impl LiveFixture {
+            fn spawn(name_suffix: &str) -> Self {
+                let tenant_id = generate_tenant_id().expect("generate_tenant_id");
+                let profile_name = format!("nono.rcpttest.{name_suffix}.{}", &tenant_id[..12]);
+                let profile = nono::create_app_container_profile(&profile_name)
+                    .expect("create_app_container_profile");
+                let owned_sid = nono::derive_app_container_sid(&profile_name)
+                    .expect("derive_app_container_sid");
+                let psid: PSID = owned_sid.as_psid();
+
+                let (process, thread) = spawn_appcontainer_process_suspended(
+                    std::path::Path::new(r"C:\Windows\System32\cmd.exe"),
+                    &["/c".to_string(), "exit".to_string(), "0".to_string()],
+                    psid,
+                )
+                .expect("spawn_appcontainer_process_suspended");
+
+                let job: HANDLE = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+                assert!(!job.is_null(), "CreateJobObjectW failed");
+                let assigned = unsafe { AssignProcessToJobObject(job, process) };
+                assert_ne!(assigned, 0, "AssignProcessToJobObject failed");
+
+                let expected_sid =
+                    nono::package_sid_to_string(&owned_sid).expect("package_sid_to_string");
+
+                Self {
+                    process,
+                    thread,
+                    job,
+                    expected_sid,
+                    profile,
+                }
+            }
+
+            /// SAFETY: `process`/`thread`/`job` are all valid HANDLEs this
+            /// fixture owns; the suspended process is never resumed, only
+            /// probed then torn down — mirrors the existing gate tests'
+            /// identical teardown idiom.
+            fn teardown(self) {
+                unsafe {
+                    let _ = TerminateProcess(self.process, 1);
+                    CloseHandle(self.process);
+                    CloseHandle(self.thread);
+                    CloseHandle(self.job);
+                }
+                drop(self.profile);
+            }
+        }
+
+        fn read_jsonl_receipts(
+            sink_dir: &std::path::Path,
+            session_id: &str,
+        ) -> Vec<nono::EnforcementReceipt> {
+            let path = sink_dir.join(format!("{session_id}.jsonl"));
+            let contents = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read sink file {}: {e}", path.display()));
+            contents
+                .lines()
+                .map(|line| {
+                    let value: serde_json::Value =
+                        serde_json::from_str(line).expect("parse JSONL record");
+                    serde_json::from_value(value["receipt"].clone())
+                        .expect("parse embedded EnforcementReceipt")
+                })
+                .collect()
+        }
+
+        /// Test 1 (Task 1 Behavior 1): the `Proceed` branch's shape — a
+        /// fully-attested live child produces a `Ran` outcome with a full
+        /// 13-row census, durably written to the sink BEFORE this test's own
+        /// stand-in for `ResumeThread` would run (this test calls the write
+        /// path directly, matching `launch_agent`'s own ordering: census →
+        /// receipt write → [ResumeThread, not exercised by this isolated
+        /// unit test]).
+        #[test]
+        fn proceed_branch_writes_a_ran_receipt_with_full_census() {
+            let fixture = LiveFixture::spawn("proceed");
+            let (decision, census) = daemon_attest_decide_and_census(
+                fixture.process,
+                fixture.job,
+                &fixture.expected_sid,
+                true,
+                false,
+                false,
+                true,
+            );
+            assert!(
+                matches!(decision, DaemonAttestationDecision::Proceed),
+                "a fully-applied daemon launch must reach Proceed (WR-08), got {decision:?}"
+            );
+
+            let sink = tempdir().expect("tempdir");
+            let tenant_id = "test-daemon-receipt-proceed";
+            let package_sid = fixture.expected_sid.clone();
+            daemon_emit_enforcement_receipt(
+                sink.path(),
+                census,
+                tenant_id,
+                &package_sid,
+                4242,
+                SessionOutcome::Ran,
+                Some(false),
+            )
+            .expect("receipt write must succeed against a writable tempdir sink");
+
+            fixture.teardown();
+
+            let receipts = read_jsonl_receipts(sink.path(), tenant_id);
+            assert_eq!(receipts.len(), 1);
+            assert_eq!(receipts[0].outcome, SessionOutcome::Ran);
+            assert_eq!(
+                receipts[0].layers.len(),
+                13,
+                "must be the full 13-row census"
+            );
+            assert_eq!(receipts[0].entry_path, nono::EntryPath::Daemon);
+        }
+
+        /// Test 2 (Task 1 Behavior 2): the `Abort` branch's shape — the SAME
+        /// live child, this time with the caller reporting the DACL grant
+        /// never applied (mirroring Plan 118-04's `unapplied_dacl_decision`
+        /// scenario), produces a `Refused` outcome whose census still names
+        /// the aborting layer's real status AND the other twelve rows.
+        #[test]
+        fn abort_branch_writes_a_refused_receipt_with_full_census() {
+            let fixture = LiveFixture::spawn("abort");
+            let (decision, census) = daemon_attest_decide_and_census(
+                fixture.process,
+                fixture.job,
+                &fixture.expected_sid,
+                false,
+                false,
+                false,
+                true,
+            );
+            match decision {
+                DaemonAttestationDecision::Abort { layer, .. } => {
+                    assert_eq!(layer, "DaclPackageSidGrant");
+                }
+                other => panic!("expected Abort{{DaclPackageSidGrant}}, got {other:?}"),
+            }
+
+            let sink = tempdir().expect("tempdir");
+            let tenant_id = "test-daemon-receipt-abort";
+            let package_sid = fixture.expected_sid.clone();
+            daemon_emit_enforcement_receipt(
+                sink.path(),
+                census,
+                tenant_id,
+                &package_sid,
+                4243,
+                SessionOutcome::Refused,
+                Some(false),
+            )
+            .expect("receipt write must succeed against a writable tempdir sink");
+
+            fixture.teardown();
+
+            let receipts = read_jsonl_receipts(sink.path(), tenant_id);
+            assert_eq!(receipts.len(), 1);
+            assert_eq!(receipts[0].outcome, SessionOutcome::Refused);
+            assert_eq!(receipts[0].layers.len(), 13);
+            let dacl_row = receipts[0]
+                .layers
+                .iter()
+                .find(|row| row.id == nono::LayerId::DaclPackageSidGrant)
+                .expect("DaclPackageSidGrant row must be present");
+            assert_eq!(dacl_row.status, LayerAttestationStatus::Unconfirmed);
+            let app_container_row = receipts[0]
+                .layers
+                .iter()
+                .find(|row| row.id == nono::LayerId::AppContainerProfile)
+                .expect("AppContainerProfile row must be present");
+            assert_eq!(
+                app_container_row.status,
+                LayerAttestationStatus::Confirmed,
+                "the OTHER twelve rows must still report their real status, not just the \
+                 aborting one"
+            );
+        }
+
+        /// Test 3 (Task 1 Behavior 3 / D-16): a session whose census
+        /// contains an `Unconfirmed`-on-`Proceed` row (ancestor traverse not
+        /// applied, WR-06: under-grants reach, never aborts) still writes
+        /// successfully — the receipt pipeline never rejects or crashes on
+        /// this state, only records it.
+        #[test]
+        fn unconfirmed_on_proceed_row_still_writes_successfully() {
+            let fixture = LiveFixture::spawn("unconfproceed");
+            let (decision, census) = daemon_attest_decide_and_census(
+                fixture.process,
+                fixture.job,
+                &fixture.expected_sid,
+                true,
+                false,
+                false,
+                // ancestor_traverse_applied = false: WR-06 never aborts on
+                // this alone.
+                false,
+            );
+            assert!(
+                matches!(decision, DaemonAttestationDecision::Proceed),
+                "ancestor_traverse_applied=false must not abort (WR-06), got {decision:?}"
+            );
+            let ancestor_row = census
+                .iter()
+                .find(|row| row.id == nono::LayerId::DaclAncestorTraverse)
+                .expect("DaclAncestorTraverse row must be present");
+            assert_eq!(
+                ancestor_row.status,
+                LayerAttestationStatus::Unconfirmed,
+                "this is the Unconfirmed-on-Proceed state D-16 requires the receipt be ABLE \
+                 to show"
+            );
+
+            let sink = tempdir().expect("tempdir");
+            let tenant_id = "test-daemon-receipt-unconf-proceed";
+            let package_sid = fixture.expected_sid.clone();
+            let result = daemon_emit_enforcement_receipt(
+                sink.path(),
+                census,
+                tenant_id,
+                &package_sid,
+                4244,
+                SessionOutcome::Ran,
+                Some(false),
+            );
+
+            fixture.teardown();
+
+            result.expect(
+                "the receipt pipeline must never reject or crash on an \
+                 Unconfirmed-on-Proceed row (D-16)",
+            );
+            let receipts = read_jsonl_receipts(sink.path(), tenant_id);
+            assert_eq!(receipts.len(), 1);
+            assert_eq!(receipts[0].outcome, SessionOutcome::Ran);
+        }
+
+        /// D-04 fail-direction proof (both postures, non-vacuous) — mirrors
+        /// Plan 118-07's identical
+        /// `write_failure_degrades_by_default_and_aborts_under_require_receipts`
+        /// test byte-for-byte in shape: the SAME forced `write_receipt`
+        /// failure (a `sink_dir` path where a plain FILE, not a directory,
+        /// already occupies that path, so `ensure_sink_guarded`'s
+        /// `create_dir_all` cannot succeed) drives BOTH directions.
+        #[test]
+        fn write_failure_degrades_by_default_and_aborts_under_require_receipts() {
+            let outer = tempdir().expect("tempdir");
+            let occupied_path = outer.path().join("not-a-directory");
+            std::fs::write(&occupied_path, b"not a directory").expect("seed a plain file");
+
+            let census = daemon_census_rows(true, true, false, false, true, true);
+
+            // Default posture (require_receipts=false): degrades, does not
+            // abort — and no file is actually created.
+            let ok_result = daemon_emit_enforcement_receipt(
+                &occupied_path,
+                census.clone(),
+                "test-daemon-degrade",
+                "S-1-15-2-1",
+                4245,
+                SessionOutcome::Ran,
+                Some(false),
+            );
+            assert!(
+                ok_result.is_ok(),
+                "default posture must degrade, not abort: {ok_result:?}"
+            );
+            assert!(
+                !occupied_path.join("test-daemon-degrade.jsonl").exists(),
+                "the degrade must be real — no receipt file should exist"
+            );
+
+            // require_receipts=true: the SAME forced failure now aborts.
+            let abort_result = daemon_emit_enforcement_receipt(
+                &occupied_path,
+                census,
+                "test-daemon-degrade",
+                "S-1-15-2-1",
+                4245,
+                SessionOutcome::Ran,
+                Some(true),
+            );
+            match abort_result {
+                Err(NonoError::LayerAttestationFailed { layer, .. }) => {
+                    assert_eq!(layer, "EnforcementReceiptEmitter");
+                }
+                other => panic!(
+                    "require_receipts=true must abort with LayerAttestationFailed, got {other:?}"
+                ),
+            }
+        }
+    }
+
     /// Phase 118 Plan 04, Task 2 — drift guard between
     /// `DAEMON_UNMODELLED_LAYER_EXPECTANCY`/`DAEMON_MODELLED_LAYER_IDS` and
     /// `layer_registry.rs`'s own `(EntryPath::Daemon, ..)` expectancy
@@ -3257,12 +4015,21 @@ mod tests {
     /// wires it up, so this asserts on that wiring directly.
     #[test]
     fn daemon_attestation_gate_is_wired_to_real_outcomes_not_the_gate_condition() {
+        // Phase 118 Plan 08: the step 6.7 call site was renamed from
+        // `daemon_attest_and_decide` to `daemon_attest_decide_and_census`
+        // (RCPT-01 — the census the receipt writes must come from the SAME
+        // probe pass as the decision), and the call is no longer the
+        // `match`'s own scrutinee (`let (decision, census) = ...(); match
+        // decision { ... }` instead of `match ...(...) { ... }`), so the
+        // terminator changed from `") {"` to `");"`. The argument SHAPE this
+        // test actually cares about (NR-05/WR-31's non-literal,
+        // independent-expression checks) is unchanged.
         let src = include_str!("launch.rs");
         let call = src
-            .split("match daemon_attest_and_decide(")
+            .split("daemon_attest_decide_and_census(")
             .nth(1)
             .expect("the step 6.7 attestation gate call site must exist");
-        let args_block = call.split(") {").next().expect("argument list");
+        let args_block = call.split(");").next().expect("argument list");
         let args: Vec<&str> = args_block
             .lines()
             .map(str::trim)
