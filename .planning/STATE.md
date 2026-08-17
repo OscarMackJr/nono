@@ -2,7 +2,7 @@
 gsd_state_version: 1.0
 milestone: v3.7
 milestone_name: Composite Integrity + Tool-Sandbox Disposition
-status: Phase 118 (Per-Session Enforcement Receipts) EXECUTING (started 2026-08-16) — 10 plans across 6 waves. Phase 117 Complete (1 human item open: WR-20 needs an elevated/CI Windows runner).
+status: Phase 118 (Per-Session Enforcement Receipts) PAUSED 2026-08-17 at Plan 118-10 Task 2 of 3 — 9.5/10 plans done, all 6 waves of code work complete. Remaining: Task 2 verify+commit (doc section written, uncommitted), Task 3 BLOCKING human-verify confined-child sink-guard checkpoint, then SUMMARY + /gsd:code-review (D-22) + hand close-out. See .planning/HANDOFF.json. Phase 117 Complete (1 human item open: WR-20 needs an elevated/CI Windows runner).
 shipped_milestone: v3.6
 shipped_milestone_name: "UPST12: Upstream Sync v0.66.0 -> v0.69.0"
 shipped_date: 2026-08-08
