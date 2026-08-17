@@ -1164,6 +1164,23 @@ mod broker {
         let child_process = OwnedHandle(process_info.hProcess);
         let child_thread = OwnedHandle(process_info.hThread);
 
+        // Phase 118 Plan 06 gap-closure (orchestrator follow-up, D-03/RCPT-01):
+        // read the wire contract + correlation id EARLY — before the two
+        // label-application fail-closed branches immediately below — so a
+        // confined session that refuses HERE also gets a receipt. RCPT-01 is
+        // "every confined session emits a receipt"; a refuse path that
+        // emits nothing is exactly the gap this closes. Best-effort reads
+        // (never fail-closed): these two branches' own security decision
+        // (terminate + `return Err`) is completely unaffected by whether
+        // this wire-contract data is present — it only shapes the CENSUS a
+        // receipt carries, never whether the child is terminated.
+        let required_layers_raw_for_early_census =
+            std::env::var("NONO_BROKER_REQUIRED_LAYERS").unwrap_or_default();
+        let not_applicable_raw =
+            std::env::var("NONO_BROKER_NOT_APPLICABLE_LAYERS").unwrap_or_default();
+        let session_id = std::env::var("NONO_SESSION_ID").unwrap_or_default();
+        let pid = process_info.dwProcessId;
+
         // Plan 62-12 (D1 step 3 / D5 #4): for the AppContainer child, apply the
         // Low-IL mandatory label to the (suspended) child's primary token for
         // explicit NO_WRITE_UP parity, then resume the main thread. FAIL-CLOSED:
@@ -1182,6 +1199,44 @@ mod broker {
             };
             if opened == 0 {
                 let err = unsafe { GetLastError() };
+                // Phase 118 Plan 06 gap-closure: a confined session that
+                // REFUSED here still gets a receipt (D-03/RCPT-01). Probe
+                // read-only (D-19: real OS observation, never fabricated)
+                // for the most truthful census this earliest branch can
+                // produce — `probe_app_container_sid`/`probe_integrity_level`
+                // open their OWN token handle internally, independent of
+                // this branch's own failed `OpenProcessToken` call, so a
+                // real (possibly also-failing) probe result is genuinely
+                // available. D-13: an unknown row stays Unconfirmed/
+                // NotApplicable, never fabricated Confirmed. Content-free
+                // (D-14): only the bare `GetLastError` numeric code is
+                // observed above, and it is never placed on the receipt —
+                // the receipt-write path below takes no error-string input
+                // at all. Receipt-write failure degrades visibly
+                // (`record_broker_receipt`'s own D-04 contract) and never
+                // masks this branch's own `TerminateProcess` + `return Err`.
+                let app_container_probe = Some(nono::attestation::probe_app_container_sid(
+                    child_process.raw(),
+                ));
+                let integrity_probe = nono::attestation::probe_integrity_level(child_process.raw());
+                let expected_sid: Option<String> = match app_container_sid.as_ref() {
+                    Some(owned) => nono::package_sid_to_string(owned).ok(),
+                    None => None,
+                };
+                let census = broker_census(
+                    &required_layers_raw_for_early_census,
+                    &not_applicable_raw,
+                    &app_container_probe,
+                    expected_sid.as_deref(),
+                    &integrity_probe,
+                );
+                record_broker_receipt(
+                    &session_id,
+                    pid,
+                    nono::SessionOutcome::Refused,
+                    census,
+                    expected_sid.as_deref(),
+                );
                 unsafe {
                     // SAFETY: terminate the suspended child before bailing so we
                     // never leave an unlabeled (un-resumed) process behind.
@@ -1193,6 +1248,34 @@ mod broker {
             }
             let child_token = OwnedHandle(child_token);
             if let Err(e) = nono::apply_low_il_label_to_token(child_token.raw()) {
+                // Phase 118 Plan 06 gap-closure: same reasoning as the
+                // `OpenProcessToken` branch above — `OpenProcessToken`
+                // itself succeeded here, so the probes below observe the
+                // REAL (still-unlabeled, i.e. genuinely not-yet-Low-IL)
+                // state of the child token — a truthful, not fabricated,
+                // Unconfirmed outcome for `MandatoryIntegrityLabel`.
+                let app_container_probe = Some(nono::attestation::probe_app_container_sid(
+                    child_process.raw(),
+                ));
+                let integrity_probe = nono::attestation::probe_integrity_level(child_process.raw());
+                let expected_sid: Option<String> = match app_container_sid.as_ref() {
+                    Some(owned) => nono::package_sid_to_string(owned).ok(),
+                    None => None,
+                };
+                let census = broker_census(
+                    &required_layers_raw_for_early_census,
+                    &not_applicable_raw,
+                    &app_container_probe,
+                    expected_sid.as_deref(),
+                    &integrity_probe,
+                );
+                record_broker_receipt(
+                    &session_id,
+                    pid,
+                    nono::SessionOutcome::Refused,
+                    census,
+                    expected_sid.as_deref(),
+                );
                 unsafe {
                     // SAFETY: see above — fail closed by terminating the child.
                     windows_sys::Win32::System::Threading::TerminateProcess(child_process.raw(), 1);
@@ -1232,23 +1315,20 @@ mod broker {
         // outside via the shared `crates/nono` primitives.
         //
         // Phase 118 Plan 06 (D-15/D-27): the sibling `NotApplicable` wire
-        // channel and the session-correlation id are read alongside
-        // `NONO_BROKER_REQUIRED_LAYERS`, but feed this broker's own receipt
-        // CENSUS only — never its resume/terminate DECISION, which stays
-        // governed exclusively by `NONO_BROKER_REQUIRED_LAYERS`'s existing
-        // fail-closed read below (D-27: an absent/unreadable value here
-        // degrades the RECEIPT — rows named in neither channel fail toward
-        // `Unconfirmed` — it never blocks resume). `NONO_SESSION_ID` is
-        // "audit-correlation only; accept empty" per the house convention
+        // channel and the session-correlation id — `not_applicable_raw`,
+        // `session_id`, `pid` — were already read above (before the
+        // label-application fail-closed branches, gap-closure), but feed
+        // this broker's own receipt CENSUS only — never its resume/
+        // terminate DECISION, which stays governed exclusively by
+        // `NONO_BROKER_REQUIRED_LAYERS`'s existing fail-closed read below
+        // (D-27: an absent/unreadable value here degrades the RECEIPT —
+        // rows named in neither channel fail toward `Unconfirmed` — it
+        // never blocks resume). `NONO_SESSION_ID` is "audit-correlation
+        // only; accept empty" per the house convention
         // `nono::supervisor::aipc_sdk` documents for this exact env var
         // name; D-15's correlation-by-session-id degrades gracefully (an
         // absent id still produces a valid, if uncorrelated, receipt)
         // rather than refusing the launch over a record-quality concern.
-        let not_applicable_raw =
-            std::env::var("NONO_BROKER_NOT_APPLICABLE_LAYERS").unwrap_or_default();
-        let session_id = std::env::var("NONO_SESSION_ID").unwrap_or_default();
-        let pid = process_info.dwProcessId;
-
         let required_layers_raw = std::env::var("NONO_BROKER_REQUIRED_LAYERS").map_err(|_| {
             NonoError::SandboxInit(
                 "NONO_BROKER_REQUIRED_LAYERS absent or unreadable — refusing to resume an \
