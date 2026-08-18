@@ -108,6 +108,75 @@
 //! `OpenOptions::append` atomicity guarantee for a single `write` syscall —
 //! that is a real, named limitation of this plan's scope, not a silently
 //! assumed non-issue.
+//!
+//! # Discretionary decisions (Phase 118 closeout)
+//!
+//! Plan 118-10 consolidates the record of every item `118-CONTEXT.md`'s
+//! "Claude's Discretion" list left open, so a future reader does not have
+//! to reconstruct them from SUMMARYs across Plans 118-01/05/06/09.
+//!
+//! **1. Sink location and layout:** `%PROGRAMDATA%\nono\receipts`
+//! (machine-wide), one JSONL file per session (`<session_id>.jsonl` for
+//! `nono.exe`/`nono-agentd.exe`, `<session_id>.broker.jsonl` for the
+//! broker — 118-06). Chosen over `%LOCALAPPDATA%` because D-09's
+//! governance consumer is the operator/fleet admin, who retrieves from a
+//! machine-wide location, not a per-user one — see the "Sink location"
+//! section above for the live labelability check that confirmed this
+//! choice is actually viable on this host, not merely convenient.
+//!
+//! **2. Retention and rotation policy: NONE — unbounded growth, deferred.**
+//! No file-size cap, no age-based pruning, and no `nono receipt cleanup`
+//! command were built in this phase (contrast `AuditCommands::Cleanup`,
+//! which the receipt command family — D-10 — deliberately did NOT mirror
+//! for this reason). This is an explicit choice, not an oversight: every
+//! session appends exactly one small JSONL line to its own per-session
+//! file, so growth is bounded by session count, not by a single
+//! unboundedly-growing log — the operational pressure a rotation policy
+//! would normally exist to relieve is comparatively low. **Constraint on
+//! any FUTURE rotation implementation, stated here so it cannot be missed**
+//! (per `118-CONTEXT.md`'s explicit instruction): rotation must never
+//! silently truncate a chain segment in a way that makes a retained
+//! receipt unverifiable. Concretely, that means a future rotation design
+//! may delete an ENTIRE per-session segment (verify already treats a
+//! missing segment as a fail-closed error, not a pass — see
+//! `receipt_commands.rs`), but must never truncate a segment mid-chain,
+//! since [`ReceiptWriter::write_receipt`]'s `prev_head` linkage would then
+//! make every record AFTER the truncation point unverifiable while still
+//! appearing on disk as if it were.
+//!
+//! **3. The coarse Windows Event Log pointer (D-06) was NOT implemented —
+//! this is deliberate, not an oversight.** No code in this codebase
+//! registers a receipt-specific Event Log source or writes a "receipt N
+//! emitted, chain head X" pointer event anywhere. D-06 named this pointer
+//! as *at most* a coarse aid, explicitly never load-bearing for RCPT-02's
+//! tamper-evidence claim — the dedicated sink built by this module is
+//! what actually carries that claim. Justification for dropping it
+//! entirely rather than building a best-effort version: it carries three
+//! independent conditional dependencies (`SECURITY_LAYER` initialized,
+//! telemetry enabled, `RegisterEventSourceW` succeeding) for a benefit
+//! that, per D-07's live measurement on this host, is *itself* of
+//! unresolved value — the `INTERACTIVE` SID's `0x3` (read+write) access
+//! bit on the Application channel means the Event Log's readability
+//! boundary from a confined child was never cleared as safe in the first
+//! place (see D-07's full account above), so a pointer event would point a
+//! governance consumer at a channel this phase never proved is
+//! appropriately access-controlled. Building it anyway would have added
+//! real complexity to close a gap that, per D-06's own reasoning, this
+//! sink module already closes by a different, verified route. The
+//! open question this drops (empirical proof of Event Log readability from
+//! a real confined child) remains a tracked deferred item, not a lapsed
+//! one — see `118-CONTEXT.md`'s `<deferred>` section.
+//!
+//! **4. `entry_path` and `token_arm` ARE first-class fields on
+//! [`nono::EnforcementReceipt`]** (`crates/nono/src/receipt.rs`), closing
+//! this discretion item explicitly: `entry_path: EntryPath` is mandatory
+//! on every receipt (`DirectCli` / `Broker` / `Daemon`, the same identity
+//! vocabulary D-15's cross-binary correlation story depends on), and
+//! `token_arm: Option<TokenArm>` is `None` specifically for
+//! `EntryPath::Broker`/`EntryPath::Daemon` (which bypass the token-arm
+//! construction this field names) and `Some` otherwise. Both fields are
+//! populated by the supervisor from its own observed control flow, never
+//! from confined-process input (D-19).
 
 use std::fs::OpenOptions;
 use std::io::Write as _;
