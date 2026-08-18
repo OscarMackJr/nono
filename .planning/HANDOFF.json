@@ -11,7 +11,7 @@
   "milestone": "v3.7",
   "branch": "milestone/v2.13-carryforward-closeout",
   "phase_base_commit": "2359c841",
-  "head_commit": "f19752e8",
+  "head_commit": "f81a009d",
   "plans_complete": "9.5 of 10",
   "completed_tasks": [
     {"id": "118-01", "name": "Core receipt vocabulary + content-free scan", "status": "done", "commit": "671624e0", "note": "corrected by operator decision in b266e138 — entry_path/token_arm promoted to core EntryPath/TokenArm enums so receipts round-trip"},
@@ -23,11 +23,11 @@
     {"id": "118-07", "name": "Wire CLI census into sink", "status": "done", "commit": "f2ff94f7"},
     {"id": "118-08", "name": "Wire daemon census into sink", "status": "done", "commit": "93caad9a", "note": "proactively enumerated every refuse path after seeing 118-06's bounce"},
     {"id": "118-09", "name": "nono receipt list|show|verify", "status": "done", "commit": "10dbe543", "note": "verify proven fail-closed against 6 tamper shapes; 1 accepted limit — clean tail-record deletion is undetectable by a keyless chain with no external anchor"},
-    {"id": "118-10 Task 1", "name": "Cross-target clippy gates + D-17 latency measurement", "status": "done", "commit": "f19752e8", "note": "BOTH gates clean at --workspace scope: cross linux-gnu 4m59s, cargo-zigbuild apple-darwin 57.69s. D-17 measured N=30: avg 5.7ms, p50 5.6ms, min 2.6ms, max 13.5ms — recorded at launch.rs:1568"}
+    {"id": "118-10 Task 1", "name": "Cross-target clippy gates + D-17 latency measurement", "status": "done", "commit": "f19752e8", "note": "BOTH gates clean at --workspace scope: cross linux-gnu 4m59s, cargo-zigbuild apple-darwin 57.69s. D-17 measured N=30: avg 5.7ms, p50 5.6ms, min 2.6ms, max 13.5ms — recorded at launch.rs:1568"},
+    {"id": "118-10 Task 2", "name": "Record discretionary decisions in receipt_sink.rs module doc", "status": "done", "commit": "f81a009d", "note": "verified 2026-08-18 with cargo doc -p nono-sandbox-cli --no-deps: 0 errors, and ZERO warnings cite receipt_sink.rs (pre-existing counts unchanged: 33 for bin nono, 2 for bin nono-agentd). Doc-only change; working tree now clean."}
   ],
   "remaining_tasks": [
-    {"id": "118-10 Task 2", "name": "Record discretionary decisions in receipt_sink.rs module doc", "status": "in_progress", "progress": "69-line '# Discretionary decisions (Phase 118 closeout)' section IS WRITTEN but UNCOMMITTED in the working tree. Covers all 4 required items incl. literal 'D-06' and an explicit 'NOT implemented / deliberate' verdict on the Event Log pointer. Still needs: cargo doc -p nono-sandbox-cli --no-deps (no new errors), then commit."},
-    {"id": "118-10 Task 3", "name": "Confined-child sink-guard verification (D-08)", "status": "not_started", "blocking": true, "note": "checkpoint:human-verify — CANNOT be automated or self-approved. Needs a real confined session on a real host across 3 arms + a supervisor-still-writable check."},
+    {"id": "118-10 Task 3", "name": "Confined-child sink-guard verification (D-08)", "status": "not_started", "blocking": true, "note": "checkpoint:human-verify — CANNOT be automated or self-approved. Needs a real confined session on a real host across 3 arms + a supervisor-still-writable check. Presented to the operator 2026-08-18; awaiting their typed response."},
     {"id": "118-10 SUMMARY", "name": "Write 118-10-SUMMARY.md", "status": "not_started", "note": "must quote the operator's Task 3 response VERBATIM as the evidence of the check having run"},
     {"id": "phase-close", "name": "Phase close-out sequence", "status": "not_started", "note": "/gsd:code-review 118 (D-22, required before phase is done) -> regression gate -> gsd-verifier -> HAND-EDIT STATE.md/ROADMAP.md/REQUIREMENTS.md"}
   ],
@@ -46,9 +46,7 @@
     {"decision": "Sanctioned host test baseline is 12, not the 11 in project memory", "rationale": "the 12th is exec_strategy::labels_guard::tests::non_owned_path_with_a_foreign_label_is_exempt_not_a_coverage_gap, a DELIBERATE loud test-setup failure Phase 117 added (D-31) because this non-elevated session lacks SeRestorePrivilege. Verified by reading its actual panic message, not assumed.", "phase": "118"},
     {"decision": "Skipped the execute-phase workflow's state.begin-phase call; hand-edited STATE.md instead", "rationale": "D-24 + project memory: SDK state writers have previously DELETED the whole parallel_milestone* block on this dual-milestone STATE.md", "phase": "118"}
   ],
-  "uncommitted_files": [
-    {"path": "crates/nono-cli/src/receipt_sink.rs", "change": "+69 lines — Task 2's '# Discretionary decisions (Phase 118 closeout)' module-doc section", "action_needed": "verify with cargo doc, then commit as Task 2"}
-  ],
-  "next_action": "Run `cargo doc -p nono-sandbox-cli --no-deps` to verify the uncommitted receipt_sink.rs module doc produces no new errors, commit it as 118-10 Task 2 with a DCO sign-off, then present 118-10 Task 3's 5 confined-child checks to the operator and WAIT for their typed response.",
+  "uncommitted_files": [],
+  "next_action": "118-10 Task 2 is DONE (commit f81a009d, working tree clean). The ONLY remaining gate before the close-out sequence is 118-10 Task 3: the operator must run the 5 confined-child sink-guard checks and type 'approved' or describe the failing check. Do not write 118-10-SUMMARY.md, run /gsd:code-review, or touch STATE/ROADMAP until that typed response exists — it must be quoted VERBATIM in the SUMMARY.",
   "context_notes": "Phase 118 ran 10 plans across 6 waves sequentially on the main working tree (workflow.use_worktrees=false, so no worktree isolation and no intra-wave parallelism). All 6 waves' code work is done; only the phase-gate plan's human checkpoint and the close-out sequence remain. Every executor was given an explicit constraints block (no SDK state writers, cargo-test-selector proof, guard-predicate discipline, perturbation proofs) and that block was demonstrably productive — it is why 3 real defects and 1 requirement gap were caught rather than shipped. Do NOT relax it for the remaining work. The orchestrator, not the executors, owns STATE.md and ROADMAP.md for this phase; none of the 10 plans touched either file."
 }
