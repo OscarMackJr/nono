@@ -1987,6 +1987,38 @@ pub fn grant_sid_read_attributes_on_path(path: &Path, sid: &str) -> Result<()> {
 ///   is an accepted, named residual scope boundary, not something either
 ///   mechanism claims to close.
 ///
+/// # Correction (Phase 118 Plan 10 Task 3): the sink's READ coverage is nil
+///
+/// The Plan 05 correction below narrowed the mandatory label's coverage to
+/// "Low-IL-or-below readers." Task 3's live check narrowed it further, to
+/// nothing at all for the receipt sink's actual protected objects. Measured
+/// 2026-09-05 on both confined arms: a confined child read receipt files
+/// successfully in every configuration tried.
+///
+/// Two independent reasons, either of which alone is sufficient:
+///
+/// 1. **This function applies its ACE with `NO_INHERITANCE`** (see the call
+///    below), and the companion mandatory label likewise carries no
+///    `(OI)(CI)`. Both are therefore scoped to the DIRECTORY OBJECT. Reading
+///    an existing file consults the FILE's DACL, which inherits only
+///    allow-ACEs from its parent — `icacls` on a live receipt file shows no
+///    DENY ACE and no `Mandatory Label` line whatsoever.
+/// 2. **[`try_set_mandatory_label`] pins the object to a LOW RID**, and
+///    Windows denies only subjects strictly BELOW the object's level, so a
+///    Low-IL subject is EQUAL to a Low-labeled object rather than below it.
+///    Plan 05's probe below reported a Low-IL denial, which does NOT
+///    reproduce against the sink; that probe did not record the exact object
+///    and inheritance shape it measured, so the discrepancy cannot be
+///    reconstructed and the probe cannot be relied on to describe this
+///    differently-shaped object. Reason 1 is sufficient on its own.
+///
+/// **The receipt sink's guard is therefore a WRITE-INTEGRITY guard.** It
+/// prevents a confined child from creating, overwriting, or deleting sink
+/// entries — creating a file is an operation on the DIRECTORY, where the
+/// DENY ACE does apply, and that was verified denied on both arms even with
+/// the sink granted writable. It provides no read confidentiality. Callers
+/// must not describe it as doing so.
+///
 /// # Correction (Phase 118 Plan 05): what `NO_READ_UP` actually blocks
 ///
 /// This doc previously claimed the mandatory label's `NO_READ_UP` closes the
@@ -2008,7 +2040,14 @@ pub fn grant_sid_read_attributes_on_path(path: &Path, sid: &str) -> Result<()> {
 /// `BrokerLaunchNoPty` arms) cannot read the sink via the mandatory label
 /// alone, and — on arms that mint a session/package SID — cannot read it via
 /// the token's normal SID list either, once the DENY ACE also names that
-/// SID. Closing the Medium-IL-broker read path specifically would require a
+/// SID.
+/// ^^^ **FALSIFIED — Phase 118 Plan 10 Task 3 (2026-09-05).** Confined
+/// children on BOTH the `WriteRestricted` and broker/AppContainer arms read
+/// receipt files successfully. Neither guard reaches the files (both are
+/// directory-scoped, no inheritance). See the Plan 10 correction at the top
+/// of this doc; the sentence above is retained only to show what was
+/// believed when the guard was built.
+/// Closing the Medium-IL-broker read path specifically would require a
 /// DIFFERENT mechanism (e.g. a DENY ACE naming the broker's own token SID,
 /// which today's `nono-shell-broker.exe` invocation does not mint) and is
 /// out of scope for Phase 118 Plan 05 — tracked as a named residual boundary

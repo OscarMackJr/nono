@@ -2072,12 +2072,30 @@ mod windows_impl {
     ) -> nono::Result<()> {
         let receipt = build_daemon_receipt(census, tenant_id.to_string(), pid, outcome);
 
-        // D-08 both-not-either guard on the SHARED sink directory, using this
+        // D-08 WRITE-INTEGRITY guard on the SHARED sink directory, using this
         // launch's own AppContainer package SID — the daemon's per-session
         // isolation identity (there is no WRITE_RESTRICTED synthetic
         // "session SID" concept on the daemon arm, unlike the CLI gate's
-        // `expected_session_sid`). The unconditional `NO_READ_UP` mandatory
-        // label still covers every arm regardless (D-08 both-not-either).
+        // `expected_session_sid`).
+        //
+        // CORRECTED (Phase 118 Plan 10 Task 3): this previously read "the
+        // unconditional `NO_READ_UP` mandatory label still covers every arm
+        // regardless (D-08 both-not-either)." It does not. The label is
+        // pinned to a LOW integrity RID and is set on the DIRECTORY with no
+        // `(OI)(CI)`, so it neither blocks a Low-IL subject (equal, not
+        // below) nor attaches to receipt files at all. D-08's claim is now
+        // scoped to write integrity only — a confined child cannot forge or
+        // destroy sink entries, but CAN read them. See `receipt_sink`'s
+        // "D-08 SCOPE CORRECTION" module-doc section.
+        //
+        // MIRROR ASYMMETRY, named so it cannot drift silently: this call site
+        // passes `(None, Some(package_sid))` while the CLI gate in
+        // `exec_strategy_windows/launch.rs` passes
+        // `(expected_session_sid, None)`. **Neither producer passes both.**
+        // Each covers the half the other omits. Harmless under the narrowed
+        // write-integrity claim, because each arm denies the SID its own
+        // confined child actually carries — but any future widening must fix
+        // BOTH sites together, or one arm will silently keep the old shape.
         let write_result =
             crate::receipt_sink::ensure_sink_guarded(sink_dir, None, Some(package_sid))
                 .and_then(|()| {

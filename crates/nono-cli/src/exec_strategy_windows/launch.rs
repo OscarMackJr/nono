@@ -1900,19 +1900,38 @@ fn emit_enforcement_receipt(
         outcome,
     );
 
-    // D-08 both-not-either guard on the SHARED sink directory, using this
+    // D-08 WRITE-INTEGRITY guard on the SHARED sink directory, using this
     // launch's own WRITE_RESTRICTED synthetic SID when one was minted for
-    // it. `package_sid` is deliberately NOT threaded through here:
+    // it. This denies a confined child the ability to CREATE, overwrite, or
+    // delete sink entries; it does NOT make receipts unreadable from inside
+    // containment — see `receipt_sink`'s "D-08 SCOPE CORRECTION" module-doc
+    // section for the measurement and the narrowed claim.
+    //
+    // `package_sid` is deliberately NOT threaded through here:
     // `apply_startup_attestation_gate` does not carry it today, and adding
     // it would touch every one of this file's ~12 gate-level test call
-    // sites for a guard whose OTHER half already covers the gap — the
-    // unconditional `NO_READ_UP` mandatory label applies regardless of any
-    // SID (D-08 is both-not-either, not either-or; see
-    // `receipt_sink::ensure_sink_guarded`'s own doc), and an AppContainer-arm
-    // child is Low-IL by construction, so the label alone still covers it.
-    // This narrows (does not eliminate) the residual gap
-    // `nono::deny_sid_on_path`'s doc already names and accepts for a
-    // semi-trusted Medium-IL co-supervisor.
+    // sites.
+    //
+    // CORRECTED (Phase 118 Plan 10 Task 3): this omission was previously
+    // justified by "the unconditional `NO_READ_UP` mandatory label applies
+    // regardless of any SID … and an AppContainer-arm child is Low-IL by
+    // construction, so the label alone still covers it." **That justification
+    // was false in two independent ways**, both measured 2026-09-05:
+    // (1) `nono::try_set_mandatory_label` pins the object's own RID to
+    // `SECURITY_MANDATORY_LOW_RID` (hardcoded `LW`), and Windows denies only
+    // subjects BELOW the object's level — so a Low-IL child is EQUAL to a
+    // Low-labeled object and is not blocked by it at all; "Low-IL by
+    // construction" is precisely the case the label cannot catch. (2) The
+    // label is set on the directory with no `(OI)(CI)`, so it never attaches
+    // to receipt files regardless of any subject's IL.
+    //
+    // The omission is retained because the claim was narrowed to write
+    // integrity (operator decision at the Task 3 checkpoint), NOT because the
+    // gap is covered elsewhere. On this arm the sink carries a DENY ACE for
+    // the session SID only; no package SID is ever denied by this call site.
+    // If read confidentiality is ever claimed, this line is one of the two
+    // places that must change (the other is the daemon's mirror in
+    // `agent_daemon/launch.rs`, which passes the complementary half).
     let write_result =
         crate::receipt_sink::ensure_sink_guarded(sink_dir, expected_session_sid, None)
             .and_then(|()| {

@@ -53,7 +53,55 @@
 //! (returns `Err`, never silently proceeds unguarded) if labeling fails on
 //! any given host, per D-04/T-118-15.
 //!
-//! # D-08: BOTH a DENY ACE and a `NO_READ_UP` mandatory label, unconditionally
+//! # D-08 SCOPE CORRECTION (Phase 118 Plan 10, Task 3): WRITE-integrity only
+//!
+//! **The guard below protects the INTEGRITY of the sink, not the
+//! CONFIDENTIALITY of the receipts in it. A confined child CAN read every
+//! receipt file in the sink. This is measured, not theorised** — see
+//! `118-10-SUMMARY.md` for the full Task 3 record. Read this section before
+//! the historical account that follows it; the account describes what was
+//! believed while the guard was built, and parts of it are now falsified.
+//!
+//! Measured on a real host, 2026-09-05, on BOTH confined arms:
+//!
+//! - `nono run --read <sink> -- cmd /c type <receipt>.jsonl` on the
+//!   `WriteRestricted` arm printed the receipt (child confirmed confined:
+//!   `token_arm: WriteRestricted`, `RestrictedToken: Confirmed`).
+//! - `nono run -p claude-code --allow <sink> -- cmd /c type <receipt>.jsonl`
+//!   on the broker/AppContainer arm printed the receipt
+//!   (`app_container=true`, `child_exit_code=0`).
+//! - WRITE was denied on both arms even with the sink granted writable, and
+//!   no file was created. The supervisor retained read+write throughout.
+//!
+//! Why reads get through, in one line: **both guards are scoped to the sink
+//! DIRECTORY OBJECT and neither reaches the files inside it.**
+//! [`nono::deny_sid_on_path`] applies its ACE with `NO_INHERITANCE`, and the
+//! mandatory label carries no `(OI)(CI)`, so `icacls` on a receipt file shows
+//! no DENY ACE and no `Mandatory Label` line at all — only allow-ACEs
+//! inherited from `%PROGRAMDATA%`, including the invoking user, which is the
+//! same user the confined child runs as. Creating a file, by contrast, is an
+//! operation on the DIRECTORY, where the DENY ACE does apply — which is
+//! exactly why write-denial holds and read-denial does not.
+//!
+//! **What D-08 therefore claims, and only this:** a confined child cannot
+//! CREATE, overwrite, or delete entries in the sink, so it cannot forge or
+//! destroy the enforcement record. That is the property RCPT-02's
+//! tamper-evidence rests on, and it is intact. **What D-08 does NOT claim:**
+//! that receipts are unreadable from inside containment. A confined child can
+//! read every session's layer census, `session_id`, `pid`, `entry_path` and
+//! `token_arm` — content-free by construction (D-05/D-14), so no user data is
+//! exposed, but "which layers are inert on this host" is legible to it.
+//! Narrowing the claim rather than widening the guard was the operator's
+//! decision at the Task 3 checkpoint; widening it (an `(OI)(CI)` deny at this
+//! call site, or per-file guards) remains available and unimplemented.
+//!
+//! # D-08 as built: BOTH a DENY ACE and a `NO_READ_UP` mandatory label
+//!
+//! *(Historical account — read the SCOPE CORRECTION above first. The
+//! read-protection claims in this section and the next are the ones Task 3
+//! falsified; they are kept because they record what the guard was designed
+//! to do and why, which the correction above is otherwise unintelligible
+//! without.)*
 //!
 //! The supervisor and the confined child run as the **same user**, so an
 //! ordinary allow-only DACL cannot structurally separate them. Neither
@@ -66,6 +114,16 @@
 //! regardless of which SIDs the CURRENT launch happens to have minted — the
 //! directory is shared across every launch, so a session that minted no SID
 //! must not leave it unguarded for the next session that does.
+//!
+//! **⚠ The paragraph immediately below is the claim Task 3 falsified for the
+//! shipped guard.** Its probe result is not disputed, but it does not
+//! generalise to this sink: the probe's labeled object was the object being
+//! read, whereas the sink's label sits on the DIRECTORY with no `(OI)(CI)`
+//! and so never attaches to a receipt file. The probe's exact object and
+//! inheritance shape were not recorded at the time, so the discrepancy
+//! cannot be fully reconstructed — which is itself the lesson: a probe that
+//! does not pin the object shape it measured cannot be relied on to describe
+//! a differently-shaped production object.
 //!
 //! **What is empirically proven** (live probe during this plan's design,
 //! `CreateProcessAsUserW` with a real Low-IL primary token spawned via
