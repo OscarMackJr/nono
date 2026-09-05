@@ -79,3 +79,64 @@ Logged here only so a future reader searching deferred items finds the pointer. 
 confidentiality is ever claimed, BOTH `ensure_sink_guarded` call sites must change together —
 `exec_strategy_windows/launch.rs` passes `(session_sid, None)` and `agent_daemon/launch.rs` passes
 `(None, Some(package_sid))`; neither passes both.
+
+## ADJUDICATION of the three integration failures (Plan 118-10 close-out, 2026-09-05)
+
+**Verdict: all three are PRE-EXISTING and none is a Phase 118 regression.** Adjudicated by
+structural evidence rather than a phase-base rebuild — the reasoning below is stronger than a
+single cold-build comparison because it identifies each failure's actual cause.
+
+### Why they were absent from the documented baseline (the thing that made them look new)
+
+The "12 known failures" baseline is scoped to `-p nono-sandbox-cli --bin nono` — unit tests
+compiled INTO the bin target. All three of these live in separate integration-test binaries
+(`--test audit_attestation`, `--test env_vars`) that no prior baseline sweep ever reached, and
+`cargo test` is fail-fast ACROSS targets, so a plain run stops before them. 118-04's
+`--no-fail-fast` sweep was simply the first run that got that far. Their absence from the baseline
+reflects never having been measured, not having recently broken.
+
+### 1 + 2. `audit_verify_reports_signed_attestation_with_pinned_public_key` and `rollback_signed_session_verifies_from_audit_dir_bundle`
+
+**Cause: unportable test fixture. Both invoke `/bin/pwd`** (`audit_attestation.rs:147,209`), a
+Unix path that cannot exist on Windows. Failure is
+`nono: Command execution failed: /bin/pwd: cannot find binary path`, both panicking at the same
+shared `assert_success` helper (`audit_attestation.rs:24`).
+
+Both are plain `#[test]` with **zero platform gating** (`cfg(unix)`/`cfg(target_os)` count in that
+file: 0). They therefore run on Windows and **cannot ever have passed here**. The file was last
+modified 2026-06-24 and was NOT touched during the phase window (`git log 2359c841..HEAD` on it is
+empty). No rebuild is needed to establish pre-existence — it follows from construction.
+
+Same defect class as Cluster B of quick task `260815-gfd` (hardcoded `/tmp` → `C:\tmp`), which
+fixed that class selectively and did not reach these two.
+
+### 3. `windows_run_ignores_unverified_localappdata_override_when_runtime_root_is_verified`
+
+**Cause: the test's own fixture layout now trips a fail-closed guard.** It grants a temp dir while
+placing `fake-localappdata\nono` INSIDE it, so nono correctly refuses:
+`Refusing to grant '...\.tmpToYBj8' (source: CLI) because it overlaps protected nono state root
+'...\.tmpToYBj8\fake-localappdata\nono'.` The product is behaving correctly and fail-closed; the
+fixture is what is wrong.
+
+Neither side changed during the phase: `env_vars.rs` is untouched in `2359c841..HEAD`, and all
+three files that can emit that refusal (`capability_ext.rs`, `exec_strategy.rs`,
+`protected_paths.rs`) are likewise untouched in that window.
+
+**HYPOTHESIS, not established:** the test was added 2026-04-09/10, and `protected_paths.rs` last
+changed 2026-06-20 (`de553185`, "apply Windows CI fixes for XDG cherry-picks") — i.e. the guard
+moved AFTER the test was written. That ordering would explain the test having passed once and
+breaking silently in June, unnoticed for ~2.5 months because no sweep reached integration binaries.
+Confirming this needs a run at `de553185^` vs `de553185`; it has NOT been run, and the verdict
+above does not depend on it.
+
+### Disposition — NOT fixed by Phase 118, and the fix is a scope decision
+
+None of the three is fixed here: all predate the phase, none touches its surface, and repairing
+them is test-fixture work outside a receipts phase. Options for whoever picks them up:
+
+- **1 + 2:** either `#[cfg(unix)]`-gate them (honest, cheap, but silently drops Windows
+  audit-attestation integration coverage) or make the invoked binary portable (restores coverage,
+  more work). Gating without recording the coverage loss would repeat the "documented scope
+  decision hiding a gap" anti-pattern this phase already hit once.
+- **3:** move `fake-localappdata` OUTSIDE the granted directory so the fixture stops overlapping
+  the protected state root.

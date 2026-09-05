@@ -220,18 +220,32 @@ alone still covers it"* — which was wrong on both counts above.
 
 ## Known Open Items (carried to phase close-out, NOT resolved by this plan)
 
-1. **`cargo clippy --workspace` is RED** — two `dead_code` errors on `ReceiptWriter::session_id`
-   and `ReceiptWriter::file_path` (`crates/nono-cli/src/receipt_sink.rs:315,399`). Pre-existing and
-   NOT caused by this plan (nothing outside `crates/nono` references them; confirmed by isolating
-   clippy to `nono-sandbox-cli` alone). All of Phase 118's code work is complete, so these
-   accessors appear genuinely unused rather than pending a later plan — which makes them a
-   close-out item under CLAUDE.md's "remove it or test it" rule. **`make ci` cannot pass until this
-   is settled.**
-2. **Three unadjudicated integration-test failures** from 118-04's `--no-fail-fast` sweep:
-   `audit_verify_reports_signed_attestation_with_pinned_public_key`,
-   `rollback_signed_session_verifies_from_audit_dir_bundle`,
-   `windows_run_ignores_unverified_localappdata_override_when_runtime_root_is_verified`. None touch
-   Phase 118's surface. Confirm pre-existence at phase base `2359c841` or record as unadjudicated.
+1. ~~**`cargo clippy --workspace` is RED**~~ — **RESOLVED at close-out, commit `816b683a`.** The two
+   `dead_code` errors (`ReceiptWriter::session_id` field + `session_id()`/`file_path()` accessors)
+   were removed, not suppressed. 118-07 had named a hypothesis for a future consumer — Plan
+   118-09's read side — and 118-09 built it using `session_file_path()` instead, because
+   `receipt_commands.rs` never holds a `ReceiptWriter`. The predicted caller was unfulfillable, so
+   the surface was deleted. `cargo clippy --workspace --all-targets --all-features -- -D warnings
+   -D clippy::unwrap_used` now **exits 0**. The replacement test assertion (on the derived
+   `<session_id>.jsonl` filename) is perturbation-proved.
+
+   **Why the phase's own gates missed it for five plans:** the clippy scope alternated between
+   `--tests` (118-06, 118-09), where the accessors ARE used, and `--bin` (118-07, 118-08), where
+   they are not. 118-05's original remedy — add a test assertion — cannot clear a bin-target
+   `dead_code`, because the bin build excludes `#[cfg(test)]`. Task 1's cross-target gates were
+   clean and equally blind: `receipt_sink` is `#[cfg(target_os = "windows")]`, so linux-gnu and
+   apple-darwin never compile it.
+2. ~~**Three unadjudicated integration-test failures**~~ — **ADJUDICATED at close-out: all three are
+   PRE-EXISTING, none is a Phase 118 regression.** Full reasoning in `deferred-items.md`. In brief:
+   they were absent from the documented 12-name baseline because that baseline is scoped to
+   `--bin nono` and all three live in separate integration-test binaries no prior sweep reached
+   (`cargo test` is fail-fast across targets). The two `audit_attestation` tests invoke `/bin/pwd`
+   with **zero platform gating** and so cannot ever have passed on Windows; that file has been
+   untouched since 2026-06-24. The `env_vars` test grants a temp dir containing its own
+   `fake-localappdata\nono`, so nono correctly fail-closes on a protected-state-root overlap —
+   product right, fixture wrong; neither the test nor any of the three files able to emit that
+   refusal changed during the phase window. **Not fixed here** — the repair is test-fixture work
+   outside a receipts phase, with options recorded in `deferred-items.md`.
 3. **DENY ACEs accumulate unbounded on the sink** — one per session, never revoked (observed 5 → 7
    across two runs). At fleet scale this walks toward the 64KB ACL limit. Not a correctness bug
    today; no cleanup path exists.
