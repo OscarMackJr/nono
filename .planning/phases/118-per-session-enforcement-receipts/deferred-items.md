@@ -34,3 +34,48 @@ The `--all-targets` run itself did not finish within a reasonable diligence wind
 `windows_run_*` live-run integration suite is documented elsewhere (project memory) as a ~25-minute
 stall on this host (spawns real `nono.exe` child processes repeatedly). This is expected background
 behavior, not a hang introduced by this plan.
+
+## Discovered during Plan 118-10 (phase gate)
+
+### 1. `cargo clippy --workspace` is RED — pre-existing, blocks `make ci`
+
+Two `dead_code` errors, escalated by `-D warnings`, in BOTH the `nono` and `nono-agentd` binary
+targets:
+
+- `crates/nono-cli/src/receipt_sink.rs:315` — field `ReceiptWriter.session_id` is never read
+- `crates/nono-cli/src/receipt_sink.rs:399,405` — methods `ReceiptWriter::session_id()` and
+  `ReceiptWriter::file_path()` are never used
+
+NOT caused by Plan 118-10 (which is docs-only) nor by the 260904-wkv quick task that first surfaced
+it: nothing in `nono-cli`, `nono-proxy`, `nono-shell-broker`, or `bindings/` references
+`session_credential`, and isolating clippy to `nono-sandbox-cli` alone reproduces it identically.
+
+**Disposition needed at close-out, not deferred past it.** All six waves of Phase 118's code work
+are complete, so these accessors are not pending a later plan — they appear genuinely unused.
+CLAUDE.md's standard applies: remove them, or write tests that use them. `#[allow(dead_code)]` is
+explicitly discouraged by the same rule. `make clippy` / `make ci` cannot pass until this is
+settled.
+
+### 2. Sink DENY ACEs accumulate without bound
+
+`ensure_sink_guarded` adds a DENY ACE for each launch's synthetic session SID (and, on the daemon
+arm, package SID) to the SHARED sink directory, and nothing ever revokes them. Observed growing
+5 → 7 across two runs during the Task 3 checks; every entry is a distinct `S-1-5-117-*`.
+
+Not a correctness defect today — a stale session SID is never reused, so the extra ACEs are inert.
+But the DACL grows one ACE per session for the life of the host, and Windows caps an ACL at 64KB.
+On a long-lived fleet machine running per-tool-call hook sessions, this is a real ceiling. No
+cleanup path exists (`nono receipt cleanup` was deliberately not built — see `receipt_sink.rs`'s
+retention-policy note).
+
+### 3. Receipt read-permeability — RESOLVED as a scope narrowing, recorded here for cross-reference
+
+Task 3 established that a confined child can READ every receipt in the sink on both arms. The
+operator's disposition was to narrow D-08's claim to write integrity and amend the docs rather than
+widen the guard. This is **not** an open item — it is a recorded, deliberate scope boundary (see
+`118-10-SUMMARY.md` and the "D-08 SCOPE CORRECTION" section of `receipt_sink.rs`).
+
+Logged here only so a future reader searching deferred items finds the pointer. If read
+confidentiality is ever claimed, BOTH `ensure_sink_guarded` call sites must change together —
+`exec_strategy_windows/launch.rs` passes `(session_sid, None)` and `agent_daemon/launch.rs` passes
+`(None, Some(package_sid))`; neither passes both.
