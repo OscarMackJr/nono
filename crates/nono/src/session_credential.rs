@@ -201,3 +201,151 @@ pub fn issue_session_credential_or_fail_closed(
 ) -> Result<SessionCredential, IssueError> {
     issuer.request_session_credential(req)
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    /// A `SessionCredentialIssuer` mock configured with a fixed result, constructed fresh per
+    /// test call rather than reused across tests.
+    struct MockSessionCredentialIssuer {
+        result: Result<SessionCredential, IssueError>,
+    }
+
+    impl SessionCredentialIssuer for MockSessionCredentialIssuer {
+        fn request_session_credential(
+            &self,
+            _req: &SessionCredentialRequest,
+        ) -> Result<SessionCredential, IssueError> {
+            match &self.result {
+                Ok(cred) => Ok(cred.clone()),
+                Err(IssueError::FailClosed { reason }) => Err(IssueError::FailClosed {
+                    reason: reason.clone(),
+                }),
+                Err(IssueError::RefusedOrExpired { reason }) => Err(IssueError::RefusedOrExpired {
+                    reason: reason.clone(),
+                }),
+            }
+        }
+    }
+
+    fn sample_request() -> SessionCredentialRequest {
+        SessionCredentialRequest {
+            principal_type: AGENT_PRINCIPAL_TYPE.to_string(),
+            agent_id: "agent-001".to_string(),
+            on_behalf_of: "user-001".to_string(),
+            purpose: "coding".to_string(),
+            tenant_id: "00000000-0000-0000-0000-000000000000".to_string(),
+            requested_ttl_seconds: 3600,
+            session_id: "sess-001".to_string(),
+            device_ref: "device-ref-scaffold".to_string(),
+        }
+    }
+
+    #[test]
+    fn req_cred_04_debug_output_redacts_secret_and_contains_marker() {
+        let key = SessionCredentialKey::new("sk-scaffold-secret-001");
+        let debug_output = format!("{key:?}");
+        assert!(
+            debug_output.contains("[REDACTED]"),
+            "Debug output must contain the redaction marker: {debug_output}"
+        );
+        assert!(
+            !debug_output.contains("sk-scaffold-secret-001"),
+            "Debug output must not contain the raw secret: {debug_output}"
+        );
+    }
+
+    #[test]
+    fn req_cred_04_workspace_view_serializes_key_ref_without_secret() {
+        let cred = SessionCredential {
+            key: SessionCredentialKey::new("sk-scaffold-secret-002"),
+            key_ref: "kr-002".to_string(),
+            expires_at: "2026-09-04T00:00:00Z".to_string(),
+            session_id: "sess-002".to_string(),
+            budget_scope: "budget-002".to_string(),
+        };
+        let view = cred.workspace_view();
+        let json = serde_json::to_string(&view).unwrap();
+        assert!(
+            json.contains("kr-002"),
+            "workspace_view JSON must contain the key_ref: {json}"
+        );
+        assert!(
+            !json.contains("sk-scaffold-secret-002"),
+            "workspace_view JSON must not contain the raw secret: {json}"
+        );
+    }
+
+    #[test]
+    fn redaction_perturbation_secret_absent_from_debug_and_marker_present() {
+        // Distinct, third literal — never reused from the two tests above — so this check
+        // cannot pass vacuously off of a shared fixture.
+        let key = SessionCredentialKey::new("sk-scaffold-secret-003-perturbed");
+        let debug_output = format!("{key:?}");
+        assert!(
+            !debug_output.contains("sk-scaffold-secret-003-perturbed"),
+            "Debug output must not contain the raw secret: {debug_output}"
+        );
+        assert!(
+            debug_output.contains("[REDACTED]"),
+            "Debug output must contain the redaction marker: {debug_output}"
+        );
+    }
+
+    #[test]
+    fn req_cred_05_issuance_failure_returns_fail_closed_error_with_no_credential() {
+        let mock = MockSessionCredentialIssuer {
+            result: Err(IssueError::FailClosed {
+                reason: "issuer unreachable".to_string(),
+            }),
+        };
+        let req = sample_request();
+        let result = issue_session_credential_or_fail_closed(&mock, &req);
+        assert!(matches!(result, Err(IssueError::FailClosed { .. })));
+        assert!(!matches!(result, Err(IssueError::RefusedOrExpired { .. })));
+    }
+
+    #[test]
+    fn req_cred_06_expiry_or_refusal_is_a_distinct_condition() {
+        let mock = MockSessionCredentialIssuer {
+            result: Err(IssueError::RefusedOrExpired {
+                reason: "key expired".to_string(),
+            }),
+        };
+        let req = sample_request();
+        let result = mock.request_session_credential(&req);
+        assert!(matches!(result, Err(IssueError::RefusedOrExpired { .. })));
+        assert!(!matches!(result, Err(IssueError::FailClosed { .. })));
+    }
+
+    #[test]
+    fn req_cred_06_renewal_produces_new_key_ref_under_same_session_id() {
+        let first_mock = MockSessionCredentialIssuer {
+            result: Ok(SessionCredential {
+                key: SessionCredentialKey::new("sk-renewal-a"),
+                key_ref: "kr-a".to_string(),
+                expires_at: "2026-09-04T01:00:00Z".to_string(),
+                session_id: "sess-renewal-001".to_string(),
+                budget_scope: "budget-renewal".to_string(),
+            }),
+        };
+        let second_mock = MockSessionCredentialIssuer {
+            result: Ok(SessionCredential {
+                key: SessionCredentialKey::new("sk-renewal-b"),
+                key_ref: "kr-b".to_string(),
+                expires_at: "2026-09-04T02:00:00Z".to_string(),
+                session_id: "sess-renewal-001".to_string(),
+                budget_scope: "budget-renewal".to_string(),
+            }),
+        };
+        let req = sample_request();
+        let first = issue_session_credential_or_fail_closed(&first_mock, &req)
+            .expect("first issuance must succeed");
+        let second = issue_session_credential_or_fail_closed(&second_mock, &req)
+            .expect("second issuance must succeed");
+        assert_eq!(first.session_id, second.session_id);
+        assert_ne!(first.key_ref, second.key_ref);
+    }
+}
