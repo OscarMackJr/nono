@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fiskroad.example/schemas/endpoint-receipt/0.1.schema.json",
+  "title": "endpoint-receipt/0.1 — PROPOSAL — NOT ADOPTED",
+  "description": "Sibling schema proposal for contract §7 D-5 (Nono↔Popeye Session Credential Contract v0.1, canonical at fiskroad/contracts/NONO_POPEYE_SESSION_CREDENTIAL_CONTRACT_v0.1.md). PROPOSAL ONLY, NOT DECIDED, NOT ADOPTED: no code in this repository (nono) loads, validates against, or otherwise references this file. D-5 remains an open joint-review decision between the nono maintainers, the popeye maintainers, and the program lead.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session_id", "key_refs", "session_window", "layer_attestations_ref"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "Opaque per-session identifier, minted by nono at governed launch and echoed by popeye's issuance response (contract §2.1 request field, §2.3 response field, §5 join key). Never path-derived."
+    },
+    "key_refs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      },
+      "description": "The non-secret key_ref chain for this session (contract §2.3, §4.2, §5): one entry per issued key under this session_id, including any in-session renewals ('new key, same session, new key_ref' per §4.2). Never contains the bearer secret itself — only the loggable key_ref identifier."
+    },
+    "session_window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "description": "The session's time window, used by contract §5's join semantics: receipt.session window [start, end] must be a superset of the ledger row timestamps for the keys in key_refs.",
+      "properties": {
+        "start": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC 3339 UTC timestamp of session start (governed launch), satisfying contract §5's join requirement."
+        },
+        "end": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "RFC 3339 UTC timestamp of session end, or null for a still-in-progress session (contract §4.2: 'session end... SHOULD trigger best-effort key revocation... the receipt records session end regardless')."
+        }
+      }
+    },
+    "layer_attestations_ref": {
+      "type": "string",
+      "description": "A reference/correlation key pointing at the existing layer-attestation census (crates/nono/src/receipt.rs's EnforcementReceipt.layers), never the inlined attestation rows themselves — mirrors the 'never duplicate a fact that already has a canonical home' reasoning EnforcementReceipt's SessionOutcome doc comment already states for why refusal detail is not duplicated into a second field."
+    }
+  }
+}
