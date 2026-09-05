@@ -367,10 +367,20 @@ struct ReceiptRecord {
 /// sink writer. One instance per session per writing process (D-15's
 /// "per-writer segment", scoped to this plan's `nono.exe`/`nono-agentd.exe`
 /// callers — see module doc).
+/// No `session_id` field: it is consumed by [`ReceiptWriter::new`] solely to
+/// derive `file_path` (via [`session_file_path`]), and `file_path` already
+/// encodes it — storing it as well gave every build a field nothing read.
+/// A `session_id()`/`file_path()` accessor pair existed here through Plans
+/// 118-05..118-09 on the hypothesis (named in `118-07-SUMMARY.md`) that the
+/// read side would need to recover them from a writer instance. Plan 118-09
+/// built that read side and took [`session_file_path`] instead — a pure
+/// function both sides share — because `receipt_commands.rs` is handed a
+/// `session_id` string by the CLI and never holds a `ReceiptWriter` at all.
+/// The accessors were removed at phase close-out rather than carried as
+/// permanently-dead production surface.
 #[derive(Debug)]
 pub struct ReceiptWriter {
     inner: Mutex<ReceiptChainState>,
-    session_id: String,
     file_path: PathBuf,
 }
 
@@ -420,8 +430,8 @@ impl ReceiptWriter {
     /// Build a writer for `session_id`, whose records land in
     /// `<sink_dir>/<session_id>.jsonl`. Opens (creating if absent) the JSONL
     /// file in append mode once, to fail fast if the sink is unwritable —
-    /// the handle itself is not retained; [`Self::write_receipt`] reopens by
-    /// [`Self::file_path`] under the chain-state mutex on every call (this
+    /// the handle itself is not retained; [`Self::write_receipt`] reopens the
+    /// resolved `file_path` under the chain-state mutex on every call (this
     /// struct holds no live `File` handle, only the resolved path).
     ///
     /// # Errors
@@ -447,21 +457,8 @@ impl ReceiptWriter {
                 head: [0u8; 32],
                 sequence: 0,
             }),
-            session_id,
             file_path,
         })
-    }
-
-    /// This writer's session id (the value passed to [`Self::new`]).
-    #[must_use]
-    pub fn session_id(&self) -> &str {
-        &self.session_id
-    }
-
-    /// This writer's sink file path.
-    #[must_use]
-    pub fn file_path(&self) -> &Path {
-        &self.file_path
     }
 
     /// Serialize `receipt`, advance the keyless chain, and append one JSONL
@@ -711,14 +708,25 @@ mod tests {
         let sink_dir = tempdir().expect("tempdir");
         let writer = ReceiptWriter::new("test-session-writeloop".to_string(), sink_dir.path())
             .expect("writer must construct");
-        assert_eq!(writer.session_id(), "test-session-writeloop");
+        // Asserts BEHAVIOR (the writer derived its sink file from the
+        // session id it was given, pinning the `<session_id>.jsonl`
+        // convention `receipt_commands.rs`'s read side resolves
+        // independently via `session_file_path`) rather than merely that a
+        // getter returns its constructor argument, which is what the removed
+        // `session_id()` accessor's assertion did. Perturbation-proved:
+        // changing the production naming convention to `.PERTURBED` fails
+        // this assertion with left/right shown.
+        assert_eq!(
+            writer.file_path.file_name().and_then(|n| n.to_str()),
+            Some("test-session-writeloop.jsonl"),
+        );
 
         let receipt_a = sample_receipt("test-session-writeloop", SessionOutcome::Ran);
         let receipt_b = sample_receipt("test-session-writeloop", SessionOutcome::Refused);
         writer.write_receipt(&receipt_a).expect("write 1");
         writer.write_receipt(&receipt_b).expect("write 2");
 
-        let contents = std::fs::read_to_string(writer.file_path()).expect("read sink file");
+        let contents = std::fs::read_to_string(&writer.file_path).expect("read sink file");
         let lines: Vec<&str> = contents.lines().collect();
         assert_eq!(lines.len(), 2, "expected exactly 2 JSONL records");
 
@@ -754,7 +762,7 @@ mod tests {
             .write_receipt(&sample_receipt("test-session-tamper", SessionOutcome::Ran))
             .expect("write");
 
-        let contents = std::fs::read_to_string(writer.file_path()).expect("read sink file");
+        let contents = std::fs::read_to_string(&writer.file_path).expect("read sink file");
         let record: ReceiptRecord =
             serde_json::from_str(contents.lines().next().expect("one line")).expect("parse record");
 
