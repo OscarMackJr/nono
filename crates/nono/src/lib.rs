@@ -62,6 +62,7 @@ pub mod receipt;
 pub mod receipt_chain;
 pub mod sandbox;
 pub mod scrub;
+pub mod session_credential;
 pub mod state;
 pub mod supervisor;
 pub mod trust;
@@ -124,6 +125,11 @@ pub use sandbox::{
 pub use scrub::{
     scrub_argv, scrub_argv_with_policy, scrub_header, scrub_header_with_policy, scrub_value,
     scrub_value_with_policy, ScrubPolicy, ScrubPolicyDiff,
+};
+pub use session_credential::{
+    issue_session_credential_or_fail_closed, IssueError, SessionCredential,
+    SessionCredentialIssuer, SessionCredentialKey, SessionCredentialRequest,
+    WorkspaceVisibleSessionCredential,
 };
 pub use state::SandboxState;
 #[cfg(target_os = "windows")]
