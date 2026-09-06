@@ -2039,6 +2039,108 @@ fn derive_wfp_preconfirmed(network_enforcement: Option<&NetworkEnforcementGuard>
     )
 }
 
+/// Phase 118 review CR-01 gap-closure: build a full 13-row receipt census
+/// from the SAME live probes [`apply_startup_attestation_gate_with_sink_dir`]
+/// itself uses ([`attestation::census_from_entries`] over
+/// [`layer_registry::all_entries`]), for `spawn_windows_child`'s terminal
+/// exits that occur BEFORE that gate runs (`apply_process_handle_to_containment`
+/// and `apply_resource_limits` failing) or immediately AFTER it has already
+/// decided `Ran` (`resume_contained_process` failing). Every field this
+/// function threads into [`attestation::AttestationInput`] is real,
+/// currently-observable state (D-19) — never fabricated — so a row that
+/// cannot be confirmed at the call site (e.g. `JobObjectContainment` when
+/// `apply_process_handle_to_containment` itself just failed) classifies
+/// `Unconfirmed`, exactly as a live probe of the real, un-contained process
+/// should. Mirrors the broker's (`nono-shell-broker/src/main.rs`, the
+/// `resumed == u32::MAX` branch) and the daemon's
+/// (`agent_daemon/launch.rs`) established "build once from real state, reuse
+/// for the corrective record" pattern — this is the `nono.exe` equivalent,
+/// re-probed at each call site rather than cloned, since each of the three
+/// exits observes the child at a different point in its containment
+/// lifecycle and a stale, reused census would misdescribe it.
+#[allow(clippy::too_many_arguments)]
+fn census_for_pre_gate_refusal(
+    process: HANDLE,
+    containment_job: HANDLE,
+    entry_path: layer_registry::EntryPath,
+    token_arm: Option<WindowsTokenArm>,
+    wfp_preconfirmed: bool,
+    applied: layer_registry::AppliedLayers,
+    expected_session_sid: Option<&str>,
+) -> Vec<nono::LayerReceiptRow> {
+    let input = attestation::AttestationInput {
+        child_process: process,
+        containment_job,
+        entry_path,
+        token_arm,
+        wfp_preconfirmed,
+        applied,
+        expected_session_sid,
+        // D-26: no CLI-flag or machine-policy tightening at this gap-closure
+        // call site, matching `apply_startup_attestation_gate_with_sink_dir`'s
+        // own RF-13-OPEN empty slices exactly (see that function's comment).
+        required_layers_override: &[],
+        machine_required_layers: &[],
+    };
+    attestation::census_from_entries(layer_registry::all_entries(), &input)
+}
+
+/// Phase 118 review CR-01 gap-closure: emit a best-effort `Refused` receipt
+/// at one of `spawn_windows_child`'s three previously-silent terminal exits,
+/// using [`census_for_pre_gate_refusal`]. Best-effort (`let _ =`) by design —
+/// matching every other emission site in this file: the caller's own
+/// fail-closed decision (terminate the suspended child, propagate the
+/// original `Err`) must never be masked by a receipt-write failure
+/// (critical_repo_constraints #5). This is deliberately NOT routed through
+/// `record_receipt_write_outcome`'s `require_receipts`-abort posture — these
+/// three exits are already aborting the launch for an unrelated reason, and
+/// a receipt-emission failure piled on top of an already-fatal error would
+/// only produce a more confusing error message, never a materially different
+/// outcome.
+#[allow(clippy::too_many_arguments)]
+fn emit_pre_gate_refusal_receipt(
+    process: HANDLE,
+    containment_job: HANDLE,
+    entry_path: layer_registry::EntryPath,
+    token_arm: Option<WindowsTokenArm>,
+    wfp_preconfirmed: bool,
+    applied: layer_registry::AppliedLayers,
+    expected_session_sid: Option<&str>,
+    session_id: Option<&str>,
+) {
+    let census = census_for_pre_gate_refusal(
+        process,
+        containment_job,
+        entry_path,
+        token_arm,
+        wfp_preconfirmed,
+        applied,
+        expected_session_sid,
+    );
+    // SAFETY: `GetProcessId` has no preconditions beyond `process` being a
+    // valid `HANDLE` value (see the identical call's SAFETY comment in
+    // `apply_startup_attestation_gate_with_sink_dir`, above).
+    let pid = unsafe { GetProcessId(process) };
+    let _ = emit_enforcement_receipt(
+        &crate::receipt_sink::resolve_sink_dir(),
+        census,
+        session_id,
+        expected_session_sid,
+        pid,
+        entry_path,
+        token_arm,
+        nono::SessionOutcome::Refused,
+        // No test seam needed here — this call site is unreachable from
+        // this file's gate-level unit tests (they exercise
+        // `apply_startup_attestation_gate_with_sink_dir` directly, never
+        // `spawn_windows_child`'s Win32 spawn cascade), so there is no
+        // `require_receipts` posture to drive deterministically. Best-effort
+        // regardless (see this function's own doc), so the override value is
+        // moot in production too.
+        None,
+    );
+}
+
 // Phase 117 Plan 10 added the `network_enforcement` parameter (Warning-5
 // fix), pushing this function's arity to 8 — matches the existing
 // `execute_supervised` precedent (`mod.rs`) for a Windows launch-path
@@ -2900,7 +3002,30 @@ pub(super) fn spawn_windows_child(
         }
     }
 
+    // Phase 118 review CR-01: computed once, up front, so it is available to
+    // the receipt census at every terminal exit below — including the two
+    // that occur BEFORE `apply_startup_attestation_gate` (which previously
+    // only computed this immediately before its own call, too late for the
+    // two exits above it to use).
+    let wfp_preconfirmed = derive_wfp_preconfirmed(network_enforcement);
+
     if let Err(err) = apply_process_handle_to_containment(containment, process.raw()) {
+        // Phase 118 review CR-01 gap-closure: this confined child EXISTS
+        // (CreateProcess{AsUser}W already returned a real suspended process)
+        // and is about to be terminated with no receipt ever emitted for it
+        // — RCPT-01 requires every confined session to emit one. Best-effort
+        // (D-04 `let _ =` inside the helper): this branch's own fail-closed
+        // decision (terminate + propagate `err`) is unaffected either way.
+        emit_pre_gate_refusal_receipt(
+            process.raw(),
+            containment.job,
+            layer_registry::EntryPath::DirectCli,
+            Some(arm),
+            wfp_preconfirmed,
+            applied_layers,
+            config.session_sid.as_deref(),
+            session_id,
+        );
         terminate_suspended_process(process.raw(), "AssignProcessToJobObject failed");
         return Err(err);
     }
@@ -2908,6 +3033,21 @@ pub(super) fn spawn_windows_child(
     // ResumeThread so the child never runs with an uncapped Job Object. Any
     // failure here is fail-closed — terminate the suspended child and propagate.
     if let Err(err) = apply_resource_limits(containment, limits) {
+        // Phase 118 review CR-01 gap-closure: same reasoning as the
+        // containment-assignment branch immediately above — the child is
+        // already assigned to the Job Object at this point, so
+        // `JobObjectContainment`'s live probe genuinely confirms here,
+        // unlike the branch above.
+        emit_pre_gate_refusal_receipt(
+            process.raw(),
+            containment.job,
+            layer_registry::EntryPath::DirectCli,
+            Some(arm),
+            wfp_preconfirmed,
+            applied_layers,
+            config.session_sid.as_deref(),
+            session_id,
+        );
         terminate_suspended_process(process.raw(), "apply_resource_limits failed");
         return Err(err);
     }
@@ -2915,7 +3055,6 @@ pub(super) fn spawn_windows_child(
     // Phase 117 D-21 (CINT-02): startup self-attestation gate — attest the
     // real suspended child's token/job state before it ever resumes. Same
     // idiom as the two gates immediately above.
-    let wfp_preconfirmed = derive_wfp_preconfirmed(network_enforcement);
     if let Err(err) = apply_startup_attestation_gate(
         process.raw(),
         containment.job,
@@ -2933,7 +3072,31 @@ pub(super) fn spawn_windows_child(
         return Err(err);
     }
 
-    resume_contained_process(process.raw(), thread.raw())?;
+    // Phase 118 review CR-01: the gate immediately above already wrote a
+    // `Ran` receipt (`receipt.rs` documents `Ran` as "the session's confined
+    // child was resumed (`ResumeThread`)"). `resume_contained_process` itself
+    // fails closed (terminates the suspended child) on a `ResumeThread`
+    // failure, but a failed resume means the child executed ZERO
+    // instructions — the `Ran` receipt already on disk is therefore false.
+    // This can no longer be a bare `?`: it must append a corrective `Refused`
+    // record to the SAME per-session chain before propagating the error,
+    // mirroring the broker's (`nono-shell-broker/src/main.rs`, the
+    // `resumed == u32::MAX` branch) and the daemon's own established
+    // pattern — a governance consumer reading receipts for this session_id
+    // takes the LAST record as authoritative.
+    if let Err(err) = resume_contained_process(process.raw(), thread.raw()) {
+        emit_pre_gate_refusal_receipt(
+            process.raw(),
+            containment.job,
+            layer_registry::EntryPath::DirectCli,
+            Some(arm),
+            wfp_preconfirmed,
+            applied_layers,
+            config.session_sid.as_deref(),
+            session_id,
+        );
+        return Err(err);
+    }
 
     Ok((
         WindowsSupervisedChild::Native {
