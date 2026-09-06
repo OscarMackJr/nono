@@ -319,10 +319,7 @@ const RECEIPT_SINK_LABEL_MASK: u32 =
 /// resolves to a relative path, if its ownership cannot be determined, or if
 /// it is owned by the current user (a redirection signal).
 pub fn resolve_sink_dir() -> Result<PathBuf> {
-    let base = PathBuf::from(
-        std::env::var("PROGRAMDATA").unwrap_or_else(|_| r"C:\ProgramData".to_string()),
-    );
-    validate_and_join_sink_base(base)
+    Ok(resolve_sink_base()?.join("nono").join(RECEIPT_SINK_DIRNAME))
 }
 
 /// The validation half of [`resolve_sink_dir`], split out so it is
@@ -359,6 +356,46 @@ fn validate_and_join_sink_base(base: PathBuf) -> Result<PathBuf> {
         )));
     }
     Ok(base.join("nono").join(RECEIPT_SINK_DIRNAME))
+}
+
+/// The VALIDATED machine-wide `%ProgramData%` base — i.e. exactly what
+/// [`resolve_sink_dir`] resolves and checks, but WITHOUT the
+/// `nono\receipts` suffix.
+///
+/// # Phase 118 debug `broker-receipt-not-written`
+///
+/// `nono-shell-broker.exe` writes the second of D-15's two per-session
+/// receipts and must land in the SAME directory this crate's writer uses. It
+/// used to re-derive that directory from its own `%PROGRAMDATA%` — but
+/// `exec_strategy_windows::launch` gives the broker a clone of the CONFINED
+/// CHILD's sanitized environment, in which `PROGRAMDATA` has been rewritten to
+/// the sandbox-local redirect `<runtime_root>\programdata`, so every broker
+/// receipt was written to a workdir-local path instead of the machine-wide
+/// sink. The redirect cannot be undone on the broker's environment because the
+/// broker forwards that environment verbatim to the confined child
+/// (`lpEnvironment = NULL`).
+///
+/// This function is therefore the single source of truth: `nono.exe` resolves
+/// and validates the base ONCE and hands it to the broker on argv
+/// (`--receipt-sink-base`), which makes D-15's same-directory invariant
+/// structural rather than coincidental. The broker re-runs the same
+/// absolute/ownership validation on receipt as defense in depth.
+///
+/// # Errors
+///
+/// Same as [`resolve_sink_dir`]: `Err` if `%PROGRAMDATA%` (or its
+/// `C:\ProgramData` fallback) is relative, if its ownership cannot be
+/// determined, or if it is owned by the current user (a redirection signal).
+pub fn resolve_sink_base() -> Result<PathBuf> {
+    let base = PathBuf::from(
+        std::env::var("PROGRAMDATA").unwrap_or_else(|_| r"C:\ProgramData".to_string()),
+    );
+    // Validate, then hand back the BASE. The `nono\receipts` join belongs to
+    // each writer: this crate's own [`resolve_sink_dir`] performs it, and the
+    // broker performs its own (D-15: same directory, never shared code).
+    let validated = validate_and_join_sink_base(base.clone())?;
+    debug_assert!(validated.starts_with(&base));
+    Ok(base)
 }
 
 /// Create `dir` if absent, then apply D-08's BOTH-not-either guard:

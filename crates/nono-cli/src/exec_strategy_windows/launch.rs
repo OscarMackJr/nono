@@ -1235,6 +1235,45 @@ pub(super) fn build_command_line(resolved_program: &Path, args: &[String]) -> Ve
         .collect()
 }
 
+/// Append `--receipt-sink-base <validated %ProgramData%>` to a broker argv, so
+/// `nono-shell-broker.exe` can write its half of the D-15 receipt pair into the
+/// SAME machine-wide sink `nono.exe` uses.
+///
+/// # Phase 118 debug `broker-receipt-not-written` (RCPT-01)
+///
+/// The broker cannot read this from `%PROGRAMDATA%`. Both broker arms hand it a
+/// clone of the CONFINED CHILD's sanitized environment (`broker_env_pairs =
+/// env_pairs.clone()`), and [`append_windows_runtime_env`] has rewritten
+/// `PROGRAMDATA` there to the sandbox-local redirect
+/// `<runtime_root>\programdata`. That redirect is load-bearing — the broker
+/// spawns its own child with `lpEnvironment = NULL`, so the broker's
+/// environment IS the confined child's environment and the value must not be
+/// restored. The result was that every broker receipt landed in
+/// `<workdir>\.nono-runtime\programdata\nono\receipts`, where nothing looked
+/// for it. argv is the correct channel: `nono.exe` is its only writer, and it
+/// is not inherited by the confined child.
+///
+/// Non-fatal by design (D-04, matching the broker's own visible-degrade
+/// posture): a base that fails validation is logged and the flag omitted,
+/// which makes the broker refuse the receipt write with its own explicit
+/// warning rather than aborting an otherwise-valid confined launch. Receipt
+/// emission never gates enforcement.
+fn push_broker_receipt_sink_base_arg(broker_args: &mut Vec<std::ffi::OsString>) {
+    match crate::receipt_sink::resolve_sink_base() {
+        Ok(base) => {
+            broker_args.push(std::ffi::OsString::from("--receipt-sink-base"));
+            broker_args.push(base.into_os_string());
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "could not resolve a trustworthy receipt sink base for the broker; the broker \
+                 will refuse to write its enforcement receipt (degrading visibly, D-04)"
+            );
+        }
+    }
+}
+
 /// Build a Win32 command line for spawning `nono-shell-broker.exe` with flat
 /// argv. Mirrors `build_command_line`'s quoting rules but accepts `OsString`
 /// values so the broker's `--shell` payload (a `Path`) and the `--cwd` value
@@ -2537,6 +2576,7 @@ pub(super) fn spawn_windows_child(
             }
             broker_args.push(std::ffi::OsString::from("--cwd"));
             broker_args.push(current_dir.as_os_str().to_owned());
+            push_broker_receipt_sink_base_arg(&mut broker_args);
 
             let mut broker_command_line = build_broker_command_line(&broker_path, &broker_args);
             let broker_application_name = to_u16_null_terminated(&broker_path.to_string_lossy());
@@ -2887,6 +2927,7 @@ pub(super) fn spawn_windows_child(
         broker_args.push(std::ffi::OsString::from(app_container_name));
         broker_args.push(std::ffi::OsString::from("--cwd"));
         broker_args.push(current_dir.as_os_str().to_owned());
+        push_broker_receipt_sink_base_arg(&mut broker_args);
 
         let mut broker_command_line = build_broker_command_line(&broker_path, &broker_args);
         let broker_application_name = to_u16_null_terminated(&broker_path.to_string_lossy());
@@ -6712,6 +6753,100 @@ mod env_filter_tests {
             "Nono-injected credentials MUST bypass both allow-list and deny-list \
              filters (config.env_vars appended unconditionally per design)"
         );
+    }
+
+    /// Regression guard for debug session `broker-receipt-not-written`
+    /// (RCPT-01).
+    ///
+    /// # The CLASS, not just the instance
+    ///
+    /// `nono-shell-broker.exe` is a SUPERVISOR, but both broker arms hand it a
+    /// clone of the CONFINED CHILD's sanitized environment
+    /// (`broker_env_pairs = env_pairs.clone()`). Any supervisor duty the broker
+    /// performs using a PATH variable read from that environment therefore
+    /// silently retargets into the sandbox. `PROGRAMDATA` is the instance that
+    /// bit us: the broker resolved its receipt sink from it and wrote every
+    /// `*.broker.jsonl` into `<workdir>\.nono-runtime\programdata\nono\receipts`
+    /// instead of the machine-wide sink, where nothing looked for it, and no
+    /// error was raised because the (redirected) write genuinely succeeded.
+    ///
+    /// This test pins the two facts that together caused it, so that removing
+    /// either one fails loudly:
+    ///
+    /// 1. `build_child_env`'s `PROGRAMDATA` IS a redirect — it is not the
+    ///    machine-wide root. (Perturbation: delete the redirect and this fails,
+    ///    which is also a real sandbox regression.)
+    /// 2. The broker argv therefore carries the real, validated base
+    ///    out-of-band. (Perturbation: delete
+    ///    `push_broker_receipt_sink_base_arg` and this fails.)
+    ///
+    /// Both branches of the `resolve_sink_base` result assert something, so a
+    /// host whose `C:\ProgramData` does not validate cannot pass vacuously —
+    /// on that path the argv must be EMPTY (visible degrade), never a silent
+    /// fallback to the redirected value.
+    #[test]
+    fn broker_receipt_sink_base_travels_on_argv_not_through_the_redirected_child_env() {
+        let command: Vec<String> = vec![];
+        let resolved_program = Path::new(r"C:\tools\agent.exe");
+        let caps = CapabilitySet::new();
+        let current_dir = Path::new(r"C:\workspace");
+        let config = make_minimal_exec_config(
+            &command,
+            resolved_program,
+            &caps,
+            current_dir,
+            /* allowed */ None,
+            /* denied */ None,
+            /* env_vars */ vec![],
+        );
+
+        let env_pairs = build_child_env(&config);
+        let redirected = env_pairs
+            .iter()
+            .rev()
+            .find(|(k, _)| k.eq_ignore_ascii_case("PROGRAMDATA"))
+            .map(|(_, v)| v.clone());
+
+        // Fact 1: the child env's PROGRAMDATA is a sandbox-local redirect.
+        if let Some(ref redirected) = redirected {
+            assert!(
+                redirected.to_ascii_lowercase().ends_with("programdata")
+                    && !redirected.eq_ignore_ascii_case(r"C:\ProgramData"),
+                "build_child_env's PROGRAMDATA must be the sandbox-local redirect, not the \
+                 machine-wide root — this is precisely why the broker must not read it: {redirected}"
+            );
+        }
+
+        // Fact 2: the real base reaches the broker on argv instead.
+        let mut broker_args: Vec<std::ffi::OsString> = Vec::new();
+        super::push_broker_receipt_sink_base_arg(&mut broker_args);
+
+        match crate::receipt_sink::resolve_sink_base() {
+            Ok(base) => {
+                assert_eq!(
+                    broker_args,
+                    vec![
+                        std::ffi::OsString::from("--receipt-sink-base"),
+                        base.clone().into_os_string(),
+                    ],
+                    "a validated base must be passed to the broker on argv"
+                );
+                if let Some(ref redirected) = redirected {
+                    assert_ne!(
+                        base.as_os_str().to_string_lossy().to_ascii_lowercase(),
+                        redirected.to_ascii_lowercase(),
+                        "the argv base must be the machine-wide root, NOT the child redirect"
+                    );
+                }
+            }
+            Err(_) => {
+                assert!(
+                    broker_args.is_empty(),
+                    "an unvalidatable base must degrade visibly (no flag at all), never fall \
+                     back to the redirected child value: {broker_args:?}"
+                );
+            }
+        }
     }
 }
 

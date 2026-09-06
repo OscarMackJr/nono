@@ -86,6 +86,33 @@ mod broker {
         /// hard error (spawning a non-AppContainer child = the WFP filter
         /// matches nothing = silent non-enforcement, the worst outcome).
         pub app_container_name: Option<String>,
+        /// Phase 118 debug `broker-receipt-not-written`: the REAL, machine-wide
+        /// `%ProgramData%` root, already resolved and validated by `nono.exe`
+        /// (`nono-cli`'s `receipt_sink::resolve_sink_dir`), delivered as a
+        /// COMMAND-LINE argument rather than an environment variable.
+        ///
+        /// # Why this cannot be read from `%PROGRAMDATA%`
+        ///
+        /// `nono-cli` builds the broker's environment as a clone of the
+        /// CONFINED CHILD's sanitized environment
+        /// (`exec_strategy_windows/launch.rs`, `broker_env_pairs =
+        /// env_pairs.clone()`), in which `PROGRAMDATA` has been deliberately
+        /// rewritten to the sandbox-local redirect
+        /// `<runtime_root>\programdata`. The broker then spawns its own child
+        /// with `lpEnvironment = NULL` (see [`run`]), so the broker's
+        /// environment IS the confined child's environment — that redirect is
+        /// load-bearing for the sandbox and must NOT be undone. Reading
+        /// `%PROGRAMDATA%` here therefore resolved the receipt sink to a
+        /// workdir-local, user-owned directory: before the CR-04 ownership
+        /// check the receipt was silently written to the wrong place, and
+        /// after it the write is refused outright. A command-line argument is
+        /// the correct channel: `nono.exe` is its only writer, and — unlike an
+        /// environment variable — it is not inherited by the confined child.
+        ///
+        /// `None` when the broker is invoked without the flag (standalone /
+        /// test invocations). Receipt emission then degrades visibly (D-04)
+        /// rather than falling back to an untrusted value.
+        pub receipt_sink_base: Option<PathBuf>,
     }
 
     // D-29/D-30 (Phase 117-07): a per-layer force-unavailable seam for the
@@ -135,6 +162,7 @@ mod broker {
         let mut cwd: Option<PathBuf> = None;
         let mut no_pty: bool = false;
         let mut app_container_name: Option<String> = None;
+        let mut receipt_sink_base: Option<PathBuf> = None;
 
         // Skip argv[0] (the broker binary path).
         let mut iter = raw.iter().skip(1);
@@ -198,6 +226,16 @@ mod broker {
                     })?;
                     app_container_name = Some(v.to_string_lossy().into_owned());
                 }
+                "--receipt-sink-base" => {
+                    // Phase 118 debug `broker-receipt-not-written`: the real
+                    // machine-wide %ProgramData% root, out-of-band from the
+                    // (deliberately redirected) child environment. See
+                    // `BrokerArgs::receipt_sink_base`.
+                    let v = iter.next().ok_or_else(|| {
+                        NonoError::SandboxInit("--receipt-sink-base requires a value".into())
+                    })?;
+                    receipt_sink_base = Some(PathBuf::from(v));
+                }
                 other => {
                     return Err(NonoError::SandboxInit(format!(
                         "unknown broker arg: '{other}'"
@@ -251,6 +289,7 @@ mod broker {
             cwd,
             no_pty,
             app_container_name,
+            receipt_sink_base,
         })
     }
 
@@ -579,36 +618,69 @@ mod broker {
     /// is the same core primitive the CLI-side fix reuses; this crate already
     /// depends on `nono` core, so no new dependency is introduced.
     ///
+    /// # Phase 118 debug `broker-receipt-not-written`: the base arrives on argv, never from the environment
+    ///
+    /// This function used to read `%PROGRAMDATA%` itself. That was the actual
+    /// RCPT-01 defect: on the only code path that ever spawns this binary,
+    /// `nono-cli` gives the broker a clone of the CONFINED CHILD's sanitized
+    /// environment, in which `PROGRAMDATA` has been rewritten to the
+    /// sandbox-local redirect `<runtime_root>\programdata` — and the broker
+    /// forwards that same environment to its own child (`lpEnvironment =
+    /// NULL`), so the redirect cannot simply be undone. Every broker receipt
+    /// was consequently written to `<workdir>\.nono-runtime\programdata\nono\
+    /// receipts` instead of the machine-wide sink, where nothing looked for it.
+    ///
+    /// The base is now supplied by `nono.exe` on argv
+    /// (`--receipt-sink-base`), already resolved and validated by
+    /// `nono-cli`'s `receipt_sink::resolve_sink_dir`. D-15's "both writers
+    /// land in the SAME directory" invariant is therefore structural rather
+    /// than coincidental: there is exactly one resolution, performed once, and
+    /// handed to the second writer.
+    ///
+    /// The CR-04 validation is retained as defense in depth — this binary
+    /// still refuses a relative base, and still refuses a base owned by the
+    /// current user (the real, machine-wide `%ProgramData%` root is
+    /// provisioned by the OS installer and owned by a system principal, never
+    /// by an ordinary interactive user).
+    ///
     /// # Errors
     ///
-    /// Returns `Err` if `%PROGRAMDATA%` (or its `C:\ProgramData` fallback)
-    /// resolves to a relative path, if its ownership cannot be determined, or
-    /// if it is owned by the current user (a redirection signal).
-    fn broker_receipt_sink_dir() -> NonoResult<PathBuf> {
-        let base = PathBuf::from(
-            std::env::var("PROGRAMDATA").unwrap_or_else(|_| r"C:\ProgramData".to_string()),
-        );
+    /// Returns `Err` if no base was supplied on argv, if the base is a
+    /// relative path, if its ownership cannot be determined, or if it is owned
+    /// by the current user (a redirection signal).
+    fn broker_receipt_sink_dir(base: Option<&std::path::Path>) -> NonoResult<PathBuf> {
+        // FAIL CLOSED: no silent fallback to `%PROGRAMDATA%` or to a
+        // `C:\ProgramData` literal. An absent base means this broker was not
+        // launched by a `nono.exe` that resolved one, and guessing is exactly
+        // the behavior that produced this defect.
+        let base = base.ok_or_else(|| {
+            NonoError::Snapshot(
+                "broker receipt sink: no --receipt-sink-base was supplied on the broker command \
+                 line — refusing to guess the machine-wide ProgramData root from the environment, \
+                 which nono-cli deliberately redirects for the confined child"
+                    .to_string(),
+            )
+        })?;
         if !base.is_absolute() {
             return Err(NonoError::Snapshot(format!(
-                "broker receipt sink: %PROGRAMDATA% did not resolve to an absolute path ({}) — \
+                "broker receipt sink: --receipt-sink-base is not an absolute path ({}) — \
                  refusing to write receipts to a relative, redirectable location",
                 base.display()
             )));
         }
-        let owned_by_current_user = nono::path_is_owned_by_current_user(&base).map_err(|e| {
+        let owned_by_current_user = nono::path_is_owned_by_current_user(base).map_err(|e| {
             NonoError::Snapshot(format!(
-                "broker receipt sink: could not determine the owner of %PROGRAMDATA% ({}): {e} \
-                 — refusing to trust an unverifiable machine-wide root",
+                "broker receipt sink: could not determine the owner of the receipt sink base \
+                 ({}): {e} — refusing to trust an unverifiable machine-wide root",
                 base.display()
             ))
         })?;
         if owned_by_current_user {
             return Err(NonoError::Snapshot(format!(
-                "broker receipt sink: %PROGRAMDATA% ({}) is owned by the current user, not a \
-                 system principal — this is not the real, machine-wide ProgramData root and \
-                 would let a user-set environment variable silently relocate the receipt sink \
-                 (defeating the admin-only RequireReceipts control); refusing to write receipts \
-                 there",
+                "broker receipt sink: the receipt sink base ({}) is owned by the current user, \
+                 not a system principal — this is not the real, machine-wide ProgramData root \
+                 and would silently relocate the receipt sink (defeating the admin-only \
+                 RequireReceipts control); refusing to write receipts there",
                 base.display()
             )));
         }
@@ -864,6 +936,7 @@ mod broker {
         outcome: nono::SessionOutcome,
         census: Vec<nono::LayerReceiptRow>,
         package_sid_for_guard: Option<&str>,
+        receipt_sink_base: Option<&std::path::Path>,
     ) {
         let receipt = nono::EnforcementReceipt {
             schema_version: 1,
@@ -875,13 +948,15 @@ mod broker {
             layers: census,
         };
         // Phase 118 review CR-04: `broker_receipt_sink_dir` is now fallible
-        // (a redirected/untrustworthy `%PROGRAMDATA%` is rejected). This
-        // function already has no `Result` return (D-04: an emitter failure
-        // degrades VISIBLY rather than aborting an already-decided session
-        // outcome — see this function's own doc), so a resolution failure is
-        // handled with the SAME visible-degrade posture as every other
-        // failure branch below.
-        let sink_dir = match broker_receipt_sink_dir() {
+        // (a relative or user-owned base is rejected). Phase 118 debug
+        // `broker-receipt-not-written`: it also now takes the base from argv
+        // rather than reading the (deliberately child-redirected)
+        // `%PROGRAMDATA%`. This function already has no `Result` return
+        // (D-04: an emitter failure degrades VISIBLY rather than aborting an
+        // already-decided session outcome — see this function's own doc), so a
+        // resolution failure is handled with the SAME visible-degrade posture
+        // as every other failure branch below.
+        let sink_dir = match broker_receipt_sink_dir(receipt_sink_base) {
             Ok(dir) => dir,
             Err(e) => {
                 tracing::warn!(
@@ -1356,6 +1431,7 @@ mod broker {
                     nono::SessionOutcome::Refused,
                     census,
                     expected_sid.as_deref(),
+                    args.receipt_sink_base.as_deref(),
                 );
                 unsafe {
                     // SAFETY: terminate the suspended child before bailing so we
@@ -1395,6 +1471,7 @@ mod broker {
                     nono::SessionOutcome::Refused,
                     census,
                     expected_sid.as_deref(),
+                    args.receipt_sink_base.as_deref(),
                 );
                 unsafe {
                     // SAFETY: see above — fail closed by terminating the child.
@@ -1489,6 +1566,7 @@ mod broker {
                     nono::SessionOutcome::Refused,
                     census,
                     expected_sid.as_deref(),
+                    args.receipt_sink_base.as_deref(),
                 );
                 unsafe {
                     // SAFETY: fail closed — terminate rather than resume an
@@ -1548,6 +1626,7 @@ mod broker {
                 nono::SessionOutcome::Refused,
                 census,
                 expected_sid.as_deref(),
+                args.receipt_sink_base.as_deref(),
             );
             unsafe {
                 // SAFETY: fail closed — terminate rather than resume an
@@ -1571,6 +1650,7 @@ mod broker {
             nono::SessionOutcome::Ran,
             census.clone(),
             expected_sid.as_deref(),
+            args.receipt_sink_base.as_deref(),
         );
 
         // CR-03.1: resume on BOTH arms — the legacy/PTY arm is now spawned
@@ -1597,6 +1677,7 @@ mod broker {
                 nono::SessionOutcome::Refused,
                 census,
                 expected_sid.as_deref(),
+                args.receipt_sink_base.as_deref(),
             );
             unsafe {
                 // SAFETY: fail closed — terminate rather than leave suspended.
@@ -1668,6 +1749,53 @@ mod broker {
             let mut v = vec![os("broker.exe")];
             v.extend(rest.iter().map(|s| os(s)));
             v
+        }
+
+        /// Regression guard for debug session `broker-receipt-not-written`
+        /// (RCPT-01), the WIRE-CONTRACT half: `--receipt-sink-base` must
+        /// round-trip through `parse_args` onto [`BrokerArgs`]. This is the
+        /// only channel by which the real, machine-wide `%ProgramData%` root
+        /// reaches this binary — `%PROGRAMDATA%` in the broker's own
+        /// environment is `nono-cli`'s sandbox-local redirect for the confined
+        /// child, not the machine root. Without this flag reaching the struct,
+        /// `record_broker_receipt` degrades visibly and RCPT-01 is unmet.
+        #[test]
+        fn parse_args_round_trips_the_receipt_sink_base() {
+            let raw = argv(&[
+                "--shell",
+                r"C:\Windows\System32\notepad.exe",
+                "--cwd",
+                r"C:\",
+                "--inherit-handle",
+                "0x100",
+                "--receipt-sink-base",
+                r"C:\ProgramData",
+            ]);
+            let parsed = parse_args(&raw).expect("valid broker argv must parse");
+            assert_eq!(
+                parsed.receipt_sink_base.as_deref(),
+                Some(std::path::Path::new(r"C:\ProgramData")),
+                "--receipt-sink-base must reach BrokerArgs verbatim"
+            );
+        }
+
+        /// The flag is OPTIONAL at parse time (standalone/test invocations do
+        /// not supply it) — the fail-closed decision belongs to
+        /// `broker_receipt_sink_dir`, not to argv parsing, so that a missing
+        /// receipt sink degrades the RECEIPT and never blocks an
+        /// otherwise-valid confined launch (D-04).
+        #[test]
+        fn parse_args_leaves_the_receipt_sink_base_none_when_the_flag_is_absent() {
+            let raw = argv(&[
+                "--shell",
+                r"C:\Windows\System32\notepad.exe",
+                "--cwd",
+                r"C:\",
+                "--inherit-handle",
+                "0x100",
+            ]);
+            let parsed = parse_args(&raw).expect("valid broker argv must parse");
+            assert!(parsed.receipt_sink_base.is_none());
         }
 
         /// D-08: `--shell` is required; absence is fatal with a structured
@@ -2676,6 +2804,73 @@ mod broker {
             assert!(matches!(err, NonoError::Snapshot(_)));
         }
 
+        /// Regression guard for debug session `broker-receipt-not-written`
+        /// (RCPT-01), the FAIL-CLOSED half.
+        ///
+        /// The defect was that this resolver read `%PROGRAMDATA%` — a variable
+        /// `nono-cli` deliberately rewrites to the confined child's
+        /// sandbox-local redirect before handing the environment to this
+        /// binary. The fix moves the base onto argv, and the absent case must
+        /// therefore REFUSE rather than fall back to the environment or to a
+        /// `C:\ProgramData` literal. A fallback here would silently reinstate
+        /// the original defect on any launcher that forgot the flag.
+        #[test]
+        fn broker_receipt_sink_dir_fails_closed_without_an_argv_supplied_base() {
+            let err = broker_receipt_sink_dir(None)
+                .expect_err("an absent --receipt-sink-base must fail closed, never fall back");
+            let NonoError::Snapshot(msg) = err else {
+                panic!("expected NonoError::Snapshot for an absent receipt sink base");
+            };
+            assert!(
+                msg.contains("--receipt-sink-base"),
+                "the refusal must name the missing flag so the operator can act on it: {msg}"
+            );
+        }
+
+        /// CLAUDE.md Path Handling: a relative base is a redirection vector.
+        #[test]
+        fn broker_receipt_sink_dir_rejects_a_relative_base() {
+            let err = broker_receipt_sink_dir(Some(std::path::Path::new(r"relative\programdata")))
+                .expect_err("a relative receipt sink base must be rejected");
+            assert!(matches!(err, NonoError::Snapshot(_)));
+        }
+
+        /// Phase 118 review CR-04, retained as defense in depth after the base
+        /// moved to argv: a base the CURRENT user owns is, by definition, one
+        /// that user could have created — exactly the redirection shape that
+        /// produced this bug (`<workdir>\.nono-runtime\programdata`). The
+        /// broker re-validates even though `nono.exe` already did.
+        #[test]
+        fn broker_receipt_sink_dir_rejects_a_base_owned_by_the_current_user() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let err = broker_receipt_sink_dir(Some(dir.path())).expect_err(
+                "a user-owned base is not the machine-wide ProgramData root and must be refused",
+            );
+            let NonoError::Snapshot(msg) = err else {
+                panic!("expected NonoError::Snapshot for a user-owned receipt sink base");
+            };
+            assert!(
+                msg.contains("owned by the current user"),
+                "the refusal must explain the ownership signal: {msg}"
+            );
+        }
+
+        /// D-15 shape: the broker joins `nono\receipts` onto the base itself
+        /// (never shared code with `receipt_sink.rs`, byte-identical result).
+        /// Skipped when the host's real ProgramData root cannot be validated —
+        /// the assertion is on the JOIN, and the ownership rules are pinned by
+        /// the three tests above.
+        #[test]
+        fn broker_receipt_sink_dir_joins_nono_receipts_onto_a_validated_base() {
+            let base = std::path::Path::new(r"C:\ProgramData");
+            match broker_receipt_sink_dir(Some(base)) {
+                Ok(dir) => assert_eq!(dir, base.join("nono").join("receipts")),
+                Err(e) => eprintln!(
+                    "skipping join assertion: this host's C:\\ProgramData did not validate: {e}"
+                ),
+            }
+        }
+
         #[test]
         fn ensure_broker_receipt_sink_guarded_applies_label_even_with_no_sid() {
             let dir = tempfile::tempdir().expect("tempdir");
@@ -2747,6 +2942,7 @@ mod broker {
                 cwd: PathBuf::from(r"C:\"),
                 no_pty: false,
                 app_container_name: None,
+                receipt_sink_base: None,
             }
         }
 
@@ -2873,6 +3069,7 @@ mod broker {
                 cwd: PathBuf::from(r"C:\"),
                 no_pty: true,
                 app_container_name: Some(name),
+                receipt_sink_base: None,
             };
 
             force_app_container_unavailable(true);
