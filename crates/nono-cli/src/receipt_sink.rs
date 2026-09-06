@@ -441,6 +441,102 @@ pub fn ensure_sink_guarded(
     Ok(())
 }
 
+/// RAII guard that revokes a per-launch synthetic SID's sink-directory DENY
+/// ACE when the confined session that minted it ends.
+///
+/// # Why this exists — Phase 118 review CR-05
+///
+/// [`ensure_sink_guarded`] adds a DENY ACE for a caller-supplied SID to the
+/// SHARED, PERMANENT sink directory on every receipt emission. Every SID it
+/// is ever called with is unique per launch — `generate_session_sid()`'s
+/// UUID-derived session SID on the CLI producer
+/// (`exec_strategy_windows::launch::spawn_windows_child`), and the daemon's
+/// per-run AppContainer package SID, derived from a `getrandom`-seeded tenant
+/// id (`agent_daemon::launch::launch_agent`) — so with nothing ever calling
+/// [`nono::revoke_sid_on_path`] for this directory, the sink's DACL grows one
+/// ACE per launch, forever, until the Win32 `AclSize` (`u16`) ceiling is hit.
+/// `revoke_sid_on_path` already exists and is tested
+/// (`deny_then_revoke_sid_round_trips_on_tempdir`) to remove both allow and
+/// deny ACEs for a trustee; nothing called it for this directory. This guard
+/// is that missing caller, scoped to exactly the SID this session applied.
+///
+/// # Own-only, by construction
+///
+/// Both source SIDs this guard is ever constructed with (the CLI's session
+/// SID, the daemon's package SID) are minted fresh per launch from a
+/// UUID/`getrandom` source — no two launches ever share a SID. Revoking "this
+/// session's own SID" can therefore never touch an ACE a DIFFERENT,
+/// concurrent session depends on: there is no SID-collision case to guard
+/// against here, unlike `labels_guard::AppliedLabelsGuard`'s adopt-vs-apply
+/// distinction (which exists because that guard's mandatory label targets
+/// caller-supplied, potentially SHARED workspace paths). This guard never
+/// walks the sink's DACL looking for SIDs to clean up — it only ever revokes
+/// the one SID string it was constructed with.
+///
+/// # Session lifetime, not call lifetime
+///
+/// [`ensure_sink_guarded`] is called once per receipt EMISSION, and a single
+/// confined session can emit more than one receipt with the SAME SID (a
+/// `Ran` receipt followed by a corrective `Refused` record on a failed
+/// `ResumeThread`, for example — re-applying the identical DENY ACE is an
+/// idempotent no-op, not a duplicate). This guard must therefore be
+/// constructed exactly ONCE per session, as early as the SID is known —
+/// before the first possible emission — and kept alive for the session's
+/// full duration by its caller: moved into the long-lived session owner
+/// (`exec_strategy_windows::supervisor::WindowsSupervisedChild` on the CLI
+/// producer, `agent_daemon::reap::AgentTenant` on the daemon producer) once
+/// the session is confirmed to actually run, or left as a local variable
+/// that reverts automatically via `Drop` on any of that session's
+/// early-return failure paths (Rust drops locals at every `return`,
+/// including from inside a `match` arm or an `if let Err` block) — the
+/// confined child never runs (or was already terminated) on every such path,
+/// so revoking immediately is correct.
+///
+/// # Fail-secure, unconditional revoke
+///
+/// [`nono::revoke_sid_on_path`] on a SID that was never actually applied
+/// (e.g. because the sink directory could not be resolved, created, or
+/// labeled at all, so the DENY ACE this guard exists to clean up was never
+/// written) is a documented no-op: it walks the DACL, finds no matching ACE,
+/// and writes the unchanged DACL back successfully. This guard's `Drop` is
+/// therefore safe to run unconditionally, without first proving the ACE was
+/// written.
+///
+/// A revoke failure never panics and never fails the session: the session's
+/// outcome is already decided by the time it ends, so `Drop` only warns
+/// (D-04's "degrade visibly, never fatally" posture) — a stale DENY ACE is
+/// fail-secure on its own ([`nono::revoke_sid_on_path`]'s own doc: "it can
+/// only keep denying, never grant something it shouldn't").
+#[derive(Debug)]
+pub struct SinkSidGuard {
+    dir: PathBuf,
+    sid: String,
+}
+
+impl SinkSidGuard {
+    /// Construct a guard that will revoke `sid`'s DENY ACE from `dir` when
+    /// dropped. Does not itself apply anything — [`ensure_sink_guarded`]
+    /// remains the sole apply site; this is purely the missing revoke half
+    /// CR-05 found absent.
+    pub fn new(dir: PathBuf, sid: String) -> Self {
+        Self { dir, sid }
+    }
+}
+
+impl Drop for SinkSidGuard {
+    fn drop(&mut self) {
+        if let Err(e) = nono::revoke_sid_on_path(&self.dir, &self.sid) {
+            tracing::warn!(
+                dir = %self.dir.display(),
+                sid = %self.sid,
+                error = %e,
+                "receipt_sink: failed to revoke this session's sink DENY ACE on session end; it \
+                 may remain on the sink directory's DACL (Phase 118 review CR-05)"
+            );
+        }
+    }
+}
+
 /// Mutable per-writer chain state (D-25: KEYLESS — no `key` field, unlike
 /// the CLI telemetry module's HMAC `ChainState`). See this module's doc and
 /// `crates/nono/src/receipt_chain.rs`'s module doc for the exact integrity
@@ -715,6 +811,11 @@ mod tests {
     // convention). Pre-exists in NO real ACE.
     const TEST_SESSION_SID: &str = "S-1-5-117-55-66-77-88";
 
+    // A SECOND, DISTINCT synthetic SID standing in for a different session's
+    // (or a concurrent process's) own DENY ACE on the shared sink directory —
+    // used by `SinkSidGuard`'s own-only regression test below (CR-05 rule 1).
+    const TEST_OTHER_SESSION_SID: &str = "S-1-5-117-11-22-33-44";
+
     fn sample_receipt(session_id: &str, outcome: SessionOutcome) -> EnforcementReceipt {
         EnforcementReceipt {
             schema_version: 1,
@@ -886,6 +987,97 @@ mod tests {
             nono::low_integrity_label_and_mask(path).is_some(),
             "the mandatory label must be applied even when no SIDs were minted for this launch"
         );
+    }
+
+    /// CR-05: a session's own DENY ACE is present while its `SinkSidGuard` is
+    /// alive, and GONE once the guard drops — proving `SinkSidGuard` actually
+    /// performs the missing revoke `ensure_sink_guarded` never did on its
+    /// own.
+    #[test]
+    fn sink_sid_guard_revokes_its_own_deny_ace_on_drop() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path();
+
+        ensure_sink_guarded(path, Some(TEST_SESSION_SID), None).expect("guard must apply");
+        assert!(
+            dacl_contains_deny_ace_for_sid(path, TEST_SESSION_SID),
+            "sink dir DACL must contain the session's DENY ACE while the session is live"
+        );
+
+        {
+            let _guard = SinkSidGuard::new(path.to_path_buf(), TEST_SESSION_SID.to_string());
+            assert!(
+                dacl_contains_deny_ace_for_sid(path, TEST_SESSION_SID),
+                "the ACE must still be present for the guard's entire lifetime"
+            );
+        }
+        // `_guard` has dropped here.
+
+        assert!(
+            !dacl_contains_deny_ace_for_sid(path, TEST_SESSION_SID),
+            "CR-05: the session's own DENY ACE must be revoked once its SinkSidGuard drops \
+             (this is the regression this fix closes — without it, the ACE accumulates forever)"
+        );
+    }
+
+    /// CR-05 rule 1 (own-only): revoking THIS session's SID must never touch
+    /// a DIFFERENT SID's pre-existing DENY ACE on the same shared directory —
+    /// simulating a concurrent session (or residue from a prior one) whose
+    /// guard has not yet run. Without this test, an implementation that
+    /// (incorrectly) walked the whole DACL revoking every deny ACE it found
+    /// would pass `sink_sid_guard_revokes_its_own_deny_ace_on_drop` above
+    /// while silently un-guarding every OTHER session sharing the directory.
+    #[test]
+    fn sink_sid_guard_drop_never_touches_a_different_sids_deny_ace() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path();
+
+        // Simulate a different session's own, still-live DENY ACE.
+        ensure_sink_guarded(path, Some(TEST_OTHER_SESSION_SID), None)
+            .expect("other session's guard must apply");
+        // This session's own DENY ACE, on the same directory.
+        ensure_sink_guarded(path, Some(TEST_SESSION_SID), None)
+            .expect("this session's guard must apply");
+
+        assert!(dacl_contains_deny_ace_for_sid(path, TEST_OTHER_SESSION_SID));
+        assert!(dacl_contains_deny_ace_for_sid(path, TEST_SESSION_SID));
+
+        drop(SinkSidGuard::new(
+            path.to_path_buf(),
+            TEST_SESSION_SID.to_string(),
+        ));
+
+        assert!(
+            !dacl_contains_deny_ace_for_sid(path, TEST_SESSION_SID),
+            "this session's own ACE must be gone after its guard drops"
+        );
+        assert!(
+            dacl_contains_deny_ace_for_sid(path, TEST_OTHER_SESSION_SID),
+            "own-only (CR-05 rule 1): a DIFFERENT session's DENY ACE must SURVIVE this guard's \
+             drop — this guard must revoke ONLY the SID it was constructed with"
+        );
+    }
+
+    /// Perturbation proof for the own-only test above: without it, a
+    /// same-shaped defect (revoking by walking the DACL instead of by exact
+    /// SID) would still pass `sink_sid_guard_revokes_its_own_deny_ace_on_drop`
+    /// alone. This test independently confirms `SinkSidGuard::new` is a pure
+    /// constructor with NO apply side effect of its own — constructing (and
+    /// immediately dropping) a guard for a SID that was NEVER granted an ACE
+    /// must be a safe no-op, never an error and never a panic (D-04: a
+    /// revoke-time failure only warns).
+    #[test]
+    fn sink_sid_guard_drop_is_a_safe_no_op_when_nothing_was_ever_applied() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path();
+        assert!(!dacl_contains_deny_ace_for_sid(path, TEST_SESSION_SID));
+
+        drop(SinkSidGuard::new(
+            path.to_path_buf(),
+            TEST_SESSION_SID.to_string(),
+        ));
+
+        assert!(!dacl_contains_deny_ace_for_sid(path, TEST_SESSION_SID));
     }
 
     #[test]

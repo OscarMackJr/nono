@@ -80,6 +80,34 @@ pub(crate) struct AgentTenant {
     #[allow(dead_code)]
     pub caps: nono::CapabilitySet,
 
+    /// Receipt-sink DENY-ACE revocation guard (Phase 118 review CR-05
+    /// gap-closure).
+    ///
+    /// Constructed in `launch_agent` as soon as `package_sid` is known —
+    /// BEFORE the first receipt-emission call site that could apply the
+    /// sink's DENY ACE for it — and moved here once the agent is confirmed
+    /// launched. Revoked automatically when `AgentTenant` drops, via
+    /// `SinkSidGuard::drop` → `nono::revoke_sid_on_path`. `None` only when no
+    /// sink directory could be resolved at construction time (nothing was
+    /// ever applied for this tenant's SID either — see `SinkSidGuard`'s own
+    /// "fail-secure, unconditional revoke" doc) or in unit-test construction.
+    ///
+    /// **Declared BEFORE `job_handle` and `process_handle`**, mirroring
+    /// `dacl_guard` immediately below: Rust's field-drop order (declaration
+    /// order, top-to-bottom) revokes the sink ACE before the job handle is
+    /// closed. The sink directory is independent of the job/process state,
+    /// so this ordering is not load-bearing for correctness — only for
+    /// grouping all "revoke a per-tenant SID grant" cleanup together.
+    ///
+    /// `#[expect(dead_code)]` because clippy's dead_code analysis does not
+    /// consider implicit destruction (Drop) or Option field presence as a "read".
+    #[cfg(target_os = "windows")]
+    #[expect(
+        dead_code,
+        reason = "revoked via SinkSidGuard::drop in AgentTenant::drop (field-drop order)"
+    )]
+    pub sink_guard: Option<crate::receipt_sink::SinkSidGuard>,
+
     /// Package-SID DACL grants guard (Plan 75-07-T2 / GAP-75-B).
     ///
     /// Applied at step 6.6 in `launch_agent` BEFORE `ResumeThread` (Pitfall-3
@@ -292,6 +320,7 @@ mod tests {
             profile_name: "nono.test.fake-profile.drop.74-03".to_string(),
             engine_profile: "test-engine".to_string(),
             caps: nono::CapabilitySet::new(),
+            sink_guard: None,
             dacl_guard: None,
             job_handle,
             process_handle: proc_handle,
@@ -372,6 +401,7 @@ mod tests {
             profile_name: "nono.test.wfp-drop.75-01".to_string(),
             engine_profile: "aider".to_string(),
             caps: nono::CapabilitySet::new(),
+            sink_guard: None,
             dacl_guard: None,
             job_handle,
             process_handle: proc_handle,

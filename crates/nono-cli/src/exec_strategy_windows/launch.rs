@@ -2242,6 +2242,30 @@ pub(super) fn spawn_windows_child(
         granted_fs_caps.iter().map(|c| c.resolved.clone()).collect(),
     );
 
+    // Phase 118 review CR-05 gap-closure: construct this session's
+    // `SinkSidGuard` up front, BEFORE the first receipt-emission call site
+    // below could apply the sink's DENY ACE for `config.session_sid`
+    // (`apply_process_handle_to_containment`'s failure branch, a few lines
+    // down, is the earliest one). Declared as a local so Rust's ownership
+    // model reverts it automatically on EVERY early `return Err(...)` in
+    // this function (the confined child never runs, or was already
+    // terminated, on every such path — see `SinkSidGuard`'s "session
+    // lifetime, not call lifetime" doc). On the success path at the bottom
+    // of this function it is moved into `WindowsSupervisedChild::Native`,
+    // which keeps it alive for the child's entire run.
+    //
+    // `None` when no session SID was minted for this launch, or when the
+    // sink directory cannot be resolved right now — in the latter case
+    // nothing will ever be applied for this launch's own SID either (every
+    // emission call site below resolves the identical sink directory), so
+    // there is nothing this guard would need to revoke.
+    let sink_sid_guard: Option<crate::receipt_sink::SinkSidGuard> =
+        config.session_sid.as_deref().and_then(|sid| {
+            crate::receipt_sink::resolve_sink_dir()
+                .ok()
+                .map(|dir| crate::receipt_sink::SinkSidGuard::new(dir, sid.to_string()))
+        });
+
     // Bind each potential holder to a named local so its Drop does NOT run
     // until after CreateProcess{AsUser}W uses the raw HANDLE. Previously,
     // `?.h_token` / `?.raw()` returned a raw HANDLE from a temporary which
@@ -3181,6 +3205,11 @@ pub(super) fn spawn_windows_child(
         WindowsSupervisedChild::Native {
             process,
             _thread: thread,
+            // Phase 118 review CR-05 gap-closure: transfer ownership so the
+            // sink's DENY ACE for this session's SID is revoked exactly when
+            // the confined child's session ends (this value's Drop), not
+            // when this function returns.
+            _sink_sid_guard: sink_sid_guard,
         },
         detached_stdio,
     ))

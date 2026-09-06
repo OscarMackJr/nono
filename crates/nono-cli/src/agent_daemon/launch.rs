@@ -689,6 +689,27 @@ mod windows_impl {
             "launch_agent: package SID derived"
         );
 
+        // Phase 118 review CR-05 gap-closure: construct this tenant's
+        // `SinkSidGuard` as soon as `package_sid` is known — BEFORE step 6's
+        // failure branch, the earliest point that could apply the sink's
+        // DENY ACE for it via `write_daemon_refuse_receipt_best_effort` →
+        // `daemon_emit_enforcement_receipt_at_resolved_sink`. Declared as a
+        // local so Rust's ownership model reverts it automatically on EVERY
+        // early `return Err(...)` between here and step 7b (the agent never
+        // resumes, or was already terminated, on every such path — see
+        // `SinkSidGuard`'s own "session lifetime, not call lifetime" doc).
+        // At step 7b it is moved into `AgentTenant`, which keeps it alive for
+        // the agent's entire run.
+        //
+        // `None` when the sink directory cannot be resolved right now — in
+        // that case nothing will ever be applied for this tenant's SID
+        // either (every emission call site below resolves the identical sink
+        // directory), so there is nothing this guard would need to revoke.
+        let sink_guard: Option<crate::receipt_sink::SinkSidGuard> =
+            crate::receipt_sink::resolve_sink_dir()
+                .ok()
+                .map(|dir| crate::receipt_sink::SinkSidGuard::new(dir, package_sid.clone()));
+
         // Step 4: Create the Job Object with KILL_ON_JOB_CLOSE.
         // The SDDL grants the job owner full access and denies Low-IL processes
         // any job access (D-03 belt-and-suspenders).
@@ -953,13 +974,17 @@ mod windows_impl {
         // dacl_guard is stored in the tenant so its Drop revokes the package-SID
         // DACL grants when the agent reaps (AgentTenant::drop field-drop order
         // ensures DACL revocation before job/process handle close — declared first
-        // in reap.rs per the struct field ordering requirement).
+        // in reap.rs per the struct field ordering requirement). sink_guard
+        // (CR-05 gap-closure) is transferred the same way, so the receipt
+        // sink's DENY ACE for this tenant's package SID is revoked at the
+        // same reap point rather than accumulating forever.
         let tenant = AgentTenant {
             tenant_id: tenant_id.clone(),
             package_sid: package_sid.clone(),
             profile_name: profile_name.clone(),
             engine_profile: engine_profile.clone(),
             caps,
+            sink_guard,
             dacl_guard: Some(dacl_guard),
             job_handle: job_owned,
             process_handle: process_owned,
@@ -5192,6 +5217,7 @@ mod tests {
             profile_name: "nono.test.launch-insert-74-04".to_string(),
             engine_profile: "test-engine".to_string(),
             caps: nono::CapabilitySet::new(),
+            sink_guard: None,
             dacl_guard: None,
             job_handle: make_handle(),
             process_handle: make_handle(),
@@ -5281,6 +5307,7 @@ mod tests {
                 profile_name: "nono.test.reap-74-04".to_string(),
                 engine_profile: "test-engine".to_string(),
                 caps: nono::CapabilitySet::new(),
+                sink_guard: None,
                 dacl_guard: None,
                 job_handle: make_handle(),
                 process_handle: make_handle(),

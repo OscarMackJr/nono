@@ -78,6 +78,18 @@ pub(super) enum WindowsSupervisedChild {
     Native {
         process: OwnedHandle,
         _thread: OwnedHandle,
+        // Phase 118 review CR-05 gap-closure: the session-lifetime owner of
+        // this launch's `SinkSidGuard` (the receipt sink's per-session DENY
+        // ACE for `config.session_sid`). `None` when no session SID was
+        // minted for this launch, or when the sink directory could not be
+        // resolved at spawn time (nothing was ever applied to revoke — see
+        // `SinkSidGuard`'s own "fail-secure, unconditional revoke" doc).
+        // Held here — not reverted in `spawn_windows_child` itself — so the
+        // DENY ACE stays in place for the confined child's ENTIRE run and is
+        // only revoked when this value drops, i.e. when the caller
+        // (`execute_direct`/`execute_supervised`) finishes waiting for the
+        // child to exit and this struct goes out of scope.
+        _sink_sid_guard: Option<crate::receipt_sink::SinkSidGuard>,
     },
 }
 
