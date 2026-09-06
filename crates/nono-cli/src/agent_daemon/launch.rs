@@ -1081,8 +1081,7 @@ mod windows_impl {
                 // failure is recorded as a visible degrade and the launch
                 // proceeds. See `daemon_record_receipt_write_outcome`'s doc,
                 // mirrored byte-for-byte from Plan 118-07's own posture.
-                if let Err(e) = daemon_emit_enforcement_receipt(
-                    &crate::receipt_sink::resolve_sink_dir(),
+                if let Err(e) = daemon_emit_enforcement_receipt_at_resolved_sink(
                     census,
                     &tenant_id,
                     &package_sid,
@@ -1123,8 +1122,7 @@ mod windows_impl {
                 // `daemon_record_receipt_write_outcome` still fires its own
                 // visible degrade/abort LOG unconditionally on failure (D-04:
                 // never silent), even though its `Result` is discarded here.
-                let _ = daemon_emit_enforcement_receipt(
-                    &crate::receipt_sink::resolve_sink_dir(),
+                let _ = daemon_emit_enforcement_receipt_at_resolved_sink(
                     census,
                     &tenant_id,
                     &package_sid,
@@ -1183,8 +1181,7 @@ mod windows_impl {
                 wfp_filters_installed,
                 ancestor_traverse_applied,
             );
-            let _ = daemon_emit_enforcement_receipt(
-                &crate::receipt_sink::resolve_sink_dir(),
+            let _ = daemon_emit_enforcement_receipt_at_resolved_sink(
                 correction_census,
                 &tenant_id,
                 &package_sid,
@@ -2109,6 +2106,38 @@ mod windows_impl {
         }
     }
 
+    /// Phase 118 review CR-04 gap-closure: resolves the sink directory (now
+    /// fallible — see `receipt_sink::resolve_sink_dir`'s doc, a redirected or
+    /// otherwise untrustworthy `%PROGRAMDATA%` is rejected) immediately
+    /// before emitting, and treats a resolution failure exactly like a
+    /// receipt WRITE failure — routed through the SAME
+    /// `daemon_record_receipt_write_outcome` degrade-vs-abort posture
+    /// [`daemon_emit_enforcement_receipt`] itself already uses on its own
+    /// write-failure path. Every one of this file's call sites now resolves
+    /// through here instead of calling `resolve_sink_dir()` inline, so the
+    /// fallible-resolution behavior cannot silently diverge between them.
+    fn daemon_emit_enforcement_receipt_at_resolved_sink(
+        census: Vec<nono::LayerReceiptRow>,
+        tenant_id: &str,
+        package_sid: &str,
+        pid: u32,
+        outcome: nono::SessionOutcome,
+        require_receipts_override: Option<bool>,
+    ) -> nono::Result<()> {
+        match crate::receipt_sink::resolve_sink_dir() {
+            Ok(sink_dir) => daemon_emit_enforcement_receipt(
+                &sink_dir,
+                census,
+                tenant_id,
+                package_sid,
+                pid,
+                outcome,
+                require_receipts_override,
+            ),
+            Err(e) => daemon_record_receipt_write_outcome(e, require_receipts_override),
+        }
+    }
+
     /// D-04: posture IDENTICAL to
     /// `exec_strategy_windows::launch::record_receipt_write_outcome` (Plan
     /// 118-07) — an enforcement-receipt emission failure ALWAYS produces a
@@ -2222,8 +2251,7 @@ mod windows_impl {
         // SAFETY: matches this file's other GetProcessId call sites — no
         // precondition beyond `process` being a valid HANDLE value.
         let pid = unsafe { GetProcessId(process) };
-        let _ = daemon_emit_enforcement_receipt(
-            &crate::receipt_sink::resolve_sink_dir(),
+        let _ = daemon_emit_enforcement_receipt_at_resolved_sink(
             census,
             tenant_id,
             expected_package_sid,

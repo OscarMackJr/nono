@@ -563,9 +563,56 @@ mod broker {
     /// `nono-cli`'s `receipt_sink.rs::resolve_sink_dir` (D-15: both writers
     /// land in the SAME directory, correlated by session id, never sharing
     /// code — separate crates, separate binaries).
-    fn broker_receipt_sink_dir() -> PathBuf {
-        let base = std::env::var("PROGRAMDATA").unwrap_or_else(|_| r"C:\ProgramData".to_string());
-        PathBuf::from(base).join("nono").join("receipts")
+    ///
+    /// # Phase 118 review CR-04: this class of defect, fixed identically here
+    ///
+    /// `%PROGRAMDATA%` is a user-settable environment variable — trusting it
+    /// raw would let a user relocate the guard, the writer, and the write
+    /// together, so the D-04 degrade/abort machinery downstream of a write
+    /// failure would never even run. This mirrors `nono-cli`'s
+    /// `receipt_sink::resolve_sink_dir` fix byte-for-byte (see that
+    /// function's doc for the full rationale): FAILS CLOSED (`Err`) unless
+    /// the resolved base is both absolute AND not owned by the current
+    /// (invoking) user — the real, machine-wide `%ProgramData%` root is
+    /// provisioned by the OS installer and owned by a system principal, never
+    /// by an ordinary interactive user. `nono::path_is_owned_by_current_user`
+    /// is the same core primitive the CLI-side fix reuses; this crate already
+    /// depends on `nono` core, so no new dependency is introduced.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if `%PROGRAMDATA%` (or its `C:\ProgramData` fallback)
+    /// resolves to a relative path, if its ownership cannot be determined, or
+    /// if it is owned by the current user (a redirection signal).
+    fn broker_receipt_sink_dir() -> NonoResult<PathBuf> {
+        let base = PathBuf::from(
+            std::env::var("PROGRAMDATA").unwrap_or_else(|_| r"C:\ProgramData".to_string()),
+        );
+        if !base.is_absolute() {
+            return Err(NonoError::Snapshot(format!(
+                "broker receipt sink: %PROGRAMDATA% did not resolve to an absolute path ({}) — \
+                 refusing to write receipts to a relative, redirectable location",
+                base.display()
+            )));
+        }
+        let owned_by_current_user = nono::path_is_owned_by_current_user(&base).map_err(|e| {
+            NonoError::Snapshot(format!(
+                "broker receipt sink: could not determine the owner of %PROGRAMDATA% ({}): {e} \
+                 — refusing to trust an unverifiable machine-wide root",
+                base.display()
+            ))
+        })?;
+        if owned_by_current_user {
+            return Err(NonoError::Snapshot(format!(
+                "broker receipt sink: %PROGRAMDATA% ({}) is owned by the current user, not a \
+                 system principal — this is not the real, machine-wide ProgramData root and \
+                 would let a user-set environment variable silently relocate the receipt sink \
+                 (defeating the admin-only RequireReceipts control); refusing to write receipts \
+                 there",
+                base.display()
+            )));
+        }
+        Ok(base.join("nono").join("receipts"))
     }
 
     /// D-08's both-not-either guard (DENY ACE + unconditional `NO_READ_UP`
@@ -827,7 +874,24 @@ mod broker {
             outcome,
             layers: census,
         };
-        let sink_dir = broker_receipt_sink_dir();
+        // Phase 118 review CR-04: `broker_receipt_sink_dir` is now fallible
+        // (a redirected/untrustworthy `%PROGRAMDATA%` is rejected). This
+        // function already has no `Result` return (D-04: an emitter failure
+        // degrades VISIBLY rather than aborting an already-decided session
+        // outcome — see this function's own doc), so a resolution failure is
+        // handled with the SAME visible-degrade posture as every other
+        // failure branch below.
+        let sink_dir = match broker_receipt_sink_dir() {
+            Ok(dir) => dir,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "broker: failed to resolve a trustworthy receipt sink directory — degrading \
+                     visibly (D-04), not aborting the already-decided session outcome"
+                );
+                return;
+            }
+        };
         if let Err(e) = ensure_broker_receipt_sink_guarded(&sink_dir, package_sid_for_guard) {
             tracing::warn!(
                 error = %e,

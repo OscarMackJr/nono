@@ -130,8 +130,14 @@ pub fn run_receipt(args: ReceiptArgs) -> Result<()> {
 // handles both — see this module's doc.
 // ---------------------------------------------------------------------------
 
+// Phase 118 review CR-04: `receipt_sink::resolve_sink_dir` is now fallible
+// (a redirected/untrustworthy `%PROGRAMDATA%` is rejected, fail-closed) — the
+// non-Windows sentinel below is widened to match so both arms of this D-18
+// seam keep returning the SAME `Result<PathBuf>` shape and every downstream
+// call site (`cmd_list`/`cmd_show`/`cmd_verify`) handles both platforms with
+// one `?`.
 #[cfg(target_os = "windows")]
-fn sink_dir() -> PathBuf {
+fn sink_dir() -> Result<PathBuf> {
     crate::receipt_sink::resolve_sink_dir()
 }
 
@@ -142,10 +148,13 @@ fn sink_dir() -> PathBuf {
 /// real filesystem location a `nono receipt` invocation could accidentally
 /// read), so `discover_segments`/`segments_for_session` degrade uniformly
 /// to "found nothing" via the same `NotFound` path a real, empty Windows
-/// sink directory would take.
+/// sink directory would take. Always `Ok` — there is no real resolution to
+/// fail on this platform.
 #[cfg(not(target_os = "windows"))]
-fn sink_dir() -> PathBuf {
-    PathBuf::from("/nono-receipts-unsupported-on-this-platform/D-18")
+fn sink_dir() -> Result<PathBuf> {
+    Ok(PathBuf::from(
+        "/nono-receipts-unsupported-on-this-platform/D-18",
+    ))
 }
 
 /// A one-line reminder that receipts are Windows-only (D-18), printed once
@@ -323,7 +332,7 @@ fn read_segment(path: &Path) -> Result<Vec<ReceiptRecord>> {
 
 fn cmd_list(args: ReceiptListArgs) -> Result<()> {
     note_non_windows_platform();
-    cmd_list_in_dir(&args, &sink_dir())
+    cmd_list_in_dir(&args, &sink_dir()?)
 }
 
 /// The directory-parameterized core of `cmd_list`, split out so tests can
@@ -413,7 +422,7 @@ fn list_entry_json(seg: &SegmentFile) -> serde_json::Value {
 
 fn cmd_show(args: ReceiptShowArgs) -> Result<()> {
     note_non_windows_platform();
-    cmd_show_in_dir(&args, &sink_dir())
+    cmd_show_in_dir(&args, &sink_dir()?)
 }
 
 /// The directory-parameterized core of `cmd_show` — see [`cmd_list_in_dir`]'s
@@ -546,7 +555,7 @@ fn layer_status_label(status: LayerAttestationStatus) -> &'static str {
 
 fn cmd_verify(args: ReceiptVerifyArgs) -> Result<()> {
     note_non_windows_platform();
-    cmd_verify_in_dir(&args, &sink_dir())
+    cmd_verify_in_dir(&args, &sink_dir()?)
 }
 
 /// The directory-parameterized core of `cmd_verify` — see

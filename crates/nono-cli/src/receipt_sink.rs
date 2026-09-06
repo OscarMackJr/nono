@@ -280,10 +280,85 @@ const RECEIPT_SINK_LABEL_MASK: u32 =
 /// is unset — the same fallback shape `provision_windows.rs::programdata_pem_path`
 /// already uses for the sibling POC-cert path. See this module's doc for the
 /// live labelability check that decided `%PROGRAMDATA%` over `%LOCALAPPDATA%`.
-#[must_use]
-pub fn resolve_sink_dir() -> PathBuf {
-    let base = std::env::var("PROGRAMDATA").unwrap_or_else(|_| r"C:\ProgramData".to_string());
-    PathBuf::from(base).join("nono").join(RECEIPT_SINK_DIRNAME)
+///
+/// # CLAUDE.md Path Handling / Phase 118 review CR-04
+///
+/// `%PROGRAMDATA%` is a **user-settable environment variable** — CLAUDE.md's
+/// Path Handling section is explicit that such values must never be trusted
+/// raw ("Validate environment variables before use. Never assume `HOME`,
+/// `TMPDIR`, etc. are trustworthy."). Trusting it raw here would let a user
+/// relocate the guard, the writer, AND the write together (all three would
+/// then succeed against the redirected path), so `record_receipt_write_outcome`
+/// — the ONLY place that consults the admin-only
+/// `HKLM\SOFTWARE\Policies\nono\RequireReceipts` control — would never even
+/// run. This function therefore validates the resolved base before using it,
+/// and FAILS CLOSED (`Err`, never a silent fallback to the untrusted value)
+/// when validation does not hold:
+///
+/// - the resolved base must be an absolute path, and
+/// - the resolved base must NOT be owned by the current (invoking) user.
+///   The real, machine-wide `%ProgramData%` root is provisioned by the OS
+///   installer and is owned by a system principal, never by an ordinary
+///   interactive user — [`nono::path_is_owned_by_current_user`] is the same
+///   ownership-equality primitive `try_set_mandatory_label`'s own
+///   `WRITE_OWNER` check already relies on for this exact class of decision.
+///   A directory the CURRENT user owns is, by definition, one that user (or
+///   any process running as them) could have created themselves — exactly
+///   the redirection this check exists to catch.
+///
+/// This is the documented, review-sanctioned alternative to resolving the
+/// path via `SHGetKnownFolderPath(FOLDERID_ProgramData)`: it requires no new
+/// FFI surface, reuses an existing core primitive, and still converts a
+/// user-controlled input into a fail-closed decision rather than a silently
+/// accepted redirection. Widening this to a true OS-sourced resolution
+/// remains available as a future hardening step.
+///
+/// # Errors
+///
+/// Returns `Err` if `%PROGRAMDATA%` (or its `C:\ProgramData` fallback)
+/// resolves to a relative path, if its ownership cannot be determined, or if
+/// it is owned by the current user (a redirection signal).
+pub fn resolve_sink_dir() -> Result<PathBuf> {
+    let base = PathBuf::from(
+        std::env::var("PROGRAMDATA").unwrap_or_else(|_| r"C:\ProgramData".to_string()),
+    );
+    validate_and_join_sink_base(base)
+}
+
+/// The validation half of [`resolve_sink_dir`], split out so it is
+/// unit-testable against ARBITRARY candidate base paths (a real
+/// `%ProgramData%`-shaped path, and a user-owned tempdir standing in for a
+/// hostile redirection) without mutating the real `PROGRAMDATA` process
+/// environment variable — CLAUDE.md's env-var test discipline requires
+/// saving/restoring any such mutation, and Rust's parallel test runner makes
+/// that fragile for a value this many other tests could transitively read.
+/// See [`resolve_sink_dir`]'s doc for the exact validation this performs and
+/// why.
+fn validate_and_join_sink_base(base: PathBuf) -> Result<PathBuf> {
+    if !base.is_absolute() {
+        return Err(NonoError::Snapshot(format!(
+            "receipt_sink: %PROGRAMDATA% did not resolve to an absolute path ({}) — refusing to \
+             write receipts to a relative, redirectable location",
+            base.display()
+        )));
+    }
+    let owned_by_current_user = nono::path_is_owned_by_current_user(&base).map_err(|e| {
+        NonoError::Snapshot(format!(
+            "receipt_sink: could not determine the owner of %PROGRAMDATA% ({}): {e} — refusing \
+             to trust an unverifiable machine-wide root",
+            base.display()
+        ))
+    })?;
+    if owned_by_current_user {
+        return Err(NonoError::Snapshot(format!(
+            "receipt_sink: %PROGRAMDATA% ({}) is owned by the current user, not a system \
+             principal — this is not the real, machine-wide ProgramData root and would let a \
+             user-set environment variable silently relocate the receipt sink (defeating the \
+             admin-only RequireReceipts control); refusing to write receipts there",
+            base.display()
+        )));
+    }
+    Ok(base.join("nono").join(RECEIPT_SINK_DIRNAME))
 }
 
 /// Create `dir` if absent, then apply D-08's BOTH-not-either guard:
@@ -699,12 +774,38 @@ mod tests {
 
     #[test]
     fn resolve_sink_dir_is_under_programdata_nono_receipts() {
-        let dir = resolve_sink_dir();
+        let dir = resolve_sink_dir()
+            .expect("the real, machine-wide %PROGRAMDATA% root on this host must validate");
         assert!(
             dir.ends_with(Path::new("nono").join("receipts")),
             "sink dir must end in nono\\receipts, got {}",
             dir.display()
         );
+    }
+
+    /// Phase 118 review CR-04: a user-owned directory standing in for a
+    /// hostile `%PROGRAMDATA%` redirection (`set
+    /// PROGRAMDATA=C:\Users\me\fake`) must be REJECTED, not silently
+    /// accepted. `tempdir()` creates a directory owned by the current test
+    /// process's user — exactly the ownership shape a redirected
+    /// `%PROGRAMDATA%` would have, and exactly what
+    /// `nono::path_is_owned_by_current_user` is checking for.
+    #[test]
+    fn validate_and_join_sink_base_rejects_a_user_owned_redirection() {
+        let dir = tempdir().expect("tempdir");
+        let err = validate_and_join_sink_base(dir.path().to_path_buf())
+            .expect_err("a user-owned base must be rejected as a redirection signal");
+        assert!(matches!(err, NonoError::Snapshot(_)));
+    }
+
+    /// Perturbation proof for the test above: a RELATIVE base must also be
+    /// rejected outright (never silently joined onto the current directory),
+    /// independent of the ownership check.
+    #[test]
+    fn validate_and_join_sink_base_rejects_a_relative_path() {
+        let err = validate_and_join_sink_base(PathBuf::from("relative\\path"))
+            .expect_err("a relative base must be rejected");
+        assert!(matches!(err, NonoError::Snapshot(_)));
     }
 
     #[test]

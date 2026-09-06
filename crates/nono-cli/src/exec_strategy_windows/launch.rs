@@ -1624,6 +1624,17 @@ fn apply_startup_attestation_gate(
     expected_session_sid: Option<&str>,
     session_id: Option<&str>,
 ) -> Result<()> {
+    // Phase 118 review CR-04: `resolve_sink_dir` is now fallible (a
+    // redirected/invalid `%PROGRAMDATA%` is rejected, fail-closed). Routed
+    // through the SAME `record_receipt_write_outcome` degrade-vs-abort
+    // posture a write failure already uses — a resolution failure and a
+    // write failure are the same class of "this session's receipt could not
+    // be produced" event, and the review's own fix explicitly calls for this
+    // routing rather than an unconditional abort.
+    let sink_dir = match crate::receipt_sink::resolve_sink_dir() {
+        Ok(dir) => dir,
+        Err(e) => return record_receipt_write_outcome(e, None),
+    };
     apply_startup_attestation_gate_with_sink_dir(
         process,
         containment_job,
@@ -1633,7 +1644,7 @@ fn apply_startup_attestation_gate(
         applied,
         expected_session_sid,
         session_id,
-        &crate::receipt_sink::resolve_sink_dir(),
+        &sink_dir,
         // Production always resolves `require_receipts` from the real
         // machine policy (`None` here means "no override" — see
         // `record_receipt_write_outcome`'s doc).
@@ -2121,8 +2132,20 @@ fn emit_pre_gate_refusal_receipt(
     // valid `HANDLE` value (see the identical call's SAFETY comment in
     // `apply_startup_attestation_gate_with_sink_dir`, above).
     let pid = unsafe { GetProcessId(process) };
+    // Phase 118 review CR-04: `resolve_sink_dir` is now fallible. This whole
+    // function is already best-effort (see its own doc), so a resolution
+    // failure here degrades to a visible warning and no receipt — never a
+    // panic, never a fabricated path — rather than reaching for `?` (this
+    // function returns nothing to propagate to).
+    let Ok(sink_dir) = crate::receipt_sink::resolve_sink_dir() else {
+        tracing::warn!(
+            "receipt_sink: could not resolve a trustworthy sink directory — skipping this \
+             best-effort corrective refusal receipt"
+        );
+        return;
+    };
     let _ = emit_enforcement_receipt(
-        &crate::receipt_sink::resolve_sink_dir(),
+        &sink_dir,
         census,
         session_id,
         expected_session_sid,
