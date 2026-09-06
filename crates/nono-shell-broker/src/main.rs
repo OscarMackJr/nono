@@ -620,6 +620,22 @@ mod broker {
         receipt: &'a nono::EnforcementReceipt,
     }
 
+    /// Phase 118 review CR-02: a READ-side, OWNED mirror of
+    /// [`BrokerReceiptRecord`]'s chain-linkage fields, used ONLY to resume an
+    /// existing segment's chain state in [`BrokerReceiptWriter::new`].
+    /// `BrokerReceiptRecord` itself cannot derive `Deserialize` — its
+    /// `receipt` field is a borrowed `&'a nono::EnforcementReceipt`, and
+    /// deserialization needs owned data. `serde(deny_unknown_fields)` is
+    /// deliberately NOT set: this struct only needs `sequence` and
+    /// `chain_head` off the tail line, and ignoring the (larger) `receipt`
+    /// field it does not declare is exactly what an ignore-unknown-fields
+    /// deserialize is for.
+    #[derive(serde::Deserialize)]
+    struct BrokerReceiptRecordTail {
+        sequence: u64,
+        chain_head: nono::undo::ContentHash,
+    }
+
     /// Hand-rolled, single-writer, KEYLESS (D-25: no `key` field) chain
     /// state + JSONL append writer.
     ///
@@ -631,6 +647,7 @@ mod broker {
     /// never from a second concurrent caller — so the WR-21 "hold the mutex
     /// across the full build+advance+write sequence" discipline degenerates
     /// to plain sequential code with nothing to race.
+    #[derive(Debug)]
     struct BrokerReceiptWriter {
         head: [u8; 32],
         sequence: u64,
@@ -641,9 +658,22 @@ mod broker {
         /// Opens (creating if absent) `<sink_dir>/<session_id>.broker.jsonl`
         /// in append mode once, to fail fast if the sink is unwritable.
         ///
+        /// # Phase 118 review CR-02: RESUME the existing chain, never assume genesis
+        ///
+        /// Mirrors `receipt_sink.rs`'s `ReceiptWriter::new` fix exactly (see
+        /// that function's doc for the full rationale): reads the segment's
+        /// LAST record, if any, before opening for append, and resumes from
+        /// its `sequence + 1` / `chain_head` rather than unconditionally
+        /// starting at `sequence: 0` — which every prior call site (this
+        /// writer is reconstructed fresh per emission) made the SECOND record
+        /// on any segment. Fails CLOSED if an existing tail cannot be parsed.
+        ///
         /// # Errors
         ///
-        /// Returns `Err` if the sink file cannot be created/opened.
+        /// Returns `Err` if an existing segment cannot be read for a reason
+        /// other than "does not exist yet", if an existing segment's last
+        /// record cannot be parsed, or if the sink file cannot be
+        /// created/opened.
         fn new(session_id: &str, sink_dir: &std::path::Path) -> NonoResult<Self> {
             // D-05/CLAUDE.md path-security: never trust a wire-derived
             // string directly in a filename. `NONO_SESSION_ID` is
@@ -662,6 +692,32 @@ mod broker {
                 session_id
             };
             let file_path = sink_dir.join(format!("{safe_id}.broker.jsonl"));
+
+            let (head, sequence) = match std::fs::read_to_string(&file_path) {
+                Ok(existing) => match existing.lines().rev().find(|l| !l.trim().is_empty()) {
+                    Some(last_line) => {
+                        let last: BrokerReceiptRecordTail = serde_json::from_str(last_line)
+                            .map_err(|e| {
+                                NonoError::Snapshot(format!(
+                                    "broker receipt sink: refusing to append to {} — its last \
+                                     record could not be parsed (truncated or corrupt): {e}",
+                                    file_path.display()
+                                ))
+                            })?;
+                        (*last.chain_head.as_bytes(), last.sequence.saturating_add(1))
+                    }
+                    None => ([0u8; 32], 0),
+                },
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => ([0u8; 32], 0),
+                Err(e) => {
+                    return Err(NonoError::Snapshot(format!(
+                        "broker receipt sink: failed to read existing sink file {} to resume its \
+                         chain: {e}",
+                        file_path.display()
+                    )))
+                }
+            };
+
             std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -674,8 +730,8 @@ mod broker {
                     ))
                 })?;
             Ok(Self {
-                head: [0u8; 32],
-                sequence: 0,
+                head,
+                sequence,
                 file_path,
             })
         }
@@ -2495,6 +2551,65 @@ mod broker {
             let stored_head_a: nono::undo::ContentHash =
                 serde_json::from_value(record_a["chain_head"].clone()).expect("parse chain head");
             assert_eq!(recomputed_head_a, stored_head_a);
+        }
+
+        /// Phase 118 review CR-02: a SECOND, independently-constructed
+        /// [`BrokerReceiptWriter`] over an EXISTING segment must resume the
+        /// chain (`sequence: 1`, `prev_head` = the first writer's
+        /// `chain_head`) rather than restarting at genesis — exactly the
+        /// broker's own `Ran`-then-`ResumeThread`-fails corrective-record
+        /// path exercises in production (`record_broker_receipt` constructs
+        /// a fresh `BrokerReceiptWriter` on EVERY call). The test above
+        /// reuses one writer for both writes and therefore cannot catch this.
+        #[test]
+        fn second_broker_writer_over_existing_segment_resumes_the_chain() {
+            let sink_dir = tempfile::tempdir().expect("tempdir");
+            let session_id = "test-broker-session-tworiters";
+
+            let mut writer_1 = BrokerReceiptWriter::new(session_id, sink_dir.path())
+                .expect("writer 1 must construct");
+            writer_1.write_receipt(&sample_receipt()).expect("write 1");
+            drop(writer_1);
+
+            let mut writer_2 = BrokerReceiptWriter::new(session_id, sink_dir.path())
+                .expect("writer 2 must construct");
+            let mut receipt_b = sample_receipt();
+            receipt_b.outcome = nono::SessionOutcome::Refused;
+            writer_2.write_receipt(&receipt_b).expect("write 2");
+
+            let contents = std::fs::read_to_string(&writer_2.file_path).expect("read sink file");
+            let lines: Vec<&str> = contents.lines().collect();
+            assert_eq!(lines.len(), 2, "expected exactly 2 JSONL records");
+
+            let record_a: serde_json::Value =
+                serde_json::from_str(lines[0]).expect("parse record 1");
+            let record_b: serde_json::Value =
+                serde_json::from_str(lines[1]).expect("parse record 2");
+            assert_eq!(record_a["sequence"], 0);
+            assert!(record_a["prev_head"].is_null());
+            assert_eq!(
+                record_b["sequence"], 1,
+                "a second writer over an existing segment must resume sequence, not restart at 0"
+            );
+            assert_eq!(
+                record_b["prev_head"], record_a["chain_head"],
+                "a second writer's prev_head must chain from the first writer's chain_head"
+            );
+        }
+
+        /// Phase 118 review CR-02: fail CLOSED when an existing segment's
+        /// tail cannot be parsed, mirroring `receipt_sink.rs`'s identical
+        /// fail-closed test.
+        #[test]
+        fn new_broker_writer_rejects_a_segment_with_an_unparseable_tail_record() {
+            let sink_dir = tempfile::tempdir().expect("tempdir");
+            let file_path = sink_dir.path().join("test-broker-corrupt.broker.jsonl");
+            std::fs::write(&file_path, b"{ this is not valid JSON at all\n")
+                .expect("seed corrupt file");
+
+            let err = BrokerReceiptWriter::new("test-broker-corrupt", sink_dir.path())
+                .expect_err("a segment with an unparseable tail must be rejected, not restarted");
+            assert!(matches!(err, NonoError::Snapshot(_)));
         }
 
         #[test]

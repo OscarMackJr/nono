@@ -434,12 +434,62 @@ impl ReceiptWriter {
     /// resolved `file_path` under the chain-state mutex on every call (this
     /// struct holds no live `File` handle, only the resolved path).
     ///
+    /// # Phase 118 review CR-02: RESUME the existing chain, never assume genesis
+    ///
+    /// Previously this always initialised `ReceiptChainState { head: [0; 32],
+    /// sequence: 0 }` unconditionally — correct for a brand-new segment, but
+    /// WRONG for any segment a prior `ReceiptWriter` instance already wrote
+    /// to (every real emission site constructs a fresh writer per call, so
+    /// this was every second-or-later record on any segment). The SECOND
+    /// record on an existing segment would then re-emit `sequence: 0,
+    /// prev_head: null`, which `receipt_commands.rs::verify_records` reports
+    /// as `"a record was reordered or deleted"` — an honest, system-generated
+    /// record indistinguishable from tampering.
+    ///
+    /// This now reads the segment's LAST record (if any) before opening for
+    /// append, and resumes from its `sequence + 1` / `chain_head` — the exact
+    /// state [`Self::write_receipt`] would have left in memory had the SAME
+    /// writer instance produced every prior record. Fails CLOSED
+    /// (`Err`) if an existing segment's tail line cannot be parsed: silently
+    /// restarting at genesis on a corrupt tail would re-introduce the exact
+    /// ambiguity this fix exists to remove (a fresh `sequence: 0` record
+    /// appended after unparseable bytes is just as tamper-shaped as the
+    /// original bug). D-25's keyless discipline is preserved — this reads
+    /// only `sequence` and `chain_head`, never a `key` field (none exists).
+    ///
     /// # Errors
     ///
-    /// Returns `Err` if `session_id` is not filename-safe, or if the sink
+    /// Returns `Err` if `session_id` is not filename-safe, if an existing
+    /// segment cannot be read for a reason other than "does not exist yet",
+    /// if an existing segment's last record cannot be parsed, or if the sink
     /// file cannot be created/opened.
     pub fn new(session_id: String, sink_dir: &Path) -> Result<Self> {
         let file_path = session_file_path(&session_id, sink_dir)?;
+
+        let (head, sequence) = match std::fs::read_to_string(&file_path) {
+            Ok(existing) => match existing.lines().rev().find(|l| !l.trim().is_empty()) {
+                Some(last_line) => {
+                    let last: ReceiptRecord = serde_json::from_str(last_line).map_err(|e| {
+                        NonoError::Snapshot(format!(
+                            "receipt_sink: refusing to append to {} — its last record could not \
+                             be parsed (truncated or corrupt): {e}",
+                            file_path.display()
+                        ))
+                    })?;
+                    (*last.chain_head.as_bytes(), last.sequence.saturating_add(1))
+                }
+                // File exists but is empty (or all-blank lines): genesis.
+                None => ([0u8; 32], 0),
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => ([0u8; 32], 0),
+            Err(e) => {
+                return Err(NonoError::Snapshot(format!(
+                    "receipt_sink: failed to read existing sink file {} to resume its chain: {e}",
+                    file_path.display()
+                )))
+            }
+        };
+
         OpenOptions::new()
             .create(true)
             .append(true)
@@ -453,10 +503,7 @@ impl ReceiptWriter {
             })?;
 
         Ok(Self {
-            inner: Mutex::new(ReceiptChainState {
-                head: [0u8; 32],
-                sequence: 0,
-            }),
+            inner: Mutex::new(ReceiptChainState { head, sequence }),
             file_path,
         })
     }
@@ -751,6 +798,75 @@ mod tests {
         assert_eq!(record_b.receipt, receipt_b);
     }
 
+    /// Phase 118 review CR-02: a SECOND, independently-constructed
+    /// [`ReceiptWriter`] over an EXISTING segment must resume the chain
+    /// (`sequence: 1`, `prev_head` = the first writer's `chain_head`) rather
+    /// than restarting at genesis — the exact bug this fix closes. This is
+    /// the perturbation the pre-fix test
+    /// (`write_receipt_chains_two_records_and_recomputes_from_disk`) could
+    /// not catch, since it reuses ONE writer for both writes.
+    ///
+    /// `receipt_commands.rs::verify_records` is the read side's own
+    /// recompute-and-compare check, but it is a module-private function in a
+    /// different module (`receipt_commands.rs`, not `pub(crate)`) — not
+    /// reachable from this module without either widening its visibility or
+    /// duplicating its logic, both of which are out of this fix's scope. This
+    /// test instead mirrors `write_receipt_chains_two_records_and_recomputes_from_disk`'s
+    /// own recompute-and-compare pattern, which exercises the identical
+    /// chain-linkage invariant `verify_records` checks.
+    #[test]
+    fn second_writer_over_existing_segment_resumes_the_chain() {
+        let sink_dir = tempdir().expect("tempdir");
+        let session_id = "test-session-tworiters";
+
+        // Writer 1: writes the segment's first (genesis) record, then is
+        // dropped — simulating one process's `ReceiptWriter::new` call.
+        let writer_1 =
+            ReceiptWriter::new(session_id.to_string(), sink_dir.path()).expect("writer 1");
+        let receipt_a = sample_receipt(session_id, SessionOutcome::Ran);
+        writer_1.write_receipt(&receipt_a).expect("write 1");
+        drop(writer_1);
+
+        // Writer 2: a SEPARATE `ReceiptWriter::new` call over the SAME
+        // existing segment — e.g. a corrective `Refused` record from a later
+        // call site, or (per CR-03's now-fixed correlation) a broker/daemon
+        // writer landing on the same session_id. Pre-fix, this would
+        // initialise `sequence: 0` again; post-fix, it must resume.
+        let writer_2 =
+            ReceiptWriter::new(session_id.to_string(), sink_dir.path()).expect("writer 2");
+        let receipt_b = sample_receipt(session_id, SessionOutcome::Refused);
+        writer_2.write_receipt(&receipt_b).expect("write 2");
+
+        let contents = std::fs::read_to_string(&writer_2.file_path).expect("read sink file");
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 2, "expected exactly 2 JSONL records");
+
+        let record_a: ReceiptRecord = serde_json::from_str(lines[0]).expect("parse record 1");
+        let record_b: ReceiptRecord = serde_json::from_str(lines[1]).expect("parse record 2");
+
+        assert_eq!(record_a.sequence, 0);
+        assert!(record_a.prev_head.is_none());
+        // The crux of this fix: writer 2 must NOT re-emit `sequence: 0,
+        // prev_head: None` — it must resume from writer 1's tail.
+        assert_eq!(
+            record_b.sequence, 1,
+            "a second writer over an existing segment must resume sequence, not restart at 0"
+        );
+        assert_eq!(
+            record_b.prev_head,
+            Some(record_a.chain_head),
+            "a second writer's prev_head must chain from the first writer's chain_head"
+        );
+
+        // Recompute-and-compare over the COMBINED file, exactly as `nono
+        // receipt verify` does — this is what `verify_records` would accept
+        // and what the pre-fix bug made it reject as "reordered or deleted".
+        let recomputed_head_a = hash_receipt_chain(None, &record_a.leaf_hash);
+        assert_eq!(recomputed_head_a, record_a.chain_head);
+        let recomputed_head_b = hash_receipt_chain(Some(&record_a.chain_head), &record_b.leaf_hash);
+        assert_eq!(recomputed_head_b, record_b.chain_head);
+    }
+
     /// Perturbation proof for the recompute-and-compare check above: an
     /// edited on-disk leaf hash must NOT recompute to the stored chain head.
     #[test]
@@ -787,5 +903,21 @@ mod tests {
         let err2 = ReceiptWriter::new(String::new(), sink_dir.path())
             .expect_err("empty session_id must be rejected");
         assert!(matches!(err2, NonoError::Snapshot(_)));
+    }
+
+    /// Phase 118 review CR-02: fail CLOSED when an existing segment's tail
+    /// cannot be parsed, rather than silently restarting at genesis — the
+    /// review's own explicit requirement ("silently starting a new genesis on
+    /// a corrupt tail would re-introduce the same ambiguity").
+    #[test]
+    fn new_writer_rejects_a_segment_with_an_unparseable_tail_record() {
+        let sink_dir = tempdir().expect("tempdir");
+        let file_path = sink_dir.path().join("test-session-corrupt.jsonl");
+        std::fs::write(&file_path, b"{ this is not valid JSON at all\n")
+            .expect("seed corrupt file");
+
+        let err = ReceiptWriter::new("test-session-corrupt".to_string(), sink_dir.path())
+            .expect_err("a segment with an unparseable tail must be rejected, not restarted");
+        assert!(matches!(err, NonoError::Snapshot(_)));
     }
 }
