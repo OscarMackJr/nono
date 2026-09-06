@@ -2246,6 +2246,21 @@ pub(super) fn spawn_windows_child(
             attestation::BROKER_NOT_APPLICABLE_LAYERS_ENV_VAR.to_string(),
             broker_not_applicable_layers,
         ));
+        // Phase 118 review CR-03: set the D-15 cross-binary correlation id
+        // explicitly on the broker's environment, next to the two
+        // wire-contract channels above. Nothing else in `nono-cli` sets
+        // `NONO_SESSION_ID` outside the hook paths (`hook_runtime.rs`,
+        // `hook_runtime_windows.rs`), so without this push the broker's own
+        // `std::env::var("NONO_SESSION_ID").unwrap_or_default()`
+        // (`nono-shell-broker/src/main.rs`) always reads empty. `session_id`
+        // is "audit-correlation only; accept empty" per the house
+        // convention `nono::supervisor::aipc_sdk` documents for this exact
+        // env var name, so a `None` here is simply skipped rather than
+        // failing the launch — the broker's own degrade behavior (IN-01)
+        // governs what happens on the receiving end.
+        if let Some(id) = session_id {
+            broker_env_pairs.push(("NONO_SESSION_ID".to_string(), id.to_string()));
+        }
         environment_block = build_windows_environment_block(&broker_env_pairs);
     }
 
