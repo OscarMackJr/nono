@@ -774,6 +774,62 @@ efe66db47bf1b65f.jsonl | entry_path=DirectCli token_arm=BrokerLaunchNoPty outcom
 
 D-15 specifies TWO receipts per broker session. One is present.
 
+## CR-06 — RESOLVED 2026-09-06 (commit `4d0c5ded`), both arms live-verified
+
+**Root cause (found via `/gsd:debug`, session `broker-receipt-not-written`): the receipts were
+being written all along, to a sandbox-local path nobody searched.** `broker_env_pairs` cloned the
+CONFINED CHILD's sanitized environment, in which `append_windows_runtime_env` had already rewritten
+`PROGRAMDATA` to the per-workdir runtime redirect. The broker faithfully resolved its sink to
+`<workdir>\.nono-runtime\programdata\nono\receipts`. That is why the failure produced no error, no
+warning, and no missing file at the expected location — nothing failed.
+
+**The hypothesis I eliminated below as #2 was WRONG and is retracted.** "The broker resolves a
+different sink directory" was correct; I retired it on faulty evidence, having assumed the child
+environment was either inherited unchanged or cleared. It was *rewritten* — a third possibility I
+never considered — and the confirming filesystem sweep covered `%PROGRAMDATA%` and `%LOCALAPPDATA%`
+but not the workdir. Of the three assumptions in "the contradiction to resolve", **#3 was the false
+one**: the file existed.
+
+The smoking gun, recovered intact:
+`C:\Users\OMack\nono-probe\.nono-runtime\programdata\nono\receipts\unknown-session.broker.jsonl`
+— exactly 4 records, one per reported session, and the `unknown-session` filename independently
+corroborates CR-03.
+
+**Fix:** the sink base moves off the environment onto argv (`--receipt-sink-base`), pushed on BOTH
+arms through one shared helper; `broker_receipt_sink_dir()` can no longer read the environment and
+fails closed with no fallback. Note this is the CR-04 defect class (an env-derived sink location)
+being triggered by nono against itself — and CR-04's own fix is what would have surfaced it, since
+the user-owned redirect base now fails validation loudly instead of misdirecting silently.
+
+**Live verification on BOTH arms — measured, not by construction:**
+
+| Check | `BrokerLaunchNoPty` | `BrokerLaunch` (PTY) |
+|---|---|---|
+| Arm confirmed via supervisor receipt `token_arm` | ✅ | ✅ `BrokerLaunch` |
+| Broker receipt in the real `%PROGRAMDATA%` sink | ✅ `5754259428069866` | ✅ `60990aea032cfab8` |
+| D-15 pair (`<sid>.jsonl` + `<sid>.broker.jsonl`) | ✅ | ✅ |
+| Negative control: nothing in `.nono-runtime` redirect | ✅ | ✅ |
+| `nono receipt verify <sid>` | ✅ | ✅ exit 0, **both segments chain-intact** |
+
+D-15's two-receipts-per-broker-session contract now holds in practice for the first time.
+
+**Impact while it was live (2026-08-16 → 2026-09-06):** RCPT-01 was violated on both broker arms,
+and D-15 cross-binary correlation never worked — the receipts existed but were unfindable and named
+`unknown-session`. Four pre-fix receipts remain stranded at the path above; no migration attempted.
+
+**A related exposure, recorded as plausible and NOT measured:** the misdirected sink sat inside the
+confined child's writable workspace. Its directory object WAS guarded (four AppContainer package-SID
+DENY ACEs plus the Low mandatory label — verified with `icacls`), so the receipts were not left bare.
+But per Task 3's established finding the DENY is directory-scoped and does not reach files, and
+files there inherit Full Control for the invoking user, so a confined child could plausibly have
+modified or deleted its own broker receipts. Moot now that the sink is off-env. Logged because it is
+a second instance of the same directory-scoped-guard class as the D-08 narrowing, which strengthens
+the case for revisiting that decision rather than leaving it merely narrowed.
+
+---
+
+### Original finding as written (superseded by the resolution above)
+
 ## NEW — CR-06: the broker emits no receipt on the successful path (RCPT-01)
 
 `record_broker_receipt`'s own doc comment (`nono-shell-broker/src/main.rs:746-750`) claims it is
