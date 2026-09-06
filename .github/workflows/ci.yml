@@ -138,7 +138,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
         with:
-          toolchain: stable
+          # PINNED — keep in lockstep with /rust-toolchain.toml (see its header).
+          # `stable` here floats ahead of local installs and reopens the
+          # local-green/CI-red lint gap that file exists to close.
+          toolchain: "1.98.1"
 
       - name: Cache cargo registry
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
@@ -168,7 +171,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
         with:
-          toolchain: stable
+          # PINNED — keep in lockstep with /rust-toolchain.toml (see its header).
+          # `stable` here floats ahead of local installs and reopens the
+          # local-green/CI-red lint gap that file exists to close.
+          toolchain: "1.98.1"
 
       - name: Cache cargo registry
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
@@ -205,7 +211,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
         with:
-          toolchain: stable
+          # PINNED — keep in lockstep with /rust-toolchain.toml (see its header).
+          # `stable` here floats ahead of local installs and reopens the
+          # local-green/CI-red lint gap that file exists to close.
+          toolchain: "1.98.1"
 
       - name: Cache cargo registry
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
@@ -241,7 +250,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
         with:
-          toolchain: stable
+          # PINNED — keep in lockstep with /rust-toolchain.toml (see its header).
+          # `stable` here floats ahead of local installs and reopens the
+          # local-green/CI-red lint gap that file exists to close.
+          toolchain: "1.98.1"
 
       - name: Cache cargo registry
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
@@ -279,7 +291,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
         with:
-          toolchain: stable
+          # PINNED — keep in lockstep with /rust-toolchain.toml (see its header).
+          # `stable` here floats ahead of local installs and reopens the
+          # local-green/CI-red lint gap that file exists to close.
+          toolchain: "1.98.1"
 
       - name: Cache cargo registry
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
@@ -315,7 +330,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
         with:
-          toolchain: stable
+          # PINNED — keep in lockstep with /rust-toolchain.toml (see its header).
+          # `stable` here floats ahead of local installs and reopens the
+          # local-green/CI-red lint gap that file exists to close.
+          toolchain: "1.98.1"
 
       - name: Cache cargo registry
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
@@ -363,7 +381,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
         with:
-          toolchain: stable
+          # PINNED — keep in lockstep with /rust-toolchain.toml (see its header).
+          # `stable` here floats ahead of local installs and reopens the
+          # local-green/CI-red lint gap that file exists to close.
+          toolchain: "1.98.1"
 
       - name: Cache cargo registry
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
@@ -418,7 +439,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
         with:
-          toolchain: stable
+          # PINNED — keep in lockstep with /rust-toolchain.toml (see its header).
+          # `stable` here floats ahead of local installs and reopens the
+          # local-green/CI-red lint gap that file exists to close.
+          toolchain: "1.98.1"
 
       - name: Cache cargo registry
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
@@ -482,7 +506,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
         with:
-          toolchain: stable
+          # PINNED — keep in lockstep with /rust-toolchain.toml (see its header).
+          # `stable` here floats ahead of local installs and reopens the
+          # local-green/CI-red lint gap that file exists to close.
+          toolchain: "1.98.1"
           components: rustfmt
 
       - name: Check formatting
@@ -502,7 +529,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
         with:
-          toolchain: stable
+          # PINNED — keep in lockstep with /rust-toolchain.toml (see its header).
+          # `stable` here floats ahead of local installs and reopens the
+          # local-green/CI-red lint gap that file exists to close.
+          toolchain: "1.98.1"
 
       - name: Build nono-ffi (regenerates header)
         run: cargo build -p nono-ffi
@@ -547,7 +577,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
         with:
-          toolchain: stable
+          # PINNED — keep in lockstep with /rust-toolchain.toml (see its header).
+          # `stable` here floats ahead of local installs and reopens the
+          # local-green/CI-red lint gap that file exists to close.
+          toolchain: "1.98.1"
           components: clippy
 
       - name: Run Clippy
@@ -564,7 +597,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
         with:
-          toolchain: stable
+          # PINNED — keep in lockstep with /rust-toolchain.toml (see its header).
+          # `stable` here floats ahead of local installs and reopens the
+          # local-green/CI-red lint gap that file exists to close.
+          toolchain: "1.98.1"
 
       - name: Cache cargo registry
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
@@ -599,7 +635,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
         with:
-          toolchain: stable
+          # PINNED — keep in lockstep with /rust-toolchain.toml (see its header).
+          # `stable` here floats ahead of local installs and reopens the
+          # local-green/CI-red lint gap that file exists to close.
+          toolchain: "1.98.1"
 
       - name: Install cargo-audit
         run: cargo install cargo-audit

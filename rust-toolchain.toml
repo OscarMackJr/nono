@@ -1,0 +1,34 @@
+# Single source of truth for the Rust toolchain used to BUILD and LINT this
+# workspace. rustup honours this file automatically for every local `cargo`
+# invocation, installing the pinned version on first use.
+#
+# Why this file exists (Phase 118 close-out, 2026-09-06)
+# -----------------------------------------------------
+# Without it, local and CI floated independently: developers ran whatever
+# `rustup update` last installed, while CI resolved `stable` fresh on every
+# run. The two drifted apart and CI went red on lints a local run could not
+# reproduce — most recently clippy 1.98's `chunks_exact_to_as_chunks` and
+# `question_mark` firing on code from February, April and June, while local
+# clippy sat at 1.95.0 and reported a clean workspace.
+#
+# That failure mode cost three separate triage cycles (quick task 260815-jxi,
+# and twice during the Phase 118 close-out). CLAUDE.md's cross-target rule
+# cannot catch it: that rule pins a TARGET SET (linux-gnu, apple-darwin), not
+# a toolchain VERSION, so it is blind to this class by construction.
+#
+# IMPORTANT — keep this in lockstep with .github/workflows/ci.yml
+# ---------------------------------------------------------------
+# `dtolnay/rust-toolchain` takes an explicit `toolchain:` input, which
+# OVERRIDES this file. ci.yml therefore pins the same version, and the two
+# must be bumped together. ci.yml's own comment points back here. If you
+# change `channel` below without changing ci.yml, the gap this file exists to
+# close reopens silently.
+#
+# NOTE: this is distinct from the workspace MSRV (`rust-version` in the root
+# Cargo.toml, currently 1.95). MSRV is the OLDEST toolchain consumers may
+# build with; this is the EXACT toolchain this repo builds and lints with.
+# Raising this does not raise the MSRV, and they are allowed to differ.
+
+[toolchain]
+channel = "1.98.1"
+components = ["clippy", "rustfmt"]
