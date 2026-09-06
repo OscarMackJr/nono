@@ -258,19 +258,41 @@ use windows_sys::Win32::System::SystemServices::{
 const RECEIPT_SINK_DIRNAME: &str = "receipts";
 
 /// Deny-ACE access mask applied to the sink directory for each named SID
-/// (D-08's DACL half). Comprehensive — read (reconnaissance, T-118-14),
-/// write/delete (tampering, T-118-15), and execute — since no confined
-/// child, on any arm, has any legitimate reason to touch the shared sink
-/// directory at all. Mirrors `SESSION_SID_WRITE_MASK`'s shape
+/// (D-08's DACL half). The mask requests read, write/delete and execute,
+/// since no confined child has any legitimate reason to touch the shared sink
+/// directory. Mirrors `SESSION_SID_WRITE_MASK`'s shape
 /// (`crates/nono/src/sandbox/windows.rs`, private to that module) but is a
 /// DENY mask here, not a grant mask.
+///
+/// **⚠ What this mask REQUESTS is not what the guard DELIVERS (Phase 118 Plan
+/// 10 Task 3).** This doc previously claimed the deny was "Comprehensive —
+/// read (reconnaissance, T-118-14), write/delete (tampering, T-118-15)". The
+/// read half was measured false: [`nono::deny_sid_on_path`] applies this mask
+/// with `NO_INHERITANCE`, so the ACE lands on the sink DIRECTORY OBJECT only
+/// and never reaches the receipt FILES inside it. A confined child reads
+/// every receipt on both arms; `icacls` on a receipt file shows no DENY ACE
+/// at all. **Only the write/delete half (T-118-15) is actually enforced** —
+/// creating a file is an operation on the directory, where the ACE does
+/// apply. T-118-14 (read/reconnaissance) is NOT closed by this mask. See the
+/// module doc's "D-08 SCOPE CORRECTION" section.
 const RECEIPT_SINK_DENY_MASK: u32 = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_EXECUTE | DELETE;
 
 /// Mandatory-label mask applied to the sink directory unconditionally
-/// (D-08's label half): `NO_READ_UP` (the guard's actual job — see module
-/// doc) plus `NO_EXECUTE_UP` (matching `label_mask_for_access_mode`'s
-/// `AccessMode::Write` shape exactly — the supervisor itself must still be
-/// able to WRITE receipts, so `NO_WRITE_UP` is deliberately absent).
+/// (D-08's label half): `NO_READ_UP` plus `NO_EXECUTE_UP` (matching
+/// `label_mask_for_access_mode`'s `AccessMode::Write` shape exactly — the
+/// supervisor itself must still be able to WRITE receipts, so `NO_WRITE_UP`
+/// is deliberately absent).
+///
+/// **⚠ `NO_READ_UP` here is inert, not "the guard's actual job" (Phase 118
+/// Plan 10 Task 3).** This doc previously called it exactly that. Two
+/// independent measurements falsified it: (1) [`nono::try_set_mandatory_label`]
+/// pins the object to a LOW integrity RID (hardcoded `LW`), and Windows denies
+/// only subjects strictly BELOW the object's level — a Low-IL confined child
+/// is EQUAL, not below, so the label cannot block it; (2) the label carries no
+/// `(OI)(CI)`, so it never attaches to the receipt files regardless of any
+/// subject's IL. Retained because it costs nothing and is correct for a
+/// sub-Low subject, but it must not be described as providing read protection.
+/// See the module doc's "D-08 SCOPE CORRECTION" section.
 const RECEIPT_SINK_LABEL_MASK: u32 =
     SYSTEM_MANDATORY_LABEL_NO_READ_UP | SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP;
 
