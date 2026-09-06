@@ -761,6 +761,105 @@ mod broker {
         Ok(())
     }
 
+    /// RAII guard that revokes THIS broker session's per-run AppContainer
+    /// package SID's sink-directory DENY ACE when the session ends.
+    ///
+    /// # Why this exists — Phase 118 review CR-05, third producer
+    ///
+    /// [`ensure_broker_receipt_sink_guarded`] adds a DENY ACE for a
+    /// caller-supplied package SID to the SHARED, PERMANENT sink directory on
+    /// every receipt emission (see [`record_broker_receipt`], called at every
+    /// `Ran`/`Refused` point in [`run`]). CR-05 was fixed on the CLI's two
+    /// other receipt producers (`nono.exe`'s `exec_strategy_windows::launch`
+    /// arm and `nono-agentd.exe`'s `agent_daemon::reap` arm — both via
+    /// `crate::receipt_sink::SinkSidGuard` in `nono-cli`) but this crate was
+    /// missed entirely: nothing here ever called
+    /// [`nono::revoke_sid_on_path`], so every `--no-pty` (AppContainer) broker
+    /// session's package SID DENY ACE accumulated on the shared sink's DACL
+    /// forever, one per session, toward the Win32 `AclSize` (`u16`) ceiling —
+    /// exactly the class of defect `SinkSidGuard`'s own doc describes, just on
+    /// the one producer that never got the fix. This type is a small,
+    /// hand-rolled mirror of `SinkSidGuard` (this crate is a separate binary
+    /// with no dependency on `nono-cli`, so it cannot import that type
+    /// directly — the same D-15 "small duplication, expected and acceptable"
+    /// precedent this file's receipt-sink code already follows throughout).
+    ///
+    /// # Own-only, by construction
+    ///
+    /// The package SID this guard is ever constructed with is derived, once
+    /// per launch, from the per-run AppContainer moniker
+    /// `nono.session.<uuid>` (`args.app_container_name`,
+    /// `nono::derive_app_container_sid`) — a fresh UUID per launch, so no two
+    /// broker sessions ever share a SID. Revoking "this session's own SID" can
+    /// therefore never touch an ACE a DIFFERENT, concurrent broker session (or
+    /// the CLI's/daemon's own session SIDs on the very same shared directory)
+    /// depends on. This guard never walks the sink's DACL looking for SIDs to
+    /// clean up — it only ever revokes the one SID string it was constructed
+    /// with, via [`nono::revoke_sid_on_path`]'s exact-SID `DeleteAce` walk.
+    ///
+    /// # Session lifetime, not call lifetime
+    ///
+    /// A single broker session can emit more than one receipt with the SAME
+    /// package SID (the `Ran` record followed by a corrective `Refused`
+    /// record on a failed `ResumeThread`, for example) — re-applying the
+    /// identical DENY ACE is an idempotent no-op, not a duplicate. This guard
+    /// is therefore constructed exactly ONCE per [`run`] call, as early as the
+    /// package SID is known (immediately after it is derived, before the
+    /// first possible [`record_broker_receipt`] call site), and held as a
+    /// local for [`run`]'s entire remaining body — this broker process is
+    /// itself the session's only owner (unlike the CLI/daemon producers, there
+    /// is no longer-lived struct to move it into), so Rust drops it at every
+    /// one of `run`'s return points, including its many early
+    /// `return Err(...)` arms (the confined child never runs, or was already
+    /// terminated, on every such path — reverting immediately there is
+    /// correct).
+    ///
+    /// # Fail-secure, unconditional revoke
+    ///
+    /// [`nono::revoke_sid_on_path`] on a SID that was never actually applied
+    /// (e.g. the legacy/PTY arm, which mints no AppContainer package SID at
+    /// all, or a sink directory that could never be resolved/created/labeled)
+    /// is a documented no-op: it walks the DACL, finds no matching ACE, and
+    /// writes the unchanged DACL back successfully. This guard's `Drop` is
+    /// therefore safe to run unconditionally.
+    ///
+    /// A revoke failure never panics and never fails the session: the
+    /// session's outcome is already decided by the time `run` returns, so
+    /// `Drop` only warns (D-04's "degrade visibly, never fatally" posture) — a
+    /// stale DENY ACE is fail-secure on its own (it can only keep denying,
+    /// never grant something it shouldn't).
+    #[derive(Debug)]
+    struct BrokerSinkSidGuard {
+        dir: PathBuf,
+        sid: String,
+    }
+
+    impl BrokerSinkSidGuard {
+        /// Construct a guard that will revoke `sid`'s DENY ACE from `dir`
+        /// when dropped. Does not itself apply anything —
+        /// [`ensure_broker_receipt_sink_guarded`] remains the sole apply
+        /// site; this is purely the missing revoke half CR-05 found absent
+        /// on this, the third producer.
+        fn new(dir: PathBuf, sid: String) -> Self {
+            Self { dir, sid }
+        }
+    }
+
+    impl Drop for BrokerSinkSidGuard {
+        fn drop(&mut self) {
+            if let Err(e) = nono::revoke_sid_on_path(&self.dir, &self.sid) {
+                tracing::warn!(
+                    dir = %self.dir.display(),
+                    sid = %self.sid,
+                    error = %e,
+                    "broker: failed to revoke this session's sink DENY ACE on session end; it \
+                     may remain on the sink directory's DACL (Phase 118 review CR-05, third \
+                     producer)"
+                );
+            }
+        }
+    }
+
     /// One JSONL line's envelope: the receipt plus the chain-linkage fields
     /// a consumer needs to recompute-and-compare (`nono receipt verify`,
     /// D-10). Field names deliberately match `receipt_sink.rs`'s
@@ -1093,6 +1192,37 @@ mod broker {
                 Some(name) => Some(nono::derive_app_container_sid(name)?),
                 None => None,
             };
+
+        // Phase 118 review CR-05 gap-closure (third producer): construct this
+        // session's `BrokerSinkSidGuard` up front, BEFORE the first
+        // `record_broker_receipt` call site below could ever apply the
+        // sink's DENY ACE for this session's package SID (the earliest is
+        // inside the `if is_app_container { ... }` block a few dozen lines
+        // down). Declared as a local, not moved anywhere else: this broker
+        // process's `run` call IS the session's only owner (see
+        // `BrokerSinkSidGuard`'s own "session lifetime, not call lifetime"
+        // doc) — Rust drops it at every one of this function's return
+        // points, including its many early `return Err(...)` arms.
+        //
+        // `None` when this launch mints no AppContainer package SID at all
+        // (the legacy/PTY arm — no DENY ACE is ever applied for a SID that
+        // does not exist), when the SID cannot be rendered to a string, or
+        // when the sink directory cannot be resolved right now (every
+        // `record_broker_receipt` call below resolves the SAME directory via
+        // `broker_receipt_sink_dir`, so if it fails here it will fail there
+        // too — nothing will ever be applied for this session's own SID
+        // either, so there is nothing this guard would need to revoke).
+        let sink_sid_guard_sid: Option<String> = match app_container_sid.as_ref() {
+            Some(sid) => nono::package_sid_to_string(sid).ok(),
+            None => None,
+        };
+        let _sink_sid_guard: Option<BrokerSinkSidGuard> =
+            sink_sid_guard_sid.as_ref().and_then(|sid| {
+                broker_receipt_sink_dir(args.receipt_sink_base.as_deref())
+                    .ok()
+                    .map(|dir| BrokerSinkSidGuard::new(dir, sid.clone()))
+            });
+
         // For the legacy/PTY path only: build the plain Low-IL primary token.
         // For the AppContainer path the child token is produced by the lowbox at
         // spawn time, so no primary token is built here.
@@ -3011,6 +3141,293 @@ mod broker {
                 !json.contains("SENTINEL-BROKER-4f1a"),
                 "the sentinel-seeded AppContainer SID must never appear in a serialized \
                  broker receipt: {json}"
+            );
+        }
+    }
+
+    /// Phase 118 verifier gap-closure (CR-05, third producer): `nono-cli`'s
+    /// `receipt_sink::SinkSidGuard` got these three regression tests
+    /// (`sink_sid_guard_revokes_its_own_deny_ace_on_drop`,
+    /// `..._drop_never_touches_a_different_sids_deny_ace`,
+    /// `..._drop_is_a_safe_no_op_when_nothing_was_ever_applied` in
+    /// `receipt_sink.rs`); this crate's hand-rolled `BrokerSinkSidGuard`
+    /// mirror gets the identical coverage below, plus the N-guards class
+    /// assertion CR-05 itself suggested and which was never added on the
+    /// `nono-cli` side.
+    #[cfg(test)]
+    #[allow(clippy::unwrap_used)]
+    mod sink_sid_guard_tests {
+        use super::*;
+        use windows_sys::Win32::Foundation::LocalFree;
+        use windows_sys::Win32::Security::Authorization::{
+            ConvertStringSidToSidW, GetNamedSecurityInfoW, SE_FILE_OBJECT,
+        };
+        use windows_sys::Win32::Security::{
+            EqualSid, GetAce, ACCESS_DENIED_ACE, ACL, DACL_SECURITY_INFORMATION,
+            PSECURITY_DESCRIPTOR, PSID,
+        };
+        use windows_sys::Win32::System::SystemServices::ACCESS_DENIED_ACE_TYPE;
+
+        // Synthetic package-SID-shaped strings for tests (mirrors the
+        // "S-1-15-2-*" fixtures in `broker_receipt_tests` above). Pre-exist
+        // in NO real ACE.
+        const TEST_PACKAGE_SID: &str = "S-1-15-2-1-2-3-4-5-6-7-8-1";
+        const TEST_OTHER_PACKAGE_SID: &str = "S-1-15-2-9-9-9-9-9-9-9-9-9";
+
+        /// Returns `true` iff `path`'s DACL contains a DENY-type ACE for
+        /// `sid`. Mirrors `receipt_sink.rs`'s test helper of the same shape
+        /// byte-for-byte (explicit `AceType == ACCESS_DENIED_ACE_TYPE` check
+        /// before reading the embedded SID — the Phase 118 Plan 02 fix to
+        /// the core crate's own test helper).
+        fn dacl_contains_deny_ace_for_sid(path: &std::path::Path, sid: &str) -> bool {
+            let wide_path: Vec<u16> = path
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            let wide_sid: Vec<u16> = sid.encode_utf16().chain(std::iter::once(0)).collect();
+
+            let mut want_sid: PSID = std::ptr::null_mut();
+            // SAFETY: valid nul-terminated UTF-16 SID string + valid out-pointer.
+            let ok = unsafe { ConvertStringSidToSidW(wide_sid.as_ptr(), &mut want_sid) };
+            assert!(ok != 0 && !want_sid.is_null(), "parse test SID");
+
+            let mut dacl: *mut ACL = std::ptr::null_mut();
+            let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+            // SAFETY: valid path buffer + valid out-pointers; SD freed below.
+            let status = unsafe {
+                GetNamedSecurityInfoW(
+                    wide_path.as_ptr(),
+                    SE_FILE_OBJECT,
+                    DACL_SECURITY_INFORMATION,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    &mut dacl,
+                    std::ptr::null_mut(),
+                    &mut sd,
+                )
+            };
+            assert_eq!(status, 0, "GetNamedSecurityInfoW(DACL) must succeed");
+
+            let mut found = false;
+            if !dacl.is_null() {
+                // SAFETY: `dacl` points into the SD we own until LocalFree below.
+                let ace_count = unsafe { (*dacl).AceCount };
+                for index in 0..ace_count {
+                    let mut ace = std::ptr::null_mut();
+                    // SAFETY: `dacl` is valid; `ace` is a valid out-pointer.
+                    let got = unsafe { GetAce(dacl, u32::from(index), &mut ace) };
+                    if got == 0 || ace.is_null() {
+                        continue;
+                    }
+                    // SAFETY: `ace` was populated by GetAce above.
+                    let header =
+                        unsafe { &*(ace as *const windows_sys::Win32::Security::ACE_HEADER) };
+                    if u32::from(header.AceType) != ACCESS_DENIED_ACE_TYPE {
+                        continue;
+                    }
+                    // SAFETY: AceType checked above; bytes are an ACCESS_DENIED_ACE.
+                    let ace_sid = unsafe {
+                        (&(*(ace as *const ACCESS_DENIED_ACE)).SidStart) as *const u32 as PSID
+                    };
+                    // SAFETY: both SIDs are valid for the duration of the call.
+                    if unsafe { EqualSid(ace_sid, want_sid) } != 0 {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+
+            // SAFETY: both allocations came from Win32 and must be LocalFree'd.
+            unsafe {
+                if !want_sid.is_null() {
+                    let _ = LocalFree(want_sid as _);
+                }
+                if !sd.is_null() {
+                    let _ = LocalFree(sd as _);
+                }
+            }
+            found
+        }
+
+        /// Helper for the class-assertion test below: the raw ACE count on
+        /// `path`'s current DACL, independent of any particular SID.
+        fn current_dacl_ace_count(path: &std::path::Path) -> u32 {
+            let wide_path: Vec<u16> = path
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            let mut dacl: *mut ACL = std::ptr::null_mut();
+            let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+            // SAFETY: valid path buffer + valid out-pointers; SD freed below.
+            let status = unsafe {
+                GetNamedSecurityInfoW(
+                    wide_path.as_ptr(),
+                    SE_FILE_OBJECT,
+                    DACL_SECURITY_INFORMATION,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    &mut dacl,
+                    std::ptr::null_mut(),
+                    &mut sd,
+                )
+            };
+            assert_eq!(status, 0, "GetNamedSecurityInfoW(DACL) must succeed");
+            let count = if dacl.is_null() {
+                0
+            } else {
+                // SAFETY: `dacl` points into the SD we own until LocalFree below.
+                u32::from(unsafe { (*dacl).AceCount })
+            };
+            // SAFETY: `sd` came from Win32 and must be LocalFree'd.
+            unsafe {
+                if !sd.is_null() {
+                    let _ = LocalFree(sd as _);
+                }
+            }
+            count
+        }
+
+        /// CR-05 (third producer): a session's own DENY ACE is present while
+        /// its `BrokerSinkSidGuard` is alive, and GONE once the guard drops —
+        /// proving the guard actually performs the missing revoke
+        /// `ensure_broker_receipt_sink_guarded` never did on its own.
+        #[test]
+        fn broker_sink_sid_guard_revokes_its_own_deny_ace_on_drop() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path();
+
+            ensure_broker_receipt_sink_guarded(path, Some(TEST_PACKAGE_SID))
+                .expect("guard must apply");
+            assert!(
+                dacl_contains_deny_ace_for_sid(path, TEST_PACKAGE_SID),
+                "sink dir DACL must contain the session's DENY ACE while the session is live"
+            );
+
+            {
+                let _guard =
+                    BrokerSinkSidGuard::new(path.to_path_buf(), TEST_PACKAGE_SID.to_string());
+                assert!(
+                    dacl_contains_deny_ace_for_sid(path, TEST_PACKAGE_SID),
+                    "the ACE must still be present for the guard's entire lifetime"
+                );
+            }
+            // `_guard` has dropped here.
+
+            assert!(
+                !dacl_contains_deny_ace_for_sid(path, TEST_PACKAGE_SID),
+                "CR-05: the session's own DENY ACE must be revoked once its BrokerSinkSidGuard \
+                 drops (this is the regression this fix closes — without it, the ACE \
+                 accumulates forever)"
+            );
+        }
+
+        /// CR-05 rule 1 (own-only): revoking THIS session's package SID must
+        /// never touch a DIFFERENT SID's pre-existing DENY ACE on the same
+        /// shared directory — simulating a concurrent broker session (or a
+        /// CLI/daemon session sharing the same sink) whose guard has not yet
+        /// run. Without this test, an implementation that (incorrectly)
+        /// walked the whole DACL revoking every deny ACE it found would pass
+        /// the drop-on-revoke test above while silently un-guarding every
+        /// OTHER session sharing the directory.
+        #[test]
+        fn broker_sink_sid_guard_drop_never_touches_a_different_sids_deny_ace() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path();
+
+            // Simulate a different session's own, still-live DENY ACE.
+            ensure_broker_receipt_sink_guarded(path, Some(TEST_OTHER_PACKAGE_SID))
+                .expect("other session's guard must apply");
+            // This session's own DENY ACE, on the same directory.
+            ensure_broker_receipt_sink_guarded(path, Some(TEST_PACKAGE_SID))
+                .expect("this session's guard must apply");
+
+            assert!(dacl_contains_deny_ace_for_sid(path, TEST_OTHER_PACKAGE_SID));
+            assert!(dacl_contains_deny_ace_for_sid(path, TEST_PACKAGE_SID));
+
+            drop(BrokerSinkSidGuard::new(
+                path.to_path_buf(),
+                TEST_PACKAGE_SID.to_string(),
+            ));
+
+            assert!(
+                !dacl_contains_deny_ace_for_sid(path, TEST_PACKAGE_SID),
+                "this session's own ACE must be gone after its guard drops"
+            );
+            assert!(
+                dacl_contains_deny_ace_for_sid(path, TEST_OTHER_PACKAGE_SID),
+                "own-only (CR-05 rule 1): a DIFFERENT session's DENY ACE must SURVIVE this \
+                 guard's drop — this guard must revoke ONLY the SID it was constructed with"
+            );
+        }
+
+        /// Safe-no-op proof: constructing (and immediately dropping) a guard
+        /// for a SID that was NEVER granted an ACE must be a safe no-op,
+        /// never an error and never a panic (D-04: a revoke-time failure only
+        /// warns). This independently confirms `BrokerSinkSidGuard::new` is a
+        /// pure constructor with no apply side effect of its own — without
+        /// it, a same-shaped defect (revoking by walking the DACL instead of
+        /// by exact SID) would still pass the own-only test above.
+        #[test]
+        fn broker_sink_sid_guard_drop_is_a_safe_no_op_when_nothing_was_ever_applied() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path();
+            assert!(!dacl_contains_deny_ace_for_sid(path, TEST_PACKAGE_SID));
+
+            drop(BrokerSinkSidGuard::new(
+                path.to_path_buf(),
+                TEST_PACKAGE_SID.to_string(),
+            ));
+
+            assert!(!dacl_contains_deny_ace_for_sid(path, TEST_PACKAGE_SID));
+        }
+
+        /// CR-05's own suggested class assertion, NOT added on the
+        /// `nono-cli` side: applying N DISTINCT package SIDs and dropping
+        /// their guards must leave the DACL's ACE count exactly where it
+        /// started — proving the guard is a true per-SID apply/revoke round
+        /// trip at scale, not merely correct for a single SID in isolation.
+        #[test]
+        fn n_distinct_sink_sid_guards_leave_the_ace_count_where_it_started() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path();
+
+            let baseline_ace_count = current_dacl_ace_count(path);
+
+            let sids: Vec<String> = (0..8)
+                .map(|i| format!("S-1-15-2-100-200-300-400-500-600-700-{i}"))
+                .collect();
+
+            for sid in &sids {
+                ensure_broker_receipt_sink_guarded(path, Some(sid.as_str()))
+                    .unwrap_or_else(|e| panic!("guard must apply for {sid}: {e}"));
+                assert!(
+                    dacl_contains_deny_ace_for_sid(path, sid),
+                    "DENY ACE for {sid} must be present immediately after applying it"
+                );
+            }
+            assert_eq!(
+                current_dacl_ace_count(path),
+                baseline_ace_count + sids.len() as u32,
+                "the DACL must carry exactly one new ACE per distinct SID applied"
+            );
+
+            for sid in &sids {
+                drop(BrokerSinkSidGuard::new(path.to_path_buf(), sid.clone()));
+            }
+
+            for sid in &sids {
+                assert!(
+                    !dacl_contains_deny_ace_for_sid(path, sid),
+                    "DENY ACE for {sid} must be gone after its guard drops"
+                );
+            }
+            assert_eq!(
+                current_dacl_ace_count(path),
+                baseline_ace_count,
+                "CR-05 class assertion: N distinct SIDs applied then revoked must leave the \
+                 DACL's ACE count exactly where it started — never growing without bound"
             );
         }
     }

@@ -38,6 +38,11 @@ serde_json.workspace = true
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security",
+    # Phase 118 verifier gap-closure (CR-05, third producer): GetNamedSecurityInfoW /
+    # ConvertStringSidToSidW / SE_FILE_OBJECT, used by the `BrokerSinkSidGuard` test
+    # module's DACL-inspection helpers (mirrors `nono-cli`'s `receipt_sink.rs` test
+    # imports byte-for-byte).
+    "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
     "Win32_System_Threading",
     "Win32_System_Console",
