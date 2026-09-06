@@ -458,7 +458,9 @@ fn query_object_type_name(handle: HANDLE) -> Option<String> {
     }
 
     let u16_slice: Vec<u16> = buf[data_offset..]
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .take(char_count)
         .map(|b| u16::from_le_bytes([b[0], b[1]]))
         .collect();
