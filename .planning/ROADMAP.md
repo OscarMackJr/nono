@@ -39,7 +39,7 @@ Sequencing rationale: **115** drains the v3.6 findings first because DRAIN-03 cl
 - [x] **Phase 115: v3.6 Carry-Forward Drain** — 6/6 plans (2026-08-09)
 - [x] **Phase 116: Tool-Sandbox Divergence Audit + Disposition ADR** — 6/6 plans (2026-08-09)
 - [x] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 34/34 plans executed. Gap-closure round 3 EXECUTED 2026-08-11 (waves 12-14), closing CR-03 (BLOCKER) and WR-12..WR-21; D-37 implemented as the three-arm ancestor classification. Full suite 1624 passed / 12 failed = the 11 documented Windows-host baseline + **one intentional host-blocked test** (117-30's WR-20 pin needs an elevated/CI runner — `SeTakeOwnershipPrivilege` absent here, so WR-20 is authored-but-unverified). Code review ran to round 9; re-verified 2026-08-15 (117-VERIFICATION.md, status: human_needed): SC1/SC2 VERIFIED, SC3 ACCEPTED via operator override (still factually 10/13), SC4 VERIFIED with disclosed limits — its recording gap closed the same day by quick task 260815-b0s. One human item open: the WR-20 CI run.
-- [ ] **Phase 118: Per-Session Enforcement Receipts** — 0/10 plans
+- [x] **Phase 118: Per-Session Enforcement Receipts** — 10/10 plans (2026-09-06; 2 items open — see Progress)
 - [ ] **Phase 119: Security-Model Boundary Statement + State-of-the-Art Decision Log** — 0/? plans
 - [ ] **Phase 120: Tool-Sandbox Verdict Execution** — 0/? plans
 
@@ -466,6 +466,6 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
 | 115. v3.6 Carry-Forward Drain | v3.7 | 6/6 | Complete | 2026-08-09 |
 | 116. Tool-Sandbox Divergence Audit + Disposition ADR | v3.7 | 6/6 | Complete (verdict: formalize fork-native) | 2026-08-09 |
 | 117. Fail-Direction Contract + Startup Self-Attestation | v3.7 | 34/34 | Complete (SC3 via operator override; 1 human item open) | 2026-08-15 |
-| 118. Per-Session Enforcement Receipts | v3.7 | 0/10 | Planned (10 plans, 6 waves; ready to execute) | - |
+| 118. Per-Session Enforcement Receipts | v3.7 | 10/10 | Complete with 2 items OPEN — Task 3's human-verify gate FAILED and narrowed D-08 to write-integrity only (receipts are NOT read-confidential); code review found 6 Criticals, all fixed + re-verified; verifier 4/4 SC, status `human_needed`. OPEN: (a) CR-05 unfixed on `nono-shell-broker` (its package-SID DENY ACEs accumulate on the shared sink), (b) RCPT-02 requirement text says "HMAC-chained" but a KEYLESS SHA-256 chain shipped (D-25) — needs amendment or an accepted-divergence record | 2026-09-06 |
 | 119. Security-Model Boundary Statement + State-of-the-Art Decision Log | v3.7 | 0/? | Not started | - |
 | 120. Tool-Sandbox Verdict Execution | v3.7 | 0/? | Not started | - |
