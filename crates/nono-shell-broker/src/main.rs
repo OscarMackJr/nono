@@ -581,15 +581,51 @@ mod broker {
             .iter()
             .map(|&id| {
                 let name = format!("{id:?}");
-                let status = if not_applicable.contains(&name.as_str()) {
-                    nono::LayerAttestationStatus::NotApplicable
-                } else if required.contains(&name.as_str()) {
+                // Phase 118 review WR-02: `required` is checked BEFORE
+                // `not_applicable`, so an overlap between the two wire
+                // channels resolves in the RESTRICTIVE direction.
+                //
+                // The channels arrive as two independent, unvalidated env
+                // strings (`NONO_BROKER_REQUIRED_LAYERS` /
+                // `NONO_BROKER_NOT_APPLICABLE_LAYERS`). Their disjointness is
+                // guaranteed only on the PRODUCER side (`broker_role`'s
+                // partition, pinned by
+                // `broker_wire_contract_partitions_all_13_layer_ids_with_zero_overlap_or_gap`);
+                // this consumer previously took that on faith and, checking
+                // `not_applicable` first, would report a layer as
+                // `NotApplicable` — RCPT-03's "not expected in this
+                // configuration" — even when the same layer was ALSO named
+                // required and the broker's own resume gate treated it as
+                // must-be-`Confirmed`-or-terminate. That is precisely the
+                // misreading RCPT-03 exists to make impossible.
+                //
+                // Required-first yields the layer's PROBED status
+                // (`Confirmed`/`Unconfirmed`) rather than a claim about
+                // expectancy, so an overlapping name can never be read as
+                // attested-and-not-expected. The overlap itself is a
+                // malformed wire contract, so it is also surfaced — silently
+                // resolving it either way would hide a real defect (D-19: the
+                // supervisor attests; a contradictory census is never
+                // something to quietly normalise).
+                let overlapped =
+                    required.contains(&name.as_str()) && not_applicable.contains(&name.as_str());
+                if overlapped {
+                    tracing::warn!(
+                        layer = %name,
+                        "broker: layer appears on BOTH the required and not-applicable wire \
+                         channels — malformed contract; reporting its probed status rather than \
+                         NotApplicable (Phase 118 review WR-02)"
+                    );
+                }
+                let status = if required.contains(&name.as_str()) {
                     broker_required_row_status(
                         &name,
                         app_container_probe,
                         expected_app_container_sid,
                         integrity_probe,
                     )
+                } else if not_applicable.contains(&name.as_str()) {
+                    nono::LayerAttestationStatus::NotApplicable
                 } else {
                     nono::LayerAttestationStatus::Unconfirmed
                 };
@@ -2671,6 +2707,61 @@ mod broker {
                 .find(|r| r.id == nono::LayerId::MandatoryIntegrityLabel)
                 .unwrap();
             assert_eq!(row2.status, nono::LayerAttestationStatus::Unconfirmed);
+        }
+
+        /// Phase 118 review WR-02: when a layer name appears on BOTH wire
+        /// channels — a malformed contract this consumer cannot rule out,
+        /// since the two arrive as independent unvalidated env strings — the
+        /// census must resolve RESTRICTIVELY and report the layer's probed
+        /// status, never `NotApplicable`.
+        ///
+        /// RCPT-03 requires that an unattested layer can never be read as an
+        /// attested one. Reporting a required-but-unconfirmed layer as "not
+        /// expected in this configuration" is exactly that misreading, so
+        /// this pins the resolution order rather than trusting the producer's
+        /// partition to hold on the wire.
+        #[test]
+        fn overlapping_wire_channels_resolve_restrictively_never_not_applicable() {
+            // MandatoryIntegrityLabel on BOTH channels, with an integrity
+            // probe reporting MEDIUM (0x2000) — i.e. NOT the Low-IL the
+            // layer requires, so its honest probed status is `Unconfirmed`.
+            let census = broker_census(
+                "MandatoryIntegrityLabel",
+                "MandatoryIntegrityLabel",
+                &None,
+                None,
+                &Ok(0x2000),
+            );
+            let row = census
+                .iter()
+                .find(|r| r.id == nono::LayerId::MandatoryIntegrityLabel)
+                .expect("census must carry a row per LayerId");
+            assert_eq!(
+                row.status,
+                nono::LayerAttestationStatus::Unconfirmed,
+                "an overlapping layer must report its PROBED status; reporting NotApplicable \
+                 would let an unconfirmed layer read as 'not expected in this configuration' \
+                 (RCPT-03)"
+            );
+            assert_ne!(
+                row.status,
+                nono::LayerAttestationStatus::NotApplicable,
+                "NotApplicable on an overlap is the WR-02 defect"
+            );
+
+            // Control: not-applicable ALONE (no overlap) still resolves to
+            // NotApplicable, so the fix narrows only the overlap case and
+            // does not break the ordinary partitioned contract.
+            let clean = broker_census("", "MandatoryIntegrityLabel", &None, None, &Ok(0x2000));
+            let clean_row = clean
+                .iter()
+                .find(|r| r.id == nono::LayerId::MandatoryIntegrityLabel)
+                .expect("census must carry a row per LayerId");
+            assert_eq!(
+                clean_row.status,
+                nono::LayerAttestationStatus::NotApplicable,
+                "a cleanly-partitioned not-applicable layer must still report NotApplicable"
+            );
         }
 
         /// D-10/Plan 118-09: this crate's hand-rolled `BrokerReceiptRecord`
