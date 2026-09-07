@@ -621,6 +621,13 @@ fn windows_run_allows_supported_directory_allowlist_in_live_run() {
     std::fs::create_dir_all(&workspace).expect("mkdir workspace");
     let allowed = dir.path().to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
 
     let output = nono_bin()
         .args([
@@ -668,6 +675,13 @@ fn windows_run_read_only_allowlist_still_reads_inside_policy() {
     std::fs::write(&file, "hello from read-only run").expect("write file");
     let allowed = dir.path().to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
 
     let output = nono_bin()
         .args([
@@ -704,6 +718,13 @@ fn windows_run_read_only_allowlist_blocks_runtime_write_attempt() {
     std::fs::create_dir_all(&workspace).expect("mkdir workspace");
     let allowed = dir.path().to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
     let userprofile = std::env::var("USERPROFILE").expect("USERPROFILE");
     let probe_path = std::path::Path::new(&userprofile).join(format!(
         "nono-low-integrity-write-probe-{}.txt",
@@ -754,6 +775,13 @@ fn windows_run_redirects_temp_vars_into_writable_allowlist() {
     std::fs::create_dir_all(&workspace).expect("mkdir workspace");
     let allowed = dir.path().to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
 
     let output = nono_bin()
         .args([
@@ -810,6 +838,13 @@ fn windows_run_allow_all_network_probe_connects() {
     let probe_dir = probe.parent().expect("probe parent");
     let allowed = probe_dir.to_string_lossy().into_owned();
     let workdir = probe_dir.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
 
     let output = nono_bin()
         .args([
@@ -871,6 +906,13 @@ fn windows_run_block_net_blocks_probe_connection() {
     let probe_dir = probe.parent().expect("probe parent");
     let allowed = probe_dir.to_string_lossy().into_owned();
     let workdir = probe_dir.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
 
     let output = nono_bin()
         .args([
@@ -942,6 +984,13 @@ fn windows_run_block_net_cleans_up_promoted_wfp_filters_after_exit() {
     let probe_dir = probe.parent().expect("probe parent");
     let allowed = probe_dir.to_string_lossy().into_owned();
     let workdir = probe_dir.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
 
     let blocked_output = nono_bin()
         .args([
@@ -1044,6 +1093,13 @@ fn windows_run_block_net_blocks_probe_connection_through_cmd_host() {
     let probe_dir = probe.parent().expect("probe parent");
     let allowed = probe_dir.to_string_lossy().into_owned();
     let workdir = probe_dir.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
     let probe_text = probe.to_string_lossy().into_owned();
 
     let output = nono_bin()
@@ -1096,6 +1152,13 @@ fn windows_run_prefers_managed_low_integrity_runtime_root_inside_allowlist() {
     std::fs::create_dir_all(&workspace).expect("mkdir workspace");
     let allowed = dir.path().to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
 
     let output = nono_bin()
         .args([
@@ -1168,6 +1231,13 @@ fn windows_run_redirects_profile_state_vars_into_writable_allowlist() {
     std::fs::create_dir_all(&workspace).expect("mkdir workspace");
     let allowed = dir.path().to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
 
     let output = nono_bin()
         .args([
@@ -1485,6 +1555,13 @@ fn windows_run_allows_cmd_write_into_redirected_tmp_runtime_dir() {
 
     let allowed = dir.path().to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
 
     let output = nono_bin()
         .args([
@@ -1543,6 +1620,13 @@ fn windows_run_ignores_unverified_localappdata_override_when_runtime_root_is_ver
 
     let allowed = dir.path().to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
 
     let output = nono_bin()
         .env("LOCALAPPDATA", &fake_localappdata)
@@ -1585,6 +1669,13 @@ fn windows_run_blocks_workspace_write_even_with_writable_allowlist() {
     std::fs::create_dir_all(&workspace).expect("mkdir workspace");
     let allowed = dir.path().to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
 
     let output = nono_bin()
         .args([
@@ -1638,6 +1729,13 @@ fn windows_run_allows_direct_write_inside_low_integrity_allowlisted_dir() {
 
     let allowed = workspace.to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
 
     let output = nono_bin()
         .args([
@@ -1712,6 +1810,13 @@ fn windows_run_allows_direct_write_inside_locallow_allowlisted_dir() {
 
     let allowed = workspace.to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
 
     let output = nono_bin()
         .args([
@@ -1763,6 +1868,13 @@ fn windows_run_allows_direct_write_inside_dynamically_labeled_low_integrity_dir(
 
     let allowed = workspace.to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
 
     let output = nono_bin()
         .args([
@@ -1810,6 +1922,13 @@ fn windows_run_allows_cmd_type_for_relative_file_inside_allowlist() {
 
     let allowed = dir.path().to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
 
     let output = nono_bin()
         .args([
@@ -1851,6 +1970,13 @@ fn windows_run_blocks_cmd_copy_to_absolute_destination_outside_allowlist() {
 
     let allowed = allowed_dir.path().to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
     let outside_dest = outside_dest.to_string_lossy().into_owned();
 
     let output = nono_bin()
@@ -1893,6 +2019,13 @@ fn windows_run_allows_powershell_get_content_inside_allowlist() {
 
     let allowed = dir.path().to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
 
     let output = nono_bin()
         .args([
@@ -1935,6 +2068,13 @@ fn windows_run_allows_powershell_copy_into_redirected_tmp_runtime_dir() {
 
     let allowed = dir.path().to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
 
     let output = nono_bin()
         .args([
@@ -1989,6 +2129,13 @@ fn windows_run_allows_findstr_inside_allowlist() {
 
     let allowed = dir.path().to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
 
     let output = nono_bin()
         .args([
@@ -2030,6 +2177,13 @@ fn windows_run_blocks_xcopy_destination_outside_allowlist() {
 
     let allowed = allowed_dir.path().to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
     let outside_dest = outside_dest.to_string_lossy().into_owned();
 
     let output = nono_bin()
@@ -2073,6 +2227,13 @@ fn windows_run_blocks_comp_file_outside_allowlist() {
 
     let allowed = allowed_dir.path().to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
     let outside = outside.to_string_lossy().into_owned();
 
     let output = nono_bin()
@@ -2115,6 +2276,13 @@ fn windows_run_blocks_fc_file_outside_allowlist() {
 
     let allowed = allowed_dir.path().to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
     let outside = outside.to_string_lossy().into_owned();
 
     let output = nono_bin()
@@ -2169,6 +2337,13 @@ dest.Close
 
     let allowed = allowed_dir.path().to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
     let outside_dest = outside_dest.to_string_lossy().into_owned();
 
     let output = nono_bin()
@@ -2212,6 +2387,13 @@ fn windows_run_blocks_powershell_copy_to_absolute_destination_outside_allowlist(
 
     let allowed = allowed_dir.path().to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
     let command = format!(
         "Copy-Item source.txt -Destination '{}'",
         outside_dest.to_string_lossy()
@@ -2250,6 +2432,13 @@ fn windows_run_blocks_directory_allowlist_when_workdir_is_outside_supported_subs
     let workdir_dir = tempfile::tempdir().expect("workdir tmpdir");
     let allowed = allowed_dir.path().to_string_lossy().into_owned();
     let workdir = workdir_dir.path().to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
 
     let output = nono_bin()
         .args([
@@ -2290,6 +2479,13 @@ fn windows_run_blocks_absolute_path_argument_outside_allowlist() {
 
     let allowed = allowed_dir.path().to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
     let outside_file = outside_file.to_string_lossy().into_owned();
 
     let output = nono_bin()
@@ -2329,6 +2525,13 @@ fn windows_run_blocks_cmd_type_for_absolute_file_outside_allowlist() {
 
     let allowed = allowed_dir.path().to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
     let outside_file = outside_file.to_string_lossy().into_owned();
 
     let output = nono_bin()
@@ -2379,6 +2582,13 @@ fn windows_run_propagates_child_exit_code() {
 fn windows_run_honors_workdir() {
     let dir = tempfile::tempdir().expect("tmpdir");
     let workdir = dir.path().to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
 
     let output = nono_bin()
         .args(["run", "--workdir", &workdir, "--", "cmd", "/c", "cd"])
@@ -3028,6 +3238,13 @@ fn windows_run_supervised_rollback_executes_command() {
     std::fs::create_dir_all(&rollback_dest).expect("mkdir rollback dest");
     let allowed = dir.path().to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
     let rollback_dest = rollback_dest.to_string_lossy().into_owned();
 
     let output = nono_bin()
@@ -3109,6 +3326,13 @@ fn windows_run_supervised_rollback_block_net_uses_promoted_wfp_backend() {
     std::fs::create_dir_all(&rollback_dest).expect("mkdir rollback dest");
     let allowed = dir.path().to_string_lossy().into_owned();
     let workdir = workspace.to_string_lossy().into_owned();
+    // R-B3 (260907): the elevated windows-latest runner creates objects owned
+    // by BUILTIN\Administrators, not the runner user, so nono's WRITE_OWNER
+    // gate refuses this workspace. Windows does NOT inherit owner from the
+    // parent directory -- it comes from the creating token's default owner --
+    // so owning %TEMP% cannot fix this; it must be per-fixture. Same remedy
+    // 260815-gfd applied to its 15 tests. No-op on a non-elevated dev host.
+    common::take_ownership_for_current_user(std::path::Path::new(&workdir));
     let rollback_dest = rollback_dest.to_string_lossy().into_owned();
     let probe = probe.to_string_lossy().into_owned();
 
