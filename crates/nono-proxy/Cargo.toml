@@ -30,7 +30,8 @@ name = "nono_proxy"
 
 [features]
 default = ["system-keyring"]
-# Enables OS system keyring access (macOS Keychain / Linux Secret Service).
+# Enables OS system keyring access (macOS Keychain / Windows Credential Manager
+# / Linux kernel keyutils). Delegates entirely to nono; no direct keyring dep.
 # Headless/container consumers opt out with default-features = false.
 system-keyring = ["nono/system-keyring"]
 

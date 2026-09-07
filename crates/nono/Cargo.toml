@@ -27,7 +27,9 @@ name = "nono"
 
 [features]
 default = ["system-keyring"]
-# Enables OS system keyring access (macOS Keychain / Linux Secret Service).
+# Enables OS system keyring access (macOS Keychain / Windows Credential Manager
+# / Linux kernel keyutils). Linux is NOT Secret Service — see the linux target
+# table below and 260907-arx.
 # Headless/container consumers opt out with default-features = false.
 system-keyring = ["dep:keyring"]
 
@@ -75,7 +77,12 @@ der = { version = "0.7", default-features = false }
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = { workspace = true }
 nix = { workspace = true, features = ["fs", "user"] }
-keyring = { version = "3", features = ["sync-secret-service"], optional = true }
+# linux-native = kernel keyutils (linux-keyutils), NOT Secret Service.
+# Chosen 260907-arx: sync-secret-service pulls dbus-secret-service -> libdbus-sys,
+# a C library that made the release binary link libdbus-1 and fail the
+# cross-compile job's own portability guard. See that task's SUMMARY for the
+# persistence trade-off this accepts.
+keyring = { version = "3", features = ["linux-native"], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 nix = { workspace = true, features = ["fs", "user"] }

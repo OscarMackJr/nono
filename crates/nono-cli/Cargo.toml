@@ -36,8 +36,10 @@ path = "src/bin/nono-agentd.rs"
 
 [features]
 default = ["system-keyring"]
-# Enables OS system keyring access (macOS Keychain / Linux Secret Service).
-# Disable this for headless/container environments without libdbus.
+# Enables OS system keyring access (macOS Keychain / Windows Credential Manager
+# / Linux kernel keyutils). Linux is NOT Secret Service — see 260907-arx.
+# As of that change nothing here links libdbus, so the old "disable this for
+# headless/container environments without libdbus" advice no longer applies.
 # Controls keyring for nono-cli, nono, and nono-proxy in one flag.
 system-keyring = ["dep:keyring", "nono/system-keyring", "nono-proxy/system-keyring"]
 # Enables test-only trust root overrides used by the integration harness.
@@ -151,7 +153,10 @@ shlex = "1"
 nix = { workspace = true, features = ["process", "signal", "fs", "user", "term", "resource"] }
 landlock = { workspace = true }
 dns-lookup = "2"
-keyring = { version = "3", features = ["sync-secret-service"], optional = true }
+# linux-native = kernel keyutils (linux-keyutils), NOT Secret Service.
+# Must stay in lockstep with crates/nono/Cargo.toml's linux keyring feature —
+# two different backends in one process would be a silent split-brain store.
+keyring = { version = "3", features = ["linux-native"], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 nix = { workspace = true, features = ["process", "signal", "fs", "user", "term", "resource"] }

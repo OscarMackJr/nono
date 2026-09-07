@@ -1,27 +1,25 @@
 # cross-rs configuration for cross-compilation
 # https://github.com/cross-rs/cross/wiki/Configuration
 #
-# The aarch64-unknown-linux-gnu image is x86_64 with aarch64 cross-compiler;
-# we must install libdbus for arm64, not the host (x86_64).
-
-[target.aarch64-unknown-linux-gnu]
-# Install aarch64 libdbus so the cross-linker can find -ldbus-1
-pre-build = [
-    "dpkg --add-architecture arm64",
-    "sh -c 'apt-get update && apt-get install -y --no-install-recommends libdbus-1-dev:arm64 && apt-get clean && rm -rf /var/lib/apt/lists/*'",
-]
-# Point linker and pkg-config at aarch64 libs (installed under /usr/lib/aarch64-linux-gnu)
-[target.aarch64-unknown-linux-gnu.env]
-passthrough = [
-    "LIBRARY_PATH=/usr/lib/aarch64-linux-gnu",
-    "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig",
-]
-
-# The x86_64-unknown-linux-gnu image runs native on x86_64; install libdbus-1-dev
-# so the keyring crate's sync-secret-service feature (gated on Linux) can link
-# against dbus-1.pc via pkg-config. Required for Phase 50 cross-target clippy
-# HARD pass (D-50-13 + Codex R-50-04).
-[target.x86_64-unknown-linux-gnu]
-pre-build = [
-    "sh -c 'apt-get update && apt-get install -y --no-install-recommends libdbus-1-dev pkg-config && apt-get clean && rm -rf /var/lib/apt/lists/*'",
-]
+# INTENTIONALLY EMPTY of pre-build steps as of quick task 260907-arx.
+#
+# This file previously did exactly one thing: install libdbus-1-dev into both
+# Linux images (plus the arm64 multiarch dance and PKG_CONFIG_PATH/LIBRARY_PATH
+# passthrough for aarch64) so that the `keyring` crate's `sync-secret-service`
+# feature could link against `dbus-1.pc`. That was D-50-13 / Codex R-50-04,
+# required at the time for a Phase 50 cross-target clippy HARD pass.
+#
+# The operator has since moved the Linux keyring backend to `linux-native`
+# (kernel keyutils). `libdbus-sys`, `dbus-secret-service`, `dbus` and
+# `pkg-config` are all gone from the Linux dependency graph -- verified with
+# `cargo tree --target x86_64-unknown-linux-gnu -p nono-sandbox-cli -i
+# libdbus-sys`, which now reports no such package. So the provisioning this file
+# existed to perform has nothing left to provision.
+#
+# The rationale is recorded here rather than the file being deleted, because a
+# silently absent Cross.toml would leave the next reader unable to tell "we never
+# needed one" from "someone removed it by mistake". If a future dependency does
+# need a system library in the cross image, add a `[target.<triple>] pre-build`
+# block here and say which crate needs it and why -- the failure mode this whole
+# episode came from was a provisioning step whose stated reason had quietly
+# stopped being true.
