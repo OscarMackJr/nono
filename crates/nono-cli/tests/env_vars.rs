@@ -535,7 +535,21 @@ fn windows_dry_run_reports_sandbox_validation() {
 #[cfg(target_os = "windows")]
 #[test]
 fn windows_run_executes_basic_command() {
+    // The workspace is the child CWD (D-06), and nono's R-B3 gate refuses to
+    // start when the current user lacks WRITE_OWNER on it. Inheriting this
+    // process's CWD means the repo checkout, which on the elevated
+    // `windows-latest` runner is owned by BUILTIN\Administrators -> the gate
+    // fires and the run never happens. That is the gate working correctly, not
+    // a product defect, so the fix belongs here.
+    //
+    // A bare tempdir is NOT sufficient: under elevation a freshly created
+    // directory is *also* Administrators-owned. Take ownership explicitly,
+    // which is the remedy R-B3's own error text recommends.
+    let workspace = tempfile::tempdir().expect("workspace tmpdir");
+    common::take_ownership_for_current_user(workspace.path());
+
     let output = nono_bin()
+        .current_dir(workspace.path())
         .args(["run", "--", "cmd", "/c", "echo", "hello"])
         .output()
         .expect("failed to run nono");
