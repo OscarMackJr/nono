@@ -677,6 +677,14 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
         with:
+          # PINNED — keep in lockstep with /rust-toolchain.toml (see its header).
+          # This step has no literal `toolchain: stable` to grep for, which is how
+          # it was missed when c18e93db pinned the other 13 sites. Omitting the
+          # input does NOT fall through to rust-toolchain.toml — the action
+          # defaults it to `stable`, so rustup would add `targets` to stable while
+          # cargo builds with the pinned channel, and any non-native target fails
+          # with `E0463: can't find crate for core`.
+          toolchain: "1.98.1"
           targets: ${{ matrix.target }}
 
       - name: Install cross (Linux ARM64)
