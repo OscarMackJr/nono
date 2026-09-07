@@ -117,13 +117,39 @@ function Invoke-LoggedCommand {
     $logPath = Join-Path $LogDir $LogFile
     "==> $Label" | Tee-Object -FilePath $logPath -Append
     $capturePath = Join-Path $LogDir ([System.Guid]::NewGuid().ToString() + ".tmp")
+
+    # $LASTEXITCODE is set ONLY by native executables. A scriptblock whose last
+    # statement is a cmdlet or a .ps1 invocation leaves it untouched -- $null on
+    # a fresh shell, or STALE from some earlier native call -- and in PowerShell
+    # `$null -ne 0` evaluates to TRUE. So this check used to throw on a command
+    # that had SUCCEEDED. CI run 34136554776's Windows Build printed
+    # "Validated Windows MSI contract for machine and user scopes." and then died
+    # with "Command failed for validate windows msi contract with exit code "
+    # -- note the EMPTY code, which is the tell. It was unreachable until now
+    # only because build-windows-msi.ps1 threw on the missing POC cert first.
+    #
+    # Same $LASTEXITCODE confusion as quick task 260815-f2x, inverted: that one
+    # was fail-OPEN (a job reporting success while its own log said
+    # "22 failed"); this is fail-CLOSED. Both come from treating $LASTEXITCODE as
+    # if it described the last STATEMENT rather than the last NATIVE process.
+    #
+    # Clear it first so a stale value cannot leak in, and use explicit $global:
+    # scoping: a bare `$LASTEXITCODE = ...` inside a function creates a LOCAL
+    # shadow that the native command never updates, which would silently defeat
+    # the reset.
+    $global:LASTEXITCODE = $null
     & $Command *> $capturePath
+    # Capture both verdicts IMMEDIATELY -- the Tee/Get-Content below would
+    # clobber $? before it could be read.
+    $commandSucceeded = $?
+    $commandExitCode = $global:LASTEXITCODE
+
     if (Test-Path $capturePath) {
         Get-Content $capturePath | Tee-Object -FilePath $logPath -Append
         Remove-Item -LiteralPath $capturePath -Force
     }
-    if ($LASTEXITCODE -ne 0) {
-        throw "Command failed for $Label with exit code $LASTEXITCODE"
+    if ((-not $commandSucceeded) -or ($null -ne $commandExitCode -and $commandExitCode -ne 0)) {
+        throw "Command failed for $Label (succeeded=$commandSucceeded, native exit code '$commandExitCode')"
     }
     "" | Tee-Object -FilePath $logPath -Append | Out-Null
 }
