@@ -1232,9 +1232,112 @@ pub fn path_has_write_owner(path: &Path) -> Result<bool> {
     path_is_owned_by_current_user(path)
 }
 
+/// Resolve the machine-wide `ProgramData` directory from the OS, **not** from
+/// the process environment.
+///
+/// # Why this exists
+///
+/// `%PROGRAMDATA%` is an ordinary environment variable: any process can set it
+/// to any path before spawning a child, so a value read from the environment is
+/// attacker-controlled input, not a fact about the machine.
+/// `SHGetKnownFolderPath(FOLDERID_ProgramData)` reads the registry-backed
+/// known-folder table instead, which an unprivileged user cannot rewrite. A
+/// caller that must be certain it is looking at the real machine-wide root
+/// compares its candidate against this value.
+///
+/// `KF_FLAG_DEFAULT` (0) and a null `htoken` are deliberate: resolve for the
+/// current user's context without forcing creation of the folder.
+///
+/// # Errors
+///
+/// * [`NonoError::LabelApplyFailed`] if `SHGetKnownFolderPath` fails or returns
+///   a null/empty path. Never falls back to an environment value — the whole
+///   point is to avoid one (fail-closed).
+#[must_use = "the resolved known-folder path must be acted upon"]
+pub fn known_folder_program_data() -> Result<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::UI::Shell::{FOLDERID_ProgramData, SHGetKnownFolderPath};
+
+    let mut raw: windows_sys::core::PWSTR = std::ptr::null_mut();
+    let hr = unsafe {
+        // SAFETY: `FOLDERID_ProgramData` is a 'static GUID constant; `raw` is a
+        // valid out-pointer to live local storage. A null `htoken` means "the
+        // current user". The callee allocates with CoTaskMemAlloc and we free
+        // with CoTaskMemFree below on every exit path.
+        SHGetKnownFolderPath(
+            &FOLDERID_ProgramData,
+            0, // KF_FLAG_DEFAULT — resolve only, do not create
+            std::ptr::null_mut(),
+            &mut raw,
+        )
+    };
+
+    // Free the COM allocation on every path, including the error paths.
+    struct OwnedCoTaskMem(windows_sys::core::PWSTR);
+    impl Drop for OwnedCoTaskMem {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe {
+                    // SAFETY: `self.0` was allocated by SHGetKnownFolderPath via
+                    // CoTaskMemAlloc and is freed exactly once here.
+                    CoTaskMemFree(self.0.cast());
+                }
+            }
+        }
+    }
+    let guard = OwnedCoTaskMem(raw);
+
+    if hr < 0 || guard.0.is_null() {
+        return Err(NonoError::LabelApplyFailed {
+            path: PathBuf::new(),
+            hresult: hr as u32,
+            hint: format!(
+                "SHGetKnownFolderPath(FOLDERID_ProgramData) failed with HRESULT 0x{:08X} — \
+                 refusing to fall back to the %PROGRAMDATA% environment variable, which is \
+                 attacker-controlled",
+                hr as u32
+            ),
+        });
+    }
+
+    // SAFETY: `guard.0` is a non-null, nul-terminated UTF-16 string owned by the
+    // guard for the duration of this borrow.
+    let len = unsafe {
+        let mut n = 0usize;
+        while *guard.0.add(n) != 0 {
+            n += 1;
+        }
+        n
+    };
+    // SAFETY: `len` is the exact element count before the nul terminator.
+    let wide = unsafe { std::slice::from_raw_parts(guard.0, len) };
+    let resolved = PathBuf::from(std::ffi::OsString::from_wide(wide));
+
+    if resolved.as_os_str().is_empty() {
+        return Err(NonoError::LabelApplyFailed {
+            path: PathBuf::new(),
+            hresult: 0,
+            hint: "SHGetKnownFolderPath(FOLDERID_ProgramData) returned an empty path".to_string(),
+        });
+    }
+    Ok(resolved)
+}
+
 /// Returns `Ok(true)` if `path`'s NTFS owner SID equals the current process
 /// user SID; `Ok(false)` otherwise. Returns `Err(NonoError::LabelApplyFailed)`
 /// if the owner cannot be read or the current-user token cannot be queried.
+///
+/// # Scope limit — read this before reusing it
+///
+/// This answers "does the current token's USER SID equal the owner SID", which
+/// is a sound `WRITE_OWNER` proxy **on standard, non-elevated accounts** — its
+/// original and intended use. It is NOT a general "did a user create this"
+/// test: under elevation the default owner of newly created objects is
+/// `BUILTIN\Administrators`, not the user SID, so a directory the operator just
+/// created reads as *not* current-user-owned. Callers asking "is this path a
+/// user-controlled redirection?" cannot use this alone; see
+/// [`known_folder_program_data`].
 ///
 /// # Why
 ///

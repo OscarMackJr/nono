@@ -317,23 +317,36 @@ const RECEIPT_SINK_LABEL_MASK: u32 =
 /// and FAILS CLOSED (`Err`, never a silent fallback to the untrusted value)
 /// when validation does not hold:
 ///
-/// - the resolved base must be an absolute path, and
-/// - the resolved base must NOT be owned by the current (invoking) user.
-///   The real, machine-wide `%ProgramData%` root is provisioned by the OS
-///   installer and is owned by a system principal, never by an ordinary
-///   interactive user — [`nono::path_is_owned_by_current_user`] is the same
-///   ownership-equality primitive `try_set_mandatory_label`'s own
-///   `WRITE_OWNER` check already relies on for this exact class of decision.
-///   A directory the CURRENT user owns is, by definition, one that user (or
-///   any process running as them) could have created themselves — exactly
-///   the redirection this check exists to catch.
+/// - the resolved base must be an absolute path,
+/// - the resolved base must BE the OS-resolved machine-wide ProgramData root
+///   ([`nono::known_folder_program_data`], i.e.
+///   `SHGetKnownFolderPath(FOLDERID_ProgramData)`), compared after canonicalizing
+///   both sides, and
+/// - as defense in depth, the resolved base must NOT be owned by the current
+///   (invoking) user.
 ///
-/// This is the documented, review-sanctioned alternative to resolving the
-/// path via `SHGetKnownFolderPath(FOLDERID_ProgramData)`: it requires no new
-/// FFI surface, reuses an existing core primitive, and still converts a
-/// user-controlled input into a fail-closed decision rather than a silently
-/// accepted redirection. Widening this to a true OS-sourced resolution
-/// remains available as a future hardening step.
+/// # History — why the ownership check is no longer the primary test
+///
+/// Until quick task `260906-q7n` the ownership check was the ONLY test, with a
+/// documented rationale that read:
+///
+/// > A directory the CURRENT user owns is, by definition, one that user (or any
+/// > process running as them) could have created themselves — exactly the
+/// > redirection this check exists to catch.
+///
+/// That reasoning has an unstated premise: *a redirection target will be
+/// current-user-owned*. CI falsified it. `path_is_owned_by_current_user`
+/// compares against the token USER SID, and under elevation the default owner
+/// of newly created objects is `BUILTIN\Administrators` — so a redirect made by
+/// an elevated process is not current-user-owned and passed straight through.
+/// The `windows-layer-fault-injection` job caught it live: a `tempdir()`
+/// standing in for a hostile redirect returned `Ok`, not `Err`.
+///
+/// The predicate covered only the non-elevated subset of the class it claimed
+/// to cover. `SHGetKnownFolderPath` was named in the original review as "a
+/// future hardening step"; that step is now taken, because the environment
+/// variable is attacker-controlled input and the known-folder table is not.
+/// The ownership check is retained below it as a second, independent signal.
 ///
 /// # Errors
 ///
@@ -361,6 +374,36 @@ fn validate_and_join_sink_base(base: PathBuf) -> Result<PathBuf> {
             base.display()
         )));
     }
+    // PRIMARY CHECK (260906-q7n): the candidate must BE the OS-resolved
+    // machine-wide ProgramData root. `%PROGRAMDATA%` is an ordinary environment
+    // variable and therefore attacker-controlled; `SHGetKnownFolderPath` reads
+    // the registry-backed known-folder table, which an unprivileged user cannot
+    // rewrite. Comparing against it is what actually answers "has this been
+    // redirected?".
+    let known = nono::known_folder_program_data().map_err(|e| {
+        NonoError::Snapshot(format!(
+            "receipt_sink: could not resolve the machine-wide ProgramData root from the OS: {e} \
+             — refusing to fall back to the %PROGRAMDATA% environment variable"
+        ))
+    })?;
+    if !same_existing_dir(&base, &known)? {
+        return Err(NonoError::Snapshot(format!(
+            "receipt_sink: %PROGRAMDATA% ({}) is not the OS-resolved machine-wide ProgramData \
+             root ({}) — a user-set environment variable would silently relocate the receipt \
+             sink and defeat the admin-only RequireReceipts control; refusing to write receipts \
+             there",
+            base.display(),
+            known.display()
+        )));
+    }
+
+    // SECONDARY CHECK (defense in depth): the real root is provisioned by the OS
+    // installer and owned by a system principal. This is deliberately NOT the
+    // primary test — see `path_is_owned_by_current_user`'s scope-limit note: it
+    // compares against the token USER SID, and under elevation newly created
+    // objects are owned by BUILTIN\Administrators, so a redirect made by an
+    // elevated process reads as "not current-user-owned" and slips through. It
+    // was the sole check until 260906-q7n and CI proved that gap live.
     let owned_by_current_user = nono::path_is_owned_by_current_user(&base).map_err(|e| {
         NonoError::Snapshot(format!(
             "receipt_sink: could not determine the owner of %PROGRAMDATA% ({}): {e} — refusing \
@@ -378,6 +421,34 @@ fn validate_and_join_sink_base(base: PathBuf) -> Result<PathBuf> {
         )));
     }
     Ok(base.join("nono").join(RECEIPT_SINK_DIRNAME))
+}
+
+/// Compare two directory paths for identity, resolving links and 8.3 short
+/// names so cosmetic spelling differences cannot be mistaken for a redirection
+/// (and, more importantly, so a redirection cannot be disguised as a match).
+///
+/// Uses `std::fs::canonicalize` on BOTH sides rather than string comparison:
+/// CLAUDE.md's path rule forbids string operations on paths, and the CI runner
+/// resolves `%PROGRAMDATA%` through a short-name form (`C:\Users\RUNNER~1\...`)
+/// that a byte comparison would spuriously reject.
+///
+/// Fail-closed: if either side cannot be canonicalized, that is an `Err`, never
+/// a `false`-that-looks-like-a-mismatch or a `true`-that-waves-it-through.
+fn same_existing_dir(a: &Path, b: &Path) -> Result<bool> {
+    let ca = std::fs::canonicalize(a).map_err(|e| {
+        NonoError::Snapshot(format!(
+            "receipt_sink: cannot canonicalize {} for comparison against the OS-resolved \
+             ProgramData root: {e}",
+            a.display()
+        ))
+    })?;
+    let cb = std::fs::canonicalize(b).map_err(|e| {
+        NonoError::Snapshot(format!(
+            "receipt_sink: cannot canonicalize the OS-resolved ProgramData root {}: {e}",
+            b.display()
+        ))
+    })?;
+    Ok(ca == cb)
 }
 
 /// The VALIDATED machine-wide `%ProgramData%` base — i.e. exactly what
@@ -946,15 +1017,53 @@ mod tests {
     /// Phase 118 review CR-04: a user-owned directory standing in for a
     /// hostile `%PROGRAMDATA%` redirection (`set
     /// PROGRAMDATA=C:\Users\me\fake`) must be REJECTED, not silently
-    /// accepted. `tempdir()` creates a directory owned by the current test
-    /// process's user — exactly the ownership shape a redirected
-    /// `%PROGRAMDATA%` would have, and exactly what
-    /// `nono::path_is_owned_by_current_user` is checking for.
+    /// accepted.
+    ///
+    /// A `tempdir()` is not the OS-resolved ProgramData root, so it must be
+    /// refused. This holds regardless of who owns it — which is the point of
+    /// `260906-q7n`. The previous version of this test relied on the tempdir
+    /// being *current-user-owned*, and that premise fails under elevation
+    /// (`BUILTIN\Administrators` owns newly created objects), which is exactly
+    /// how CI caught the guard passing a hostile base.
     #[test]
-    fn validate_and_join_sink_base_rejects_a_user_owned_redirection() {
+    fn validate_and_join_sink_base_rejects_a_redirection() {
         let dir = tempdir().expect("tempdir");
         let err = validate_and_join_sink_base(dir.path().to_path_buf())
-            .expect_err("a user-owned base must be rejected as a redirection signal");
+            .expect_err("a base that is not the OS-resolved ProgramData root must be rejected");
+        assert!(matches!(err, NonoError::Snapshot(_)));
+    }
+
+    /// The positive half: the genuine OS-resolved root must be ACCEPTED, and
+    /// must join to `<ProgramData>\nono\receipts`.
+    ///
+    /// Without this, a guard that rejected everything unconditionally would
+    /// satisfy every other test in this module — the rejection tests alone
+    /// cannot tell "correctly discriminating" from "broken shut".
+    #[test]
+    fn validate_and_join_sink_base_accepts_the_os_resolved_root() {
+        let known = nono::known_folder_program_data().expect("OS must resolve ProgramData");
+        let joined = validate_and_join_sink_base(known.clone())
+            .expect("the genuine OS-resolved ProgramData root must be accepted");
+        assert_eq!(joined, known.join("nono").join(RECEIPT_SINK_DIRNAME));
+    }
+
+    /// An elevation-independent restatement of the CI failure: a base that is
+    /// NOT the known root is refused even when it is not current-user-owned.
+    /// `C:\Windows` is owned by TrustedInstaller/SYSTEM on every Windows host,
+    /// so the old ownership-only predicate would have waved it through.
+    #[test]
+    fn validate_and_join_sink_base_rejects_a_system_owned_non_root() {
+        let system_owned = PathBuf::from(r"C:\Windows");
+        if !system_owned.is_dir() {
+            return; // not a standard Windows layout; nothing to assert
+        }
+        assert!(
+            !nono::path_is_owned_by_current_user(&system_owned).unwrap_or(true),
+            "precondition: C:\\Windows must not be current-user-owned, else this test proves nothing"
+        );
+        let err = validate_and_join_sink_base(system_owned).expect_err(
+            "a system-owned directory that is not the ProgramData root must still be rejected",
+        );
         assert!(matches!(err, NonoError::Snapshot(_)));
     }
 
