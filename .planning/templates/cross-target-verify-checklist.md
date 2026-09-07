@@ -48,9 +48,47 @@ This is the canonical apple-darwin invocation. **Use the direct-binary `cargo-zi
 
 **NEVER:** Flip a Unix-touching REQ to VERIFIED based solely on `cargo check --workspace` from a Windows host. `cargo check` does not run clippy, does not enforce `-D warnings`, and does not exercise the Unix-cfg-gated code paths that CI's Linux/macOS clippy lanes do. Windows-host `cargo clippy` (no `--target`, or `--target x86_64-pc-windows-*`) is also NOT a substitute — it only exercises the Windows cfg branches and is structurally blind to `#[cfg(target_os = "linux")]` / `#[cfg(target_os = "macos")]` drift.
 
-## Cross-Toolchain Setup (one-time)
+## Cross-Toolchain Setup (one-time **per toolchain**, not per host)
 
-Both rustup std targets are already added on this host (`x86_64-unknown-linux-gnu`, `x86_64-apple-darwin`); `rustup target add` is no longer the primary setup step. The real setup is the per-gate runner below.
+> ⚠️ **CORRECTED 2026-09-07 (quick task `260906-q7n`).** This section previously
+> read *"Both rustup std targets are already added on this host … `rustup target
+> add` is no longer the primary setup step."* **That is false, and it silently
+> disabled BOTH mandatory gates.**
+>
+> Installed targets are a property of a **toolchain**, not of the host.
+> `x86_64-apple-darwin` had been added under `stable`. When `c18e93db` landed
+> `rust-toolchain.toml` (channel `1.98.1`), every local `cargo` invocation
+> switched to 1.98.1 — which had **no** cross targets — and both gates broke in
+> two different ways that look nothing like each other:
+>
+> | Gate | Symptom after the pin |
+> |---|---|
+> | apple-darwin | `error[E0463]: can't find crate for 'core'` … *the `x86_64-apple-darwin` target may not be installed* |
+> | linux-gnu | `cross` tries to install **`1.98.1-x86_64-unknown-linux-gnu`** *on the Windows host* and fails: *"toolchain may not be able to run on this system"* |
+>
+> This is the same root cause as the ci.yml `E0463` fixed in `fd145089`: a
+> toolchain pin invalidates target installs that were made against a different
+> channel. **Whenever `rust-toolchain.toml`'s `channel` changes, re-run both
+> commands below against the new version** — otherwise the gates fail in a way
+> that reads like a toolchain bug rather than a setup gap.
+
+```bash
+# Keep <ver> in lockstep with rust-toolchain.toml's `channel`.
+# 1. apple-darwin std, for the cargo-zigbuild gate:
+rustup target add x86_64-apple-darwin --toolchain <ver>
+
+# 2. linux-gnu HOST toolchain, for `cross`. --force-non-host is required and
+#    correct: cross reads rust-toolchain.toml and wants <ver>-x86_64-unknown-linux-gnu
+#    present locally even though the actual compile happens inside the container.
+rustup toolchain add <ver>-x86_64-unknown-linux-gnu --profile minimal --force-non-host
+
+# 3. Verify (must list the target, not just succeed):
+rustup target list --toolchain <ver> --installed
+```
+
+Neither symptom above qualifies for PARTIAL — both are setup gaps with a
+one-command fix, exactly like a stopped Docker daemon. The real per-gate runner
+setup is below.
 
 ### linux-gnu runner — Docker + `cross`
 
