@@ -280,7 +280,9 @@ mod tests {
         // Canonicalize to resolve platform symlinks (e.g. macOS /var -> /private/var)
         // so that the protected root path matches the resolved capability path.
         let parent = tmp.path().canonicalize().expect("canonical tmpdir");
-        let protected = parent.join(".nono");
+        // Pre-resolve the root, per the contract -- see
+        // requested_path_blocks_nonexistent_child_under_protected_root.
+        let protected = resolve_path(&parent.join(".nono"));
 
         let mut caps = CapabilitySet::new();
         let cap = FsCapability::new_dir(&parent, AccessMode::ReadWrite).expect("dir cap");
@@ -298,9 +300,12 @@ mod tests {
     fn blocks_child_directory_capability() {
         let tmp = TempDir::new().expect("tmpdir");
         let canonical_tmp = tmp.path().canonicalize().expect("canonical tmpdir");
-        let protected = canonical_tmp.join(".nono");
-        let child = protected.join("rollbacks");
+        let protected_raw = canonical_tmp.join(".nono");
+        let child = protected_raw.join("rollbacks");
         std::fs::create_dir_all(&child).expect("mkdir");
+        // Pre-resolve the root, per the contract -- see
+        // requested_path_blocks_nonexistent_child_under_protected_root.
+        let protected = resolve_path(&protected_raw);
 
         let mut caps = CapabilitySet::new();
         let cap = FsCapability::new_dir(&child, AccessMode::ReadWrite).expect("dir cap");
@@ -328,9 +333,18 @@ mod tests {
     fn requested_path_blocks_nonexistent_child_under_protected_root() {
         let tmp = TempDir::new().expect("tmpdir");
         let canonical_tmp = tmp.path().canonicalize().expect("canonical tmpdir");
-        let protected = canonical_tmp.join(".nono");
-        std::fs::create_dir_all(&protected).expect("mkdir");
-        let child = protected.join("rollbacks").join("future-session");
+        let protected_raw = canonical_tmp.join(".nono");
+        std::fs::create_dir_all(&protected_raw).expect("mkdir");
+        let child = protected_raw.join("rollbacks").join("future-session");
+        // Protected roots must arrive ALREADY resolved -- see this function's
+        // doc: production builds them via ProtectedRoots::from_defaults ->
+        // resolve_path. Passing a raw `.canonicalize()` result is a contract
+        // violation on Windows, where canonicalize returns a `\\?\`-verbatim
+        // path while resolve_path STRIPS that prefix from the requested side.
+        // The two then disagree at the first component (`\\?\C:` vs `C:`),
+        // path_starts_with reports no overlap, and the guard returns Ok --
+        // failing OPEN. That is why this test was red on every Windows host.
+        let protected = resolve_path(&protected_raw);
 
         let err = validate_requested_path_against_protected_roots(
             &child,
