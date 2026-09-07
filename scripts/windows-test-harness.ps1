@@ -11,6 +11,51 @@ $PSNativeCommandUseErrorActionPreference = $false
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
+# ── R-B3 precondition: own the workspace before running any live `nono run` ──
+#
+# nono's R-B3 gate refuses to start when the current user lacks WRITE_OWNER on
+# the workspace (== the child CWD, D-06), because applying a mandatory integrity
+# label needs it. The gate is CORRECT; the problem is the environment. GitHub's
+# windows-latest runner is ELEVATED, so the checked-out tree is owned by
+# BUILTIN\Administrators rather than the runner user, and
+# `nono::path_is_owned_by_current_user` is a token-USER-SID equality test that
+# says "not yours". Every live supervised run then dies with:
+#
+#   R-B3: the current user lacks WRITE_OWNER (0x00080000) on the workspace:
+#   \\?\D:\a\nono\nono\crates\nono-cli
+#
+# This is fixed HERE, once, rather than in the ~60 tests in env_vars.rs that run
+# `nono` from the process CWD. Patching those individually is both large and
+# wrong: several (windows_run_honors_workdir, the relative-path allowlist tests)
+# depend on the inherited CWD by design, so forcing each into a tempdir would
+# break the thing they exist to test. The workspace is not a fixture any test
+# created -- it is the checkout -- so ownership belongs at the environment layer.
+# Placing it in the harness rather than in ci.yml means all three jobs that call
+# this script (smoke, integration, regression) are covered by one edit, and any
+# suite added later inherits it.
+#
+# `icacls /setowner` needs no privilege when the caller can already take
+# ownership -- the owner itself, or a member of the owning group, which is
+# exactly the elevated-runner case. Non-recursive on purpose: R-B3 inspects the
+# workspace DIRECTORY, not its contents, so /T would cost minutes over the whole
+# tree for no benefit.
+#
+# Fails LOUD. A silent no-op here would surface later as an R-B3 failure that
+# looks like a product defect rather than a setup gap.
+$repoRootForOwn = (Resolve-Path -LiteralPath $PSScriptRoot\..).Path
+$currentPrincipal = (whoami).Trim()
+if ([string]::IsNullOrWhiteSpace($currentPrincipal)) {
+    throw "R-B3 precondition: `whoami` returned nothing; cannot take workspace ownership."
+}
+foreach ($ownTarget in @($repoRootForOwn, (Join-Path $repoRootForOwn "crates\nono-cli"))) {
+    if (-not (Test-Path -LiteralPath $ownTarget)) { continue }
+    & icacls $ownTarget /setowner "$currentPrincipal" /Q | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "R-B3 precondition: icacls /setowner '$ownTarget' -> '$currentPrincipal' failed with exit $LASTEXITCODE."
+    }
+    Write-Host "R-B3 precondition: $currentPrincipal now owns $ownTarget"
+}
+
 function Invoke-LoggedCargo {
     param(
         [string]$LogFile,

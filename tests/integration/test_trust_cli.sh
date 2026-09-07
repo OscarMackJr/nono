@@ -491,8 +491,15 @@ run_test "file:// sign creates bundle" 0 test -f "$FILE_DIR/SKILLS.md.bundle"
 # dir, and `trust init --user` resolves its target through
 # trust_cmd.rs::user_trust_policy_path(), which honours that override. Verified
 # at trust_cmd.rs:66-67 -> :1677 rather than assumed.
+# --force is REQUIRED, and its absence is why the first version of this fix
+# failed in CI run 34136554776: line ~228 of this same suite already ran
+# `trust init --user --force --key "$KEY_ID"`, so the user policy exists by now
+# and a plain init exits 1 with "already exists (use --force to overwrite)".
+# Overwriting is correct here rather than merely safe -- the anchor set has to
+# name THIS section's file:// publisher, and nothing after this point references
+# $KEY_ID (checked: only $FILE_KEYREF appears in the remaining lines).
 expect_success "trust init --user creates the user-level anchor set" \
-    with_test_env "$NONO_BIN" trust init --user --include SKILLS.md --keyref "$FILE_KEYREF"
+    with_test_env "$NONO_BIN" trust init --user --force --include SKILLS.md --keyref "$FILE_KEYREF"
 
 expect_in_dir_success_contains "trust verify succeeds with file:// signed artifacts" "$FILE_DIR" "VERIFIED" \
     with_test_env "$NONO_BIN" trust verify SKILLS.md
