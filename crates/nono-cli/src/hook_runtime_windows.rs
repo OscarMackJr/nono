@@ -1109,9 +1109,24 @@ mod tests {
         take_ownership_of_script_and_parent(&script_path);
 
         // Build a SessionHook pointing at the script.
+        //
+        // 120s, not 30s (260907): this is a TEST fixture value, not the
+        // production hook timeout, and 30s was not measuring what the test is
+        // about. Locally this whole test completes in ~0.7s, but the elevated
+        // windows-latest runner timed out at 30s in run 34068950597 -- a cold
+        // PowerShell start (CLR load + module init) on a loaded CI host can
+        // exceed that on its own.
+        //
+        // The subject here is "does the CLR fail to start" (the env_clear /
+        // SystemRoot regression), which surfaces as a FAILED launch, not a slow
+        // one. A timeout tight enough to fire on a slow-but-successful start
+        // turns this into a flake that reports the opposite of the truth: it
+        // said "timed out, fail-closed" on a host where the CLR was in fact
+        // loading fine. The cost of the wider bound is only that a genuine hang
+        // takes longer to report.
         let hook = profile::SessionHook {
             script: script_path.clone(),
-            timeout_secs: Some(30),
+            timeout_secs: Some(120),
             source_pack: None,
         };
 
