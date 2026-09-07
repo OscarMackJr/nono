@@ -227,21 +227,54 @@ $msiPath = Join-Path $outputFullPath $packageName
 #                       During upgrade, the new version's install re-creates the entry.
 #   Wait="yes"        - Each SCM operation is synchronous; MSI sequence waits for completion.
 # Phase 82 Plan 01: resolve the POC cert paths for machine-scope MSI.
-# The DER .cer (certutil/CryptoAPI format) is committed alongside the scripts.
-# The PEM copy (Node-readable for NODE_EXTRA_CA_CERTS) is produced from the DER cert
-# by certutil -encode at build time and committed as nono-poc-signing.pem.
-# Both are referenced as <File> components in the machine-only ComponentGroup.
+# Both files are the SAME self-signed public POC certificate
+# (SHA1 31:9E:50:7E:95:04:72:D4:90:F5:6F:7C:4C:D9:44:37:C0:13:CC:06), in two
+# encodings: the DER .cer (certutil/CryptoAPI format) and the PEM copy
+# (Node-readable for NODE_EXTRA_CA_CERTS). Both are referenced as <File>
+# components in the machine-only ComponentGroup.
+#
+# WHICH ONE IS THE SOURCE (corrected 260906-w4l): the repo tracks the **PEM**.
+# `dist/windows/*.cer` is gitignored -- twice -- so the DER never reaches a fresh
+# checkout, and this block used to `throw` telling the operator to commit a file
+# .gitignore rejects. Windows Build and Windows Packaging were red on that.
+# The PEM is therefore the source of truth and the DER is derived from it when
+# absent. The reverse fallback is kept for local dev trees that still carry a
+# .cer. Only the encoding is derived -- no key material is generated here.
 $pocCertDerPath = ""
 $pocCertPemPath = ""
 if ($Scope -eq "machine") {
     $pocCertDerPath = Join-Path $repoRoot "dist\windows\nono-poc-signing.cer"
-    if (-not (Test-Path -LiteralPath $pocCertDerPath)) {
-        throw "POC DER cert not found at '$pocCertDerPath'. Commit dist/windows/nono-poc-signing.cer to the repo."
+    $pocCertPemPath = Join-Path $repoRoot "dist\windows\nono-poc-signing.pem"
+
+    $pocDerPresent = Test-Path -LiteralPath $pocCertDerPath
+    $pocPemPresent = Test-Path -LiteralPath $pocCertPemPath
+
+    if (-not $pocDerPresent -and -not $pocPemPresent) {
+        throw "No POC certificate found. Expected the tracked PEM at 'dist/windows/nono-poc-signing.pem' (restore it from git), or a local DER at 'dist/windows/nono-poc-signing.cer'."
+    }
+
+    if (-not $pocDerPresent) {
+        # Derive the DER from the tracked PEM: strip the armour and base64-decode.
+        # Deliberately NOT `certutil -decode` -- this script already cannot assume
+        # certutil is on PATH (see the -encode fallback's own error message below),
+        # and a base64 decode needs no external tool.
+        Write-Host "Deriving DER cert from tracked PEM (dist/windows/nono-poc-signing.pem)..."
+        $pocPemText = Get-Content -LiteralPath $pocCertPemPath -Raw
+        # Match only the FIRST certificate block, so a multi-cert PEM does not get
+        # concatenated into one invalid base64 blob.
+        $pocPemMatch = [regex]::Match($pocPemText, '(?s)-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----')
+        if (-not $pocPemMatch.Success) {
+            throw "'$pocCertPemPath' contains no PEM CERTIFICATE block; cannot derive the DER cert."
+        }
+        $pocPemB64 = $pocPemMatch.Groups[1].Value -replace '\s', ''
+        [System.IO.File]::WriteAllBytes($pocCertDerPath, [Convert]::FromBase64String($pocPemB64))
+        if (-not (Test-Path -LiteralPath $pocCertDerPath)) {
+            throw "Failed to write the derived DER cert to '$pocCertDerPath'."
+        }
     }
     $pocCertDerPath = (Resolve-Path -LiteralPath $pocCertDerPath).Path
 
-    $pocCertPemPath = Join-Path $repoRoot "dist\windows\nono-poc-signing.pem"
-    if (-not (Test-Path -LiteralPath $pocCertPemPath)) {
+    if (-not $pocPemPresent) {
         # Auto-convert DER -> PEM at build time using in-box certutil -encode.
         # certutil -encode produces a standard base64/PEM file ("-----BEGIN CERTIFICATE-----").
         # This is idempotent; a committed .pem is preferred so builds are reproducible
