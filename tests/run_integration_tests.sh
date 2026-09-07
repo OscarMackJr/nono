@@ -152,7 +152,20 @@ SUITES=(
     "test_policy_queries.sh:Policy Queries"
     "test_shell.sh:Shell"
     "test_profiles.sh:Profiles"
-    "test_pack_resolution.sh:Pack Resolution"
+    # DISABLED (260907-arx): tests/integration/test_pack_resolution.sh does not
+    # exist in this fork and never has -- `git log --diff-filter=A` finds no add.
+    # This registry line arrived via upstream 0a09ff41 (PR #1152, XDG state dirs),
+    # which was absorbed WITHOUT its companion script: a partial-absorb gap, not a
+    # local deletion. The suite therefore failed every run with
+    # "No such file or directory", reporting a missing file as a test failure.
+    #
+    # The script does exist upstream (added in f1243c75, 119 lines, referencing
+    # only `--profile synthetic` and a deliberately-nonexistent pack, so it looks
+    # fork-compatible). It is deliberately NOT imported here: absorbing upstream
+    # test code is a dispositioned sync decision in this repo, and it cannot be
+    # verified from a Windows host because it is a Unix bash suite. Absorb it as
+    # a reviewed item with a ledger row.
+    # "test_pack_resolution.sh:Pack Resolution"
     "test_client_startup.sh:Client Startup"
     "test_silent_output.sh:Silent Output"
     "test_env_sanitization.sh:Env Sanitization"

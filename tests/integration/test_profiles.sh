@@ -38,8 +38,14 @@ expect_success "claude-code profile dry-run exits 0" \
 expect_success "codex profile dry-run exits 0" \
     "$NONO_BIN" run --profile codex --dry-run -- echo "test"
 
-expect_success "opencode profile dry-run exits 0" \
-    "$NONO_BIN" run --profile opencode --dry-run -- echo "test"
+# NOTE (260907-arx): was `opencode`. Commit 2652e256 deliberately removed that
+# profile from policy.json -- it moved to the registry pack
+# always-further/opencode -- and said it would "substitute openclaw or swival in
+# tests that previously used opencode". It updated the Rust tests and missed this
+# shell suite, so Integration Tests has been red since. `openclaw` is the
+# substitution that commit named.
+expect_success "openclaw profile dry-run exits 0" \
+    "$NONO_BIN" run --profile openclaw --dry-run -- echo "test"
 
 expect_failure "nonexistent profile exits non-zero" \
     "$NONO_BIN" run --profile nonexistent-profile --dry-run -- echo "test"
@@ -50,8 +56,12 @@ expect_output_contains "claude-code profile lists .claude in dry-run" ".claude" 
 expect_output_contains "codex profile lists .codex in dry-run" ".codex" \
     "$NONO_BIN" run --profile codex --dry-run -- echo "test"
 
-expect_output_contains "opencode profile lists OpenTUI data dir in dry-run" ".local/share/opentui" \
-    "$NONO_BIN" run --profile opencode --dry-run -- echo "test"
+# `openclaw` declares $HOME/.local/share/openclaw, the exact structural analogue
+# of the OpenTUI data dir this assertion used to check for `opencode`, so the
+# test keeps asserting the same property: a profile's declared data dir shows up
+# in dry-run capabilities.
+expect_output_contains "openclaw profile lists its data dir in dry-run" ".local/share/openclaw" \
+    "$NONO_BIN" run --profile openclaw --dry-run -- echo "test"
 
 expect_output_contains "dry-run output shows Capabilities section" "Capabilities:" \
     "$NONO_BIN" run --profile claude-code --dry-run -- echo "test"

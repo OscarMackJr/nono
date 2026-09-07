@@ -243,7 +243,17 @@ set +e
 list_output=$("$NONO_BIN" audit list 2>&1)
 list_exit=$?
 set -e
-if [[ "$list_exit" -eq 0 ]] && echo "$list_output" | grep -q "command"; then
+# NOTE (260907-arx): was `grep -q "command"`, which searched for a literal word
+# the current output format does not emit -- so this failed on CI while
+# `audit list` was in fact working and printing three sessions. That assertion
+# was always a weak proxy for "sessions were listed"; it asserted an incidental
+# label rather than the property under test.
+#
+# Assert the property directly instead: at least one real session ROW, matched by
+# the session-id shape <YYYYMMDD>-<HHMMSS>-<pid> that audit_session.rs generates.
+# A header alone can no longer satisfy this, so it is strictly stronger than the
+# check it replaces, and it is stable against wording changes.
+if [[ "$list_exit" -eq 0 ]] && echo "$list_output" | grep -qE '[0-9]{8}-[0-9]{6}-[0-9]+'; then
     echo -e "  ${GREEN}PASS${NC}: audit list shows sessions"
     TESTS_PASSED=$((TESTS_PASSED + 1))
 else

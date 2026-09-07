@@ -467,6 +467,33 @@ expect_success "trust sign --keyref file:// creates bundle" \
 
 run_test "file:// sign creates bundle" 0 test -f "$FILE_DIR/SKILLS.md.bundle"
 
+# NOTE (260907-arx): establish USER-level trust before verifying.
+#
+# This suite previously went straight from `trust sign` to `trust verify` and
+# expected VERIFIED. It failed with:
+#
+#   Warning: ignoring 1 publisher(s) declared by the project-level
+#   trust-policy.json ... a repository cannot nominate its own signer.
+#   Reason: signer '...' not in trusted publishers
+#
+# That is nono working AS DESIGNED, not a regression: the trust anchor set comes
+# from the user-level policy only, precisely so a repository cannot certify
+# itself. The test was asserting a workflow the security model deliberately
+# forbids.
+#
+# `trust init --user` is the remedy the code itself names (trust_cmd.rs:734:
+# "Run 'nono trust init --user' to create one"). Creating it with the same
+# keyref puts this publisher in the user-level anchor set, which is what the
+# verify step has always been trying to exercise.
+#
+# Safe against clobbering a real user policy: with_test_env sets
+# NONO_TRUST_TEST_USER_POLICY_PATH (and XDG_CONFIG_HOME) into the throwaway test
+# dir, and `trust init --user` resolves its target through
+# trust_cmd.rs::user_trust_policy_path(), which honours that override. Verified
+# at trust_cmd.rs:66-67 -> :1677 rather than assumed.
+expect_success "trust init --user creates the user-level anchor set" \
+    with_test_env "$NONO_BIN" trust init --user --include SKILLS.md --keyref "$FILE_KEYREF"
+
 expect_in_dir_success_contains "trust verify succeeds with file:// signed artifacts" "$FILE_DIR" "VERIFIED" \
     with_test_env "$NONO_BIN" trust verify SKILLS.md
 
