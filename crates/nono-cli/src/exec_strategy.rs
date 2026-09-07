@@ -1153,10 +1153,24 @@ pub fn execute_supervised(
             // kill(-child_pgrp, SIGKILL) targets only the agent tree — not the parent's
             // process group.
             //
-            // On the PTY supervised path, setup_child_pty will call setsid() which
-            // supersedes this (setsid creates a new session and process group). Both
-            // orderings are safe; setpgid(0,0) here ensures the non-PTY path is also
-            // covered (D-05).
+            // GATED ON THE NON-PTY PATH (fixed 2026-09-07). This comment previously
+            // read "setup_child_pty will call setsid() which supersedes this ... Both
+            // orderings are safe". That premise is FALSE and was a live macOS bug:
+            // POSIX requires setsid() to fail with EPERM when the caller is ALREADY a
+            // process-group leader, which is exactly what setpgid(0,0) just made this
+            // process. On the PTY path the child therefore hit
+            // `setsid() failed while configuring child PTY` -> _exit(126), and every
+            // `nono shell` on macOS died there. (The parent's subsequent
+            // `setpgid ... ESRCH` was downstream noise: the child was already gone.)
+            //
+            // setsid() creates a new session AND a new process group with pgid == pid,
+            // so on the PTY path it fully subsumes what this block is for. It is not
+            // merely redundant there, it is harmful, so the block now runs only when
+            // there is no PTY. The non-PTY purpose (D-05) is unchanged.
+            //
+            // The parent-side half of the double-setpgid idiom is gated the same way
+            // for the same reason, and the watchdog now refuses any pgid that is not
+            // the child's own -- see both sites below.
             //
             // WR-04 / D-06: failure is tolerated (write MSG + continue). If setpgid
             // fails, getpgid in the parent may return the parent's pgrp; the WR-04
@@ -1164,7 +1178,7 @@ pub fn execute_supervised(
             // skipped rather than targeting a wrong group. This is the conservative
             // choice consistent with the defensive rewrite intent of D-04.
             #[cfg(target_os = "macos")]
-            {
+            if pty_slave_fd.is_none() {
                 const MSG_SETPGID_FAIL: &[u8] =
                     b"nono: setpgid(0,0) failed in supervised child; continuing\n";
                 // SAFETY: setpgid is a direct kernel call (POSIX); safe in post-fork
@@ -1914,8 +1928,15 @@ pub fn execute_supervised(
             // succeeds; the second is idempotent (POSIX). This ensures getpgid(child) at the
             // watchdog spawn site always returns child_pid, not the parent's pgid. Permitted
             // from parent on a child that has not yet called execve (POSIX).
+            //
+            // GATED ON THE NON-PTY PATH (2026-09-07), for the same reason as the
+            // child-side half: setpgid(child, child) from HERE also makes the child a
+            // process-group leader, so on the PTY path it can win the race and break
+            // the child's setsid() with EPERM before the child ever reaches it. Both
+            // halves of the idiom must stand down on the PTY path; setsid() performs
+            // the equivalent placement itself (new session, pgid == pid).
             #[cfg(target_os = "macos")]
-            {
+            if pty_slave_fd.is_none() {
                 use nix::unistd::setpgid;
                 if let Err(e) = setpgid(child, child) {
                     warn!(
@@ -1947,20 +1968,60 @@ pub fn execute_supervised(
                 // group. Instead: if getpgid fails, log and skip the watchdog
                 // entirely (return None). There is no PID fallback to avoid
                 // wrong-pgrp kill under PID reuse.
-                match getpgid(Some(child)) {
-                    Ok(child_pgrp) => Some(supervisor_macos::spawn_macos_timeout_watchdog(
-                        deadline, child_pgrp,
-                    )),
-                    Err(e) => {
-                        warn!(
-                            "getpgid({}) failed ({}); skipping timeout watchdog — \
+                // WR-04 guarded the ERROR case but never the WRONG-VALUE case, and
+                // getpgid can succeed while returning the PARENT's pgid: whenever both
+                // halves of the double-setpgid idiom lose the race, and now also in the
+                // window before a PTY child reaches setsid(), since both halves
+                // deliberately stand down on that path. Arming on that value would make
+                // the deadline fire kill(-parent_pgrp, SIGKILL) and SIGKILL the
+                // supervisor's own process group. So the pgid must BE the child's own.
+                //
+                // Bounded retry rather than an immediate skip. On the PTY path the
+                // child's own setsid() is what establishes pgid == pid, and that is not
+                // ordered against this read -- skipping outright would trade a
+                // wrong-group kill for silently losing timeout enforcement on every PTY
+                // session, which is its own failure. setup_child_pty runs before the
+                // sandbox apply, separated from fork() only by fast syscalls, so the
+                // settle is microseconds in practice and this costs 0 retries on the
+                // non-PTY path (both setpgid halves already ran there).
+                const PGID_SETTLE_ATTEMPTS: u32 = 20;
+                const PGID_SETTLE_INTERVAL: std::time::Duration =
+                    std::time::Duration::from_millis(5);
+
+                let mut last_seen: Option<nix::unistd::Pid> = None;
+                for attempt in 0..PGID_SETTLE_ATTEMPTS {
+                    match getpgid(Some(child)) {
+                        Ok(child_pgrp) if child_pgrp == child => {
+                            return Some(supervisor_macos::spawn_macos_timeout_watchdog(
+                                deadline, child_pgrp,
+                            ));
+                        }
+                        Ok(child_pgrp) => {
+                            last_seen = Some(child_pgrp);
+                            if attempt + 1 < PGID_SETTLE_ATTEMPTS {
+                                std::thread::sleep(PGID_SETTLE_INTERVAL);
+                            }
+                        }
+                        Err(e) => {
+                            warn!(
+                                "getpgid({}) failed ({}); skipping timeout watchdog — \
                                  no PID fallback to avoid wrong-pgrp kill under PID reuse",
-                            child.as_raw(),
-                            e
-                        );
-                        None
+                                child.as_raw(),
+                                e
+                            );
+                            return None;
+                        }
                     }
                 }
+                warn!(
+                    "getpgid({}) never reported the child's own process group (last saw {:?}) \
+                     after {}ms; skipping timeout watchdog rather than risk kill(-pgrp) \
+                     hitting the supervisor's own process group",
+                    child.as_raw(),
+                    last_seen.map(nix::unistd::Pid::as_raw),
+                    u64::from(PGID_SETTLE_ATTEMPTS) * PGID_SETTLE_INTERVAL.as_millis() as u64,
+                );
+                None
             });
 
             // NOTE: peer_pid() is NOT called here. For socketpair() created
@@ -4778,9 +4839,145 @@ mod tests {
     /// calling process's own direct children regardless of ancestry depth, so
     /// forking two direct children from the test process is sufficient to
     /// exercise the "reap a non-tracked pid, then reap the tracked pid" path.
+    /// Re-exec THIS test binary to run one test alone in a fresh process.
+    ///
+    /// # Why any of this exists
+    ///
+    /// `reap_any_terminated_child` loops on `waitpid(-1, WNOHANG)` and DISCARDS
+    /// the status of any child that is not its target; `reap_reparented_orphans`
+    /// falls through to it whenever the owned-pid set is empty. That is correct
+    /// in production — a supervisor SHOULD reap inherited orphans — but Rust
+    /// runs unit tests as parallel threads of ONE process, so a test that
+    /// reaches that code steals other tests' `std::process::Command` children
+    /// and their `wait()` then returns ECHILD. Observed live on
+    /// `Test (ubuntu-latest)` as three failures, including a `git worktree add`
+    /// reporting `Os { code: 10 }` — which IS ECHILD, and is why that failure
+    /// looked unrelated.
+    ///
+    /// # Why re-exec rather than fork
+    ///
+    /// Forking and then running the scenario would scope `waitpid(-1)` correctly,
+    /// but `reap_reparented_orphans` takes `owned_children`'s `Mutex` on entry.
+    /// In a multithreaded test process the child can inherit that mutex already
+    /// locked by a thread that no longer exists in the child, and deadlock. A
+    /// fresh process has no inherited lock state.
+    ///
+    /// # Why this is structural
+    ///
+    /// Every `waitpid(-1)` caller is confined to a process running exactly one
+    /// test, so a test added later cannot reintroduce the race — unlike a mutex,
+    /// which would have to be taken by all 1700+ tests that might spawn a child.
+    ///
+    /// Returns `true` when the caller IS the isolated run and should execute the
+    /// body; `false` when it was the launcher and the body already ran in the
+    /// subprocess.
+    // Not `#[cfg(target_os = "linux")]`: this whole file is
+    // `#[cfg(not(target_os = "windows"))]`, and the perpetrator class includes
+    // tests that compile on macOS too (`reconnect_survival` is `cfg(unix)`,
+    // `test_supervisor_loop_runs_without_pty_relay` has no gate at all). Scoping
+    // the helper to Linux is what let two of the four go unisolated.
+    #[must_use]
+    fn run_isolated_in_subprocess(marker: &str, test_path: &str) -> bool {
+        if std::env::var_os(marker).is_some() {
+            return true;
+        }
+        let exe = std::env::current_exe().expect("current_exe for isolated re-exec");
+        let status = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg(test_path)
+            .arg("--nocapture")
+            .arg("--test-threads=1")
+            .env(marker, "1")
+            .status()
+            .expect("spawn isolated test subprocess");
+        assert!(
+            status.success(),
+            "isolated run of `{test_path}` failed: {status} (re-run it directly with \
+             {marker}=1 to see the assertion)"
+        );
+        false
+    }
+
+    /// Class guard: EVERY `#[test]` in this file that can reach `waitpid(-1)`
+    /// must route through [`run_isolated_in_subprocess`].
+    ///
+    /// This exists because the first attempt at the ECHILD fix isolated two of
+    /// the four members of that class and shipped. The Linux run then failed in
+    /// a way that looked like a NEW bug — `spawn isolated test subprocess:
+    /// ECHILD` — when in fact an unisolated sibling had reaped the isolated
+    /// test's own subprocess. Partial isolation moves the failure instead of
+    /// removing it, and it is not visible by reading any single test.
+    ///
+    /// The guard pins the INVARIANT ("reaches waitpid(-1) => is isolated"), not
+    /// a spelling of a signature — deliberately unlike the CR-01 source scan in
+    /// `resl_nix_async_signal_safety.rs`, which pinned an exact signature string
+    /// and silently went dark for ~2.5 months when that signature changed. A new
+    /// member of this class is caught the moment it is added; renaming any of the
+    /// three reaching functions changes the class definition and this test's
+    /// needles together.
+    #[test]
+    fn every_waitpid_minus_one_test_is_isolated_in_a_subprocess() {
+        let src = include_str!("exec_strategy.rs");
+
+        // Functions whose bodies reach waitpid(-1), directly or transitively.
+        const REACHES_WAITPID_ANY: [&str; 3] = [
+            "run_supervisor_loop(",
+            "reap_reparented_orphans(",
+            "reap_any_terminated_child(",
+        ];
+
+        let Some(tests_mod) = src.find("\nmod tests {") else {
+            panic!("could not locate `mod tests` in exec_strategy.rs");
+        };
+        let body = &src[tests_mod..];
+
+        let mut offenders: Vec<&str> = Vec::new();
+        // Split on the 4-space `fn ` indentation used by every test in this
+        // module, so each chunk is one test function's body.
+        for chunk in body.split("\n    fn ").skip(1) {
+            let Some(name_end) = chunk.find('(') else {
+                continue;
+            };
+            let name = &chunk[..name_end];
+            // Only consider actual test functions.
+            let reaches = REACHES_WAITPID_ANY
+                .iter()
+                .any(|needle| chunk.contains(needle));
+            if !reaches {
+                continue;
+            }
+            // The guard itself names the needles without calling them.
+            if name == "every_waitpid_minus_one_test_is_isolated_in_a_subprocess" {
+                continue;
+            }
+            if !chunk.contains("run_isolated_in_subprocess") {
+                offenders.push(name);
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "these tests reach waitpid(-1) but are NOT isolated in a subprocess: {offenders:?}\n\
+             \n\
+             waitpid(-1) reaps ANY child of the calling process and discards the status of one\n\
+             it does not want. Rust runs unit tests as parallel threads of ONE process, so such\n\
+             a test steals other tests' std::process::Command children and their wait() returns\n\
+             ECHILD. Wrap the body in run_isolated_in_subprocess (see its doc comment)."
+        );
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn reap_reparented_orphans_reaps_non_primary_and_returns_status_for_primary() {
+        // Isolated: this body calls waitpid(-1) and would otherwise reap other
+        // tests' children. See run_isolated_in_subprocess.
+        if !run_isolated_in_subprocess(
+            "NONO_TEST_ISOLATED_REAPER",
+            "exec_strategy::tests::reap_reparented_orphans_reaps_non_primary_and_returns_status_for_primary",
+        ) {
+            return;
+        }
+
         // Orphan: exits immediately with a distinct code.
         let orphan = match unsafe { fork() } {
             Ok(ForkResult::Child) => {
@@ -5250,6 +5447,19 @@ mod tests {
     /// keep-alive path introduced by SC1.
     #[test]
     fn test_supervisor_loop_runs_without_pty_relay() {
+        // Isolated: reaches run_supervisor_loop -> waitpid(-1). See
+        // run_isolated_in_subprocess. This one was MISSED in the first pass and
+        // the Linux run caught it: it reaped the isolated subprocess belonging to
+        // test_supervisor_loop_proxy_only_v4_no_deadlock, so ECHILD reappeared at
+        // that test's own launcher. Isolating a subset of this class is worse than
+        // useless -- it moves the failure rather than removing it.
+        if !run_isolated_in_subprocess(
+            "NONO_TEST_ISOLATED_SUPERVISOR_NO_PTY",
+            "exec_strategy::tests::test_supervisor_loop_runs_without_pty_relay",
+        ) {
+            return;
+        }
+
         use std::os::unix::net::UnixStream;
 
         struct DenyAll;
@@ -5382,6 +5592,15 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn reconnect_survival() {
+        // Isolated: reaches run_supervisor_loop -> waitpid(-1). See
+        // run_isolated_in_subprocess.
+        if !run_isolated_in_subprocess(
+            "NONO_TEST_ISOLATED_RECONNECT_SURVIVAL",
+            "exec_strategy::tests::reconnect_survival",
+        ) {
+            return;
+        }
+
         use nix::pty::openpty;
         use std::os::unix::net::UnixStream;
         use std::time::Instant;
@@ -5572,6 +5791,19 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn test_supervisor_loop_proxy_only_v4_no_deadlock() {
+        // Isolated: run_supervisor_loop reaches reap_reparented_orphans and so
+        // waitpid(-1). This test was BOTH victim and perpetrator -- its own child
+        // was reaped by the concurrent reaper test (its CI failure was
+        // "waitpid() failed: ECHILD"), while it could equally steal from others.
+        // Isolating only one of the two would leave the third-party victim
+        // (dynamic_tokens' `git worktree add`) still exposed.
+        if !run_isolated_in_subprocess(
+            "NONO_TEST_ISOLATED_SUPERVISOR_LOOP",
+            "exec_strategy::tests::test_supervisor_loop_proxy_only_v4_no_deadlock",
+        ) {
+            return;
+        }
+
         use std::os::unix::net::UnixStream;
 
         struct DenyAll;
