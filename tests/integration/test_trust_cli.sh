@@ -501,6 +501,16 @@ run_test "file:// sign creates bundle" 0 test -f "$FILE_DIR/SKILLS.md.bundle"
 expect_success "trust init --user creates the user-level anchor set" \
     with_test_env "$NONO_BIN" trust init --user --force --include SKILLS.md --keyref "$FILE_KEYREF"
 
+# Re-sign the user policy after rewriting it. --force above replaces the file
+# that line ~232 already signed with $KEY_ID, so its existing .bundle no longer
+# matches and `trust verify` fails the USER policy itself before it ever reaches
+# the artifact:
+#   Trust verification failed for .../xdg/nono/trust-policy.json:
+#   trust policy has been modified since signing (digest mismatch)
+# Mirrors the sign-policy call in the earlier section, with this section's keyref.
+expect_success "trust sign-policy re-signs the rewritten user policy" \
+    with_test_env "$NONO_BIN" trust sign-policy "$TEST_XDG/nono/trust-policy.json" --keyref "$FILE_KEYREF"
+
 expect_in_dir_success_contains "trust verify succeeds with file:// signed artifacts" "$FILE_DIR" "VERIFIED" \
     with_test_env "$NONO_BIN" trust verify SKILLS.md
 
