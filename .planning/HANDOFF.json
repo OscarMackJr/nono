@@ -1,52 +1,137 @@
 {
   "version": "1.0",
-  "timestamp": "2026-08-17T14:36:44.371Z",
+  "timestamp": "2026-09-07T00:30:00.000Z",
   "phase": "118",
   "phase_name": "per-session-enforcement-receipts",
   "phase_dir": ".planning/phases/118-per-session-enforcement-receipts",
   "plan": 10,
   "task": 2,
   "total_tasks": 3,
-  "status": "paused",
+  "status": "phase_complete",
   "milestone": "v3.7",
   "branch": "milestone/v2.13-carryforward-closeout",
   "phase_base_commit": "2359c841",
-  "head_commit": "f81a009d",
-  "plans_complete": "9.5 of 10",
+  "head_commit": "c18e93db",
+  "plans_complete": "10 of 10",
   "completed_tasks": [
-    {"id": "118-01", "name": "Core receipt vocabulary + content-free scan", "status": "done", "commit": "671624e0", "note": "corrected by operator decision in b266e138 — entry_path/token_arm promoted to core EntryPath/TokenArm enums so receipts round-trip"},
-    {"id": "118-02", "name": "Win32 deny_sid_on_path + require_receipts machine policy", "status": "done", "commit": "9b711ef1", "note": "also fixed 2 real pre-existing defects: revoke_sid_on_path silently skipped DENY ACEs; dacl_contains_sid ignored ACE type, making its perturbation proof vacuous"},
-    {"id": "118-03", "name": "CLI 13-row census + LayerId/EntryPath core re-export", "status": "done", "commit": "864ff73e"},
-    {"id": "118-04", "name": "Daemon collect-all-then-decide restructure (D-26)", "status": "done", "commit": "1401d1ab", "note": "decision-equivalence proof tabled per original early-return branch, perturbation-verified"},
-    {"id": "118-05", "name": "Operator-ACL'd receipt sink (D-06/D-08)", "status": "done", "commit": "32bfb488", "note": "corrected a false doc claim: NO_READ_UP label blocks Low-IL-or-below readers only, never Medium-IL"},
-    {"id": "118-06", "name": "Broker widened wire contract (D-27)", "status": "done", "commit": "07121be7", "note": "bounced back once by orchestrator: had instrumented only 3 of 5 refuse branches, violating RCPT-01; all 5 now instrumented"},
-    {"id": "118-07", "name": "Wire CLI census into sink", "status": "done", "commit": "f2ff94f7"},
-    {"id": "118-08", "name": "Wire daemon census into sink", "status": "done", "commit": "93caad9a", "note": "proactively enumerated every refuse path after seeing 118-06's bounce"},
-    {"id": "118-09", "name": "nono receipt list|show|verify", "status": "done", "commit": "10dbe543", "note": "verify proven fail-closed against 6 tamper shapes; 1 accepted limit — clean tail-record deletion is undetectable by a keyless chain with no external anchor"},
-    {"id": "118-10 Task 1", "name": "Cross-target clippy gates + D-17 latency measurement", "status": "done", "commit": "f19752e8", "note": "BOTH gates clean at --workspace scope: cross linux-gnu 4m59s, cargo-zigbuild apple-darwin 57.69s. D-17 measured N=30: avg 5.7ms, p50 5.6ms, min 2.6ms, max 13.5ms — recorded at launch.rs:1568"},
-    {"id": "118-10 Task 2", "name": "Record discretionary decisions in receipt_sink.rs module doc", "status": "done", "commit": "f81a009d", "note": "verified 2026-08-18 with cargo doc -p nono-sandbox-cli --no-deps: 0 errors, and ZERO warnings cite receipt_sink.rs (pre-existing counts unchanged: 33 for bin nono, 2 for bin nono-agentd). Doc-only change; working tree now clean."}
+    {
+      "id": "118-01",
+      "name": "Core receipt vocabulary + content-free scan",
+      "status": "done",
+      "commit": "671624e0",
+      "note": "corrected by operator decision in b266e138 — entry_path/token_arm promoted to core EntryPath/TokenArm enums so receipts round-trip"
+    },
+    {
+      "id": "118-02",
+      "name": "Win32 deny_sid_on_path + require_receipts machine policy",
+      "status": "done",
+      "commit": "9b711ef1",
+      "note": "also fixed 2 real pre-existing defects: revoke_sid_on_path silently skipped DENY ACEs; dacl_contains_sid ignored ACE type, making its perturbation proof vacuous"
+    },
+    {
+      "id": "118-03",
+      "name": "CLI 13-row census + LayerId/EntryPath core re-export",
+      "status": "done",
+      "commit": "864ff73e"
+    },
+    {
+      "id": "118-04",
+      "name": "Daemon collect-all-then-decide restructure (D-26)",
+      "status": "done",
+      "commit": "1401d1ab",
+      "note": "decision-equivalence proof tabled per original early-return branch, perturbation-verified"
+    },
+    {
+      "id": "118-05",
+      "name": "Operator-ACL'd receipt sink (D-06/D-08)",
+      "status": "done",
+      "commit": "32bfb488",
+      "note": "corrected a false doc claim: NO_READ_UP label blocks Low-IL-or-below readers only, never Medium-IL"
+    },
+    {
+      "id": "118-06",
+      "name": "Broker widened wire contract (D-27)",
+      "status": "done",
+      "commit": "07121be7",
+      "note": "bounced back once by orchestrator: had instrumented only 3 of 5 refuse branches, violating RCPT-01; all 5 now instrumented"
+    },
+    {
+      "id": "118-07",
+      "name": "Wire CLI census into sink",
+      "status": "done",
+      "commit": "f2ff94f7"
+    },
+    {
+      "id": "118-08",
+      "name": "Wire daemon census into sink",
+      "status": "done",
+      "commit": "93caad9a",
+      "note": "proactively enumerated every refuse path after seeing 118-06's bounce"
+    },
+    {
+      "id": "118-09",
+      "name": "nono receipt list|show|verify",
+      "status": "done",
+      "commit": "10dbe543",
+      "note": "verify proven fail-closed against 6 tamper shapes; 1 accepted limit — clean tail-record deletion is undetectable by a keyless chain with no external anchor"
+    },
+    {
+      "id": "118-10 Task 1",
+      "name": "Cross-target clippy gates + D-17 latency measurement",
+      "status": "done",
+      "commit": "f19752e8",
+      "note": "BOTH gates clean at --workspace scope: cross linux-gnu 4m59s, cargo-zigbuild apple-darwin 57.69s. D-17 measured N=30: avg 5.7ms, p50 5.6ms, min 2.6ms, max 13.5ms — recorded at launch.rs:1568"
+    },
+    {
+      "id": "118-10 Task 2",
+      "name": "Record discretionary decisions in receipt_sink.rs module doc",
+      "status": "done",
+      "commit": "f81a009d",
+      "note": "verified 2026-08-18 with cargo doc -p nono-sandbox-cli --no-deps: 0 errors, and ZERO warnings cite receipt_sink.rs (pre-existing counts unchanged: 33 for bin nono, 2 for bin nono-agentd). Doc-only change; working tree now clean."
+    }
   ],
-  "remaining_tasks": [
-    {"id": "118-10 Task 3", "name": "Confined-child sink-guard verification (D-08)", "status": "not_started", "blocking": true, "note": "checkpoint:human-verify — CANNOT be automated or self-approved. Needs a real confined session on a real host across 3 arms + a supervisor-still-writable check. Presented to the operator 2026-08-18; awaiting their typed response."},
-    {"id": "118-10 SUMMARY", "name": "Write 118-10-SUMMARY.md", "status": "not_started", "note": "must quote the operator's Task 3 response VERBATIM as the evidence of the check having run"},
-    {"id": "phase-close", "name": "Phase close-out sequence", "status": "not_started", "note": "/gsd:code-review 118 (D-22, required before phase is done) -> regression gate -> gsd-verifier -> HAND-EDIT STATE.md/ROADMAP.md/REQUIREMENTS.md"}
-  ],
-  "blockers": [
-    {"description": "118-10 Task 3 is a blocking human-verify checkpoint requiring a real confined session; no automated substitute is acceptable per the plan's own threat register (T-118-30/31)", "type": "human_action", "workaround": "none — self-approving it would be exactly the anti-pattern the phase exists to eliminate"},
-    {"description": "3 integration-test failures found by 118-04's --no-fail-fast sweep remain UNADJUDICATED: audit_verify_reports_signed_attestation_with_pinned_public_key, rollback_signed_session_verifies_from_audit_dir_bundle, windows_run_ignores_unverified_localappdata_override_when_runtime_root_is_verified", "type": "technical", "workaround": "logged in phase deferred-items.md; 118-10 is the designated adjudication point. Check at phase-base 2359c841 to confirm pre-existence."}
-  ],
+  "remaining_tasks": [],
+  "blockers": [],
   "human_actions_pending": [
-    {"action": "Run the 5 confined-child sink-guard checks (118-10 Task 3) and reply 'approved' or describe the failing check", "context": "D-08's guard cannot be proven by unit test because supervisor and confined child run as the SAME Windows user. Sink path is %PROGRAMDATA%\\nono\\receipts.", "blocking": true},
-    {"action": "Elevated/CI Windows runner still needed for WR-20 and for labels_guard's SeRestorePrivilege test", "context": "carried over from Phase 117; not introduced by 118", "blocking": false}
+    {
+      "action": "Check CI run 34068950597 — confirm Clippy x3 and Cargo Audit are green under the pinned toolchain",
+      "context": "Dispatched 2026-09-07. Clippy lints fixed in 840f9078; toolchain pinned in c18e93db; h2 advisory fixed in b2836044 (Cargo Audit already confirmed green on run 34065278991).",
+      "blocking": false
+    },
+    {
+      "action": "Elevated/CI Windows runner still needed for WR-20 and labels_guard's SeRestorePrivilege test",
+      "context": "Carried from Phase 117; not introduced by 118",
+      "blocking": false
+    }
   ],
   "decisions": [
-    {"decision": "Promote EnforcementReceipt.entry_path/token_arm to core EntryPath/TokenArm enums", "rationale": "OPERATOR DECISION mid-Wave-1. As first written they were &'static str — structurally content-free (good for D-14) but practically un-deserializable, which would have blocked Plan 118-09's receipt show/list at Wave 5. Enums are content-free by construction AND round-trippable AND compile-time exhaustive. Rejected alternatives: owned String (loses the type-level guarantee) and a duplicate read-side DTO (two shapes to keep in sync forever).", "phase": "118"},
-    {"decision": "Also re-export EntryPath from core in layer_registry.rs, not just LayerId", "rationale": "orchestrator-directed extension to 118-03 Task 1; identical variant set so all call sites kept compiling, and it avoids the duplicate-shape drift the operator had just rejected", "phase": "118"},
-    {"decision": "Do NOT unify WindowsTokenArm with core TokenArm", "rationale": "token_arm_to_receipt in attestation.rs is already an exhaustive match with no wildcard, so adding a variant to either enum is a compile error — the drift guard already exists and unification would be churn for no safety gain", "phase": "118"},
-    {"decision": "Sanctioned host test baseline is 12, not the 11 in project memory", "rationale": "the 12th is exec_strategy::labels_guard::tests::non_owned_path_with_a_foreign_label_is_exempt_not_a_coverage_gap, a DELIBERATE loud test-setup failure Phase 117 added (D-31) because this non-elevated session lacks SeRestorePrivilege. Verified by reading its actual panic message, not assumed.", "phase": "118"},
-    {"decision": "Skipped the execute-phase workflow's state.begin-phase call; hand-edited STATE.md instead", "rationale": "D-24 + project memory: SDK state writers have previously DELETED the whole parallel_milestone* block on this dual-milestone STATE.md", "phase": "118"}
+    {
+      "decision": "Promote EnforcementReceipt.entry_path/token_arm to core EntryPath/TokenArm enums",
+      "rationale": "OPERATOR DECISION mid-Wave-1. As first written they were &'static str — structurally content-free (good for D-14) but practically un-deserializable, which would have blocked Plan 118-09's receipt show/list at Wave 5. Enums are content-free by construction AND round-trippable AND compile-time exhaustive. Rejected alternatives: owned String (loses the type-level guarantee) and a duplicate read-side DTO (two shapes to keep in sync forever).",
+      "phase": "118"
+    },
+    {
+      "decision": "Also re-export EntryPath from core in layer_registry.rs, not just LayerId",
+      "rationale": "orchestrator-directed extension to 118-03 Task 1; identical variant set so all call sites kept compiling, and it avoids the duplicate-shape drift the operator had just rejected",
+      "phase": "118"
+    },
+    {
+      "decision": "Do NOT unify WindowsTokenArm with core TokenArm",
+      "rationale": "token_arm_to_receipt in attestation.rs is already an exhaustive match with no wildcard, so adding a variant to either enum is a compile error — the drift guard already exists and unification would be churn for no safety gain",
+      "phase": "118"
+    },
+    {
+      "decision": "Sanctioned host test baseline is 12, not the 11 in project memory",
+      "rationale": "the 12th is exec_strategy::labels_guard::tests::non_owned_path_with_a_foreign_label_is_exempt_not_a_coverage_gap, a DELIBERATE loud test-setup failure Phase 117 added (D-31) because this non-elevated session lacks SeRestorePrivilege. Verified by reading its actual panic message, not assumed.",
+      "phase": "118"
+    },
+    {
+      "decision": "Skipped the execute-phase workflow's state.begin-phase call; hand-edited STATE.md instead",
+      "rationale": "D-24 + project memory: SDK state writers have previously DELETED the whole parallel_milestone* block on this dual-milestone STATE.md",
+      "phase": "118"
+    }
   ],
   "uncommitted_files": [],
-  "next_action": "118-10 Task 2 is DONE (commit f81a009d, working tree clean). The ONLY remaining gate before the close-out sequence is 118-10 Task 3: the operator must run the 5 confined-child sink-guard checks and type 'approved' or describe the failing check. Do not write 118-10-SUMMARY.md, run /gsd:code-review, or touch STATE/ROADMAP until that typed response exists — it must be quoted VERBATIM in the SUMMARY.",
-  "context_notes": "Phase 118 ran 10 plans across 6 waves sequentially on the main working tree (workflow.use_worktrees=false, so no worktree isolation and no intra-wave parallelism). All 6 waves' code work is done; only the phase-gate plan's human checkpoint and the close-out sequence remain. Every executor was given an explicit constraints block (no SDK state writers, cargo-test-selector proof, guard-predicate discipline, perturbation proofs) and that block was demonstrably productive — it is why 3 real defects and 1 requirement gap were caught rather than shipped. Do NOT relax it for the remaining work. The orchestrator, not the executors, owns STATE.md and ROADMAP.md for this phase; none of the 10 plans touched either file."
+  "next_action": "Phase 118 is COMPLETE and pushed (branch milestone/v2.13-carryforward-closeout, HEAD c18e93db, in sync with origin). Nothing is half-done. Next actions, none blocking: (1) check CI run 34068950597; (2) read the Windows Layer Fault Injection log — an open question from the 2026-09-06 triage about whether 260815-f2x's fail-open fix is now reporting honestly; (3) verify `as_chunks` compiles at MSRV 1.95 (`rustup toolchain install 1.95.0 && cargo +1.95.0 check --workspace`) — CI cannot answer this because it now builds at the pinned 1.98.1; (4) libdbus-sys cross-compile failure, the documented 4th cause from quick task 260815-jxi; (5) 9 unaddressed findings in 118-REVIEW.md (5 Warning + 4 Info) — WR-02 and WR-04 were fixed, the rest were not. Then Phase 119, which now carries THREE things: its BOUND scope, the nono shell interactive-rendering defect, and the undisclosed tail-deletion limitation.",
+  "context_notes": "Phase 118 close-out, 2026-09-06/07. Task 3's blocking human-verify gate was RUN and FAILED: a confined child reads every receipt on BOTH arms, because deny_sid_on_path uses NO_INHERITANCE and the mandatory label has no (OI)(CI) — both guards are directory-scoped and neither reaches the FILES. Operator narrowed D-08 to WRITE-INTEGRITY ONLY; read confidentiality is explicitly NOT claimed. /gsd:code-review then found 6 Criticals, ALL fixed and independently re-verified (CR-01 0203ab61, CR-02 c731c4e0, CR-03 b555c392, CR-04 aa48cdbb, CR-05 3e23ba44 + a583566e, CR-06 4d0c5ded). CR-06 was the sharpest: broker receipts landed in <workdir>\\.nono-runtime\\programdata since 2026-08-16 because broker_env_pairs cloned the CHILD's env, in which append_windows_runtime_env had rewritten PROGRAMDATA — three weeks of silent RCPT-01 violation with no error and no missing file at the expected location. RCPT-02's requirement text was AMENDED (3c02427a) to name the keyless SHA-256 chain that shipped. make ci is GREEN. TWO ORCHESTRATOR ERRORS are in the record deliberately: the correct CR-06 hypothesis was eliminated on faulty evidence (assumed the child env was inherited-or-cleared; it was REWRITTEN), and CR-05 was reported 'verified' from a measurement covering only 1 of 3 producers. Both were caught by the gates, not by self-check. STILL OPEN AND UNVERIFIED: `as_chunks` at MSRV 1.95. STILL UNPINNED: 7 toolchain: stable inputs in four one-off phase workflows."
 }
