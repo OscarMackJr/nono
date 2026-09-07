@@ -92,7 +92,7 @@ fn find_child_branch_lines(src: &str) -> (usize, usize) {
 /// reach beyond the lexical child arm region.
 ///
 /// `fn_signature_prefix` should be a stable, unique substring of the function
-/// signature line — e.g. `"fn clear_close_on_exec(fd: i32) -> std::io::Result<()>"`.
+/// signature line — e.g. `"fn clear_close_on_exec(fd: i32) -> Result<()>"`.
 ///
 /// Panics if the signature is not found.
 fn slice_function_body(src: &str, fn_signature_prefix: &str) -> String {
@@ -189,10 +189,12 @@ fn cr_01_no_format_macro_in_post_fork_child_branch() {
     // arm (line 950 call site). Its body must not allocate. This per-helper
     // scan closes the call-graph gap that the lexical region scan above misses.
     // See 25-VERIFICATION.md CR-01-RESIDUAL gaps.missing block, option (b).
-    let helper_body = slice_function_body(
-        &src,
-        "fn clear_close_on_exec(fd: i32) -> std::io::Result<()>",
-    );
+    // NOTE: the signature returns the crate's `Result<()>` alias
+    // (`Result<(), NonoError>`), not `std::io::Result<()>`. Upstream absorb
+    // ae77d198 (#1210) changed it back on 2026-06-23; the locator was not
+    // updated, so this scan panicked on every platform — and the `format!(`
+    // assertion below did not execute — until 260906-tfy restored it.
+    let helper_body = slice_function_body(&src, "fn clear_close_on_exec(fd: i32) -> Result<()>");
     // Strip line comments so SAFETY/doc remarks that mention `format!(...)`
     // do not false-positive.
     let helper_stripped: String = helper_body
@@ -214,9 +216,14 @@ fn cr_01_no_format_macro_in_post_fork_child_branch() {
          \n\
          Replace `format!(...)` with `std::io::Error::last_os_error()` \
          (which captures errno into a stack-resident io::Error::Repr without \
-         allocating). The function signature must remain `fn clear_close_on_exec(fd: i32) \
-         -> std::io::Result<()>` so the call site discards the io::Error via \
-         `if let Err(_e) = ...`.\n\
+         allocating). What the signature must preserve is the PROPERTY, not a \
+         particular spelling: the error must be constructible without heap \
+         allocation, and the call site must discard it via `if let Err(_e) = ...` \
+         rather than formatting it. Both `std::io::Result<()>` (the original \
+         25-05 form) and the current `Result<()>` alias satisfy this — \
+         `NonoError::Io(std::io::Error)` wraps the io::Error by value, and enum \
+         construction does not allocate. Do NOT \"fix\" a failure here by \
+         reverting the return type; check whether the body allocates.\n\
          \n\
          See 25-VERIFICATION.md gaps.missing block for the canonical fix."
     );
